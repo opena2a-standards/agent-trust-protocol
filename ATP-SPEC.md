@@ -2,9 +2,11 @@
 
 ## A Standard for Verifiable Trust Assertions About AI Agents
 
-**Version:** 1.0.0-draft
+**Version:** 1.0.0-rc1
 **Authors:** OpenA2A
-**Date:** March 2026
+**Date:** April 2026
+
+> **Note (2026-04-28).** v1.0.0-rc1 reconciles the DID method prefix from `did:atp:` (used in v1.0.0-draft) to `did:opena2a:` to match the production reference implementation at `api.oa2a.org`. No other normative changes from v1.0.0-draft.
 
 ---
 
@@ -91,7 +93,7 @@ Requirements:
 Every agent in ATP is identified by a Decentralized Identifier (DID) conforming to W3C DID Core.
 
 ```
-did:atp:<agent_type>:<agent_name>
+did:opena2a:<agent_type>:<agent_name>
 ```
 
 Where:
@@ -100,17 +102,17 @@ Where:
 
 Examples:
 ```
-did:atp:mcp_server:@modelcontextprotocol/server-filesystem
-did:atp:a2a_agent:google/weather-agent
-did:atp:skill:deployment-helper
-did:atp:ai_tool:langchain
+did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem
+did:opena2a:a2a_agent:google/weather-agent
+did:opena2a:skill:deployment-helper
+did:opena2a:ai_tool:langchain
 ```
 
 Trust authorities themselves have DIDs:
 ```
-did:atp:authority:opena2a.org
-did:atp:authority:trust.google.com
-did:atp:authority:security.azure.com
+did:opena2a:authority:opena2a.org
+did:opena2a:authority:trust.google.com
+did:opena2a:authority:security.azure.com
 ```
 
 ### 3.2 DID Document
@@ -123,11 +125,11 @@ Resolving a DID MUST return a DID Document conforming to the following structure
     "https://www.w3.org/ns/did/v1",
     "https://w3id.org/security/suites/ed25519-2020/v1"
   ],
-  "id": "did:atp:mcp_server:@modelcontextprotocol/server-filesystem",
+  "id": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
   "verificationMethod": [{
-    "id": "did:atp:mcp_server:@modelcontextprotocol/server-filesystem#key-1",
+    "id": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem#key-1",
     "type": "Ed25519VerificationKey2020",
-    "controller": "did:atp:authority:opena2a.org",
+    "controller": "did:opena2a:authority:opena2a.org",
     "publicKeyMultibase": "z6Mkf5rGMoatrSj1f..."
   }],
   "service": [
@@ -177,9 +179,9 @@ A2A agents that participate in ATP SHOULD include their DID and a current trust 
   "url": "https://weather.example.com",
   "capabilities": ["weather_lookup"],
   "atp": {
-    "did": "did:atp:a2a_agent:weather-agent",
+    "did": "did:opena2a:a2a_agent:weather-agent",
     "trustProof": { ... },
-    "trustAuthorityDid": "did:atp:authority:opena2a.org"
+    "trustAuthorityDid": "did:opena2a:authority:opena2a.org"
   }
 }
 ```
@@ -210,16 +212,16 @@ A trust proof is a signed assertion about an agent's trust level:
 
 ```json
 {
-  "did": "did:atp:mcp_server:@modelcontextprotocol/server-filesystem",
+  "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
   "trustLevel": 3,
   "trustScore": 0.82,
   "verdict": "passed",
   "issuedAt": "2026-03-22T14:00:00Z",
   "expiresAt": "2026-03-23T14:00:00Z",
-  "issuerDid": "did:atp:authority:opena2a.org",
+  "issuerDid": "did:opena2a:authority:opena2a.org",
   "signatures": [
     {
-      "keyId": "did:atp:authority:opena2a.org#key-v3",
+      "keyId": "did:opena2a:authority:opena2a.org#key-v3",
       "algorithm": "Ed25519",
       "value": "base64-encoded-signature"
     }
@@ -251,12 +253,12 @@ Implementations SHOULD also support hybrid Ed25519 + ML-DSA-65 (FIPS 204) dual s
 ```json
 "signatures": [
   {
-    "keyId": "did:atp:authority:opena2a.org#key-v3",
+    "keyId": "did:opena2a:authority:opena2a.org#key-v3",
     "algorithm": "Ed25519",
     "value": "base64-ed25519-signature"
   },
   {
-    "keyId": "did:atp:authority:opena2a.org#pqc-v1",
+    "keyId": "did:opena2a:authority:opena2a.org#pqc-v1",
     "algorithm": "ML-DSA-65",
     "value": "base64-mldsa65-signature"
   }
@@ -311,11 +313,11 @@ Each leaf in the tree represents a trust event:
   "logIndex": 1847293,
   "timestamp": "2026-03-22T14:00:00Z",
   "entryType": "trust_proof_issued",
-  "agentDid": "did:atp:mcp_server:@modelcontextprotocol/server-filesystem",
+  "agentDid": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
   "trustLevel": 3,
   "trustScore": 0.82,
   "proofHash": "SHA256:abc123...",
-  "signingKeyId": "did:atp:authority:opena2a.org#key-v3",
+  "signingKeyId": "did:opena2a:authority:opena2a.org#key-v3",
   "previousHash": "SHA256:def456..."
 }
 ```
@@ -414,14 +416,14 @@ For Level 3 conforming implementations, trust level 3+ requires multi-authority 
 
    POST /federation/v1/proposals
    {
-     "agentDid": "did:atp:mcp_server:example",
+     "agentDid": "did:opena2a:mcp_server:example",
      "proposedLevel": 3,
      "evidence": {
        "scanResults": { ... },
        "contentHash": "SHA256:...",
        "slsaLevel": 2
      },
-     "proposerDid": "did:atp:authority:opena2a.org",
+     "proposerDid": "did:opena2a:authority:opena2a.org",
      "expiresAt": "2026-03-23T14:00:00Z"
    }
 
@@ -430,7 +432,7 @@ For Level 3 conforming implementations, trust level 3+ requires multi-authority 
 
    POST /federation/v1/proposals/{id}/sign
    {
-     "signerDid": "did:atp:authority:trust.google.com",
+     "signerDid": "did:opena2a:authority:trust.google.com",
      "agrees": true,
      "signature": "base64-signature-over-proposal"
    }
@@ -446,10 +448,10 @@ Any Verified authority MAY unilaterally block an agent (trust level 0):
 ```
 POST /federation/v1/blocks
 {
-  "agentDid": "did:atp:mcp_server:malicious-package",
+  "agentDid": "did:opena2a:mcp_server:malicious-package",
   "reason": "Active data exfiltration detected",
   "evidence": { ... },
-  "blockerDid": "did:atp:authority:opena2a.org"
+  "blockerDid": "did:opena2a:authority:opena2a.org"
 }
 ```
 
@@ -480,7 +482,7 @@ GET /.well-known/atp
 
 ```json
 {
-  "authorityDid": "did:atp:authority:opena2a.org",
+  "authorityDid": "did:opena2a:authority:opena2a.org",
   "version": "1.0",
   "conformanceLevel": 3,
   "endpoints": {
@@ -513,8 +515,8 @@ GET /.well-known/atp
     "sse-events"
   ],
   "federationPeers": [
-    "did:atp:authority:trust.google.com",
-    "did:atp:authority:security.azure.com"
+    "did:opena2a:authority:trust.google.com",
+    "did:opena2a:authority:security.azure.com"
   ]
 }
 ```
@@ -529,9 +531,9 @@ Content-Type: application/json
 
 {
   "agents": [
-    {"did": "did:atp:mcp_server:server-a"},
-    {"did": "did:atp:a2a_agent:agent-b"},
-    {"did": "did:atp:skill:skill-c"}
+    {"did": "did:opena2a:mcp_server:server-a"},
+    {"did": "did:opena2a:a2a_agent:agent-b"},
+    {"did": "did:opena2a:skill:skill-c"}
   ]
 }
 ```
@@ -566,11 +568,11 @@ Returns all revocations since the given timestamp:
 {
   "revocations": [
     {
-      "agentDid": "did:atp:mcp_server:compromised-package",
+      "agentDid": "did:opena2a:mcp_server:compromised-package",
       "revokedAt": "2026-03-22T15:00:00Z",
       "reason": "Supply chain compromise detected",
       "transparencyLogIndex": 1847300,
-      "revokedByKeyId": "did:atp:authority:opena2a.org#key-v3"
+      "revokedByKeyId": "did:opena2a:authority:opena2a.org#key-v3"
     }
   ],
   "nextSince": "2026-03-22T15:00:00Z"
@@ -684,7 +686,7 @@ The OpenA2A Registry (`github.com/opena2a-org/opena2a-registry`) is the referenc
 import atp
 
 # Before accepting a delegated task from another agent
-proof = atp.get_trust_proof("did:atp:a2a_agent:requester-agent")
+proof = atp.get_trust_proof("did:opena2a:a2a_agent:requester-agent")
 
 if not atp.verify(proof):
     reject_task("Trust proof verification failed")
@@ -700,7 +702,7 @@ accept_task()
 ```typescript
 // Before connecting to an MCP server
 const proof = await atp.getTrustProof(
-  "did:atp:mcp_server:@modelcontextprotocol/server-filesystem"
+  "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
 );
 
 if (!atp.verify(proof)) {
@@ -722,7 +724,7 @@ const client = new MCPClient(serverUrl);
 - name: Verify agent trust
   run: |
     npx opena2a-cli trust verify \
-      --did "did:atp:mcp_server:${{ inputs.mcp-server }}" \
+      --did "did:opena2a:mcp_server:${{ inputs.mcp-server }}" \
       --min-level 3 \
       --require-federation
 ```
