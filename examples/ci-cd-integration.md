@@ -29,7 +29,7 @@ jobs:
 
       - name: Check agent trust
         run: |
-          DID="did:atp:mcp_server:${{ vars.MCP_SERVER_NAME }}"
+          DID="did:opena2a:mcp_server:${{ vars.MCP_SERVER_NAME }}"
           PROOF=$(curl -sf "https://api.oa2a.org/api/v1/trust/proof?did=${DID}")
 
           if [ $? -ne 0 ]; then
@@ -67,11 +67,11 @@ jobs:
     strategy:
       matrix:
         agent:
-          - did: "did:atp:mcp_server:@modelcontextprotocol/server-filesystem"
+          - did: "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
             label: "Filesystem MCP"
-          - did: "did:atp:mcp_server:@modelcontextprotocol/server-github"
+          - did: "did:opena2a:mcp_server:@modelcontextprotocol/server-github"
             label: "GitHub MCP"
-          - did: "did:atp:a2a_agent:weather-agent"
+          - did: "did:opena2a:a2a_agent:weather-agent"
             label: "Weather Agent"
     steps:
       - name: Verify ${{ matrix.agent.label }}
@@ -139,9 +139,9 @@ With an `agents.json` file:
 
 ```json
 [
-  "did:atp:mcp_server:@modelcontextprotocol/server-filesystem",
-  "did:atp:mcp_server:@modelcontextprotocol/server-github",
-  "did:atp:a2a_agent:weather-agent"
+  "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+  "did:opena2a:mcp_server:@modelcontextprotocol/server-github",
+  "did:opena2a:a2a_agent:weather-agent"
 ]
 ```
 
@@ -155,7 +155,7 @@ trust-gate:
   image: curlimages/curl:latest
   script:
     - |
-      DID="did:atp:mcp_server:${MCP_SERVER_NAME}"
+      DID="did:opena2a:mcp_server:${MCP_SERVER_NAME}"
       PROOF=$(curl -sf "https://api.oa2a.org/api/v1/trust/proof?did=${DID}")
       LEVEL=$(echo "$PROOF" | jq -r '.trustLevel')
       if [ "$LEVEL" -lt 3 ]; then
@@ -194,7 +194,7 @@ jobs:
       - name: Verify agent trust
         run: |
           for SERVER in ${{ steps.agents.outputs.servers }}; do
-            DID="did:atp:mcp_server:${SERVER}"
+            DID="did:opena2a:mcp_server:${SERVER}"
             LEVEL=$(curl -sf "https://api.oa2a.org/api/v1/trust/proof?did=${DID}" | jq -r '.trustLevel')
 
             if [ "$LEVEL" -lt 3 ]; then

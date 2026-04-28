@@ -18,7 +18,7 @@ MCP (Model Context Protocol) servers expose tools, resources, and prompts to AI 
 
 ```bash
 # Check trust before connecting to an MCP server
-curl -s "https://api.oa2a.org/api/v1/trust/proof?did=did:atp:mcp_server:@modelcontextprotocol/server-filesystem" \
+curl -s "https://api.oa2a.org/api/v1/trust/proof?did=did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem" \
   | jq '{trustLevel: .trustLevel, verdict: .verdict, score: .trustScore, expires: .expiresAt}'
 ```
 
@@ -52,7 +52,7 @@ def check_mcp_trust(server_name: str, min_level: int = 2) -> dict:
     Returns:
         {"allowed": True/False, "trustLevel": int, "reason": str}
     """
-    did = f"did:atp:mcp_server:{server_name}"
+    did = f"did:opena2a:mcp_server:{server_name}"
 
     resp = requests.get(
         "https://api.oa2a.org/api/v1/trust/proof",
@@ -112,7 +112,7 @@ async function checkMcpTrust(
   serverName: string,
   minLevel = 2
 ): Promise<McpTrustResult> {
-  const did = `did:atp:mcp_server:${serverName}`;
+  const did = `did:opena2a:mcp_server:${serverName}`;
   const url = `https://api.oa2a.org/api/v1/trust/proof?did=${encodeURIComponent(did)}`;
 
   const resp = await fetch(url);
@@ -163,7 +163,7 @@ def check_mcp_servers_batch(server_names: list[str], min_level: int = 2) -> dict
     Returns a dict mapping server name to trust result.
     """
     agents = [
-        {"did": f"did:atp:mcp_server:{name}"} for name in server_names
+        {"did": f"did:opena2a:mcp_server:{name}"} for name in server_names
     ]
 
     resp = requests.post(
@@ -211,7 +211,7 @@ An MCP client can define trust policies per server in its configuration:
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"],
       "atp": {
-        "did": "did:atp:mcp_server:@modelcontextprotocol/server-filesystem",
+        "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
         "minTrustLevel": 3,
         "blockOnFailure": true
       }
@@ -223,7 +223,7 @@ An MCP client can define trust policies per server in its configuration:
         "GITHUB_TOKEN": "${GITHUB_TOKEN}"
       },
       "atp": {
-        "did": "did:atp:mcp_server:@modelcontextprotocol/server-github",
+        "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-github",
         "minTrustLevel": 2,
         "blockOnFailure": false
       }

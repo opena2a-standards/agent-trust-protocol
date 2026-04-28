@@ -36,19 +36,19 @@ An A2A agent card with ATP trust embedded in the `atp` field:
     }
   ],
   "atp": {
-    "did": "did:atp:a2a_agent:weather-agent",
+    "did": "did:opena2a:a2a_agent:weather-agent",
     "trustLevel": 3,
     "trustProof": {
-      "did": "did:atp:a2a_agent:weather-agent",
+      "did": "did:opena2a:a2a_agent:weather-agent",
       "trustLevel": 3,
       "trustScore": 0.82,
       "verdict": "passed",
       "issuedAt": "2026-03-22T14:00:00Z",
       "expiresAt": "2026-03-23T14:00:00Z",
-      "issuerDid": "did:atp:authority:opena2a.org",
+      "issuerDid": "did:opena2a:authority:opena2a.org",
       "signatures": [
         {
-          "keyId": "did:atp:authority:opena2a.org#key-v3",
+          "keyId": "did:opena2a:authority:opena2a.org#key-v3",
           "algorithm": "Ed25519",
           "value": "base64-signature"
         }
