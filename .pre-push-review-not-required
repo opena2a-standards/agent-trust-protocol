@@ -1,0 +1,1 @@
+ATP is a specification + docs repo (Markdown spec, README, examples, conformance shell scripts). No application code, no build, no test suite. The standard 8-phase CI gate is not applicable.
