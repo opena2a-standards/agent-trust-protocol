@@ -8,16 +8,17 @@ ATP enables any party to answer "Should I trust this agent?" with a cryptographi
 ## Quick Start
 
 ```bash
-# Query an agent's trust
-curl "https://api.oa2a.org/api/v1/trust/proof?did=did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
+# Query an agent's trust proof (returns hybrid Ed25519 + ML-DSA-65 signed proof)
+curl "https://api.oa2a.org/api/v1/trust/proof?did=did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem" \
+  | jq '.proof' > proof.json
 
-# Verify a trust proof
+# Verify the proof against the issuer (returns {"valid":true,...})
 curl -X POST https://api.oa2a.org/api/v1/trust/verify \
   -H "Content-Type: application/json" \
   -d @proof.json
 
-# Discover a trust authority
-curl https://api.oa2a.org/.well-known/atp
+# Discover the trust authority (current endpoint; will migrate to /.well-known/atp)
+curl https://api.oa2a.org/.well-known/opena2a
 ```
 
 ## Specification
