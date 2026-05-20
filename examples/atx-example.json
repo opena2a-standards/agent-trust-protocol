@@ -1,0 +1,49 @@
+{
+  "$comment": "Illustrative ATX v1.1-draft. Shipped fields (did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures) match v1.0.0-rc1. Proposed v1.1 fields (capabilities, buildAttestation, behavioralProfile, scanSummary) are shown for shape only and are NOT part of the v1.0.0-rc1 canonical signing form in ATP-SPEC.md section 4.3. Signature values are placeholders; this file does not verify.",
+  "version": "1.1-draft",
+  "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+  "trustLevel": 3,
+  "trustScore": 0.82,
+  "verdict": "passed",
+  "issuedAt": "2026-05-19T14:00:00Z",
+  "expiresAt": "2026-05-20T14:00:00Z",
+  "issuerDid": "did:opena2a:registry:opena2a.org",
+  "signatures": [
+    {
+      "keyId": "did:opena2a:registry:opena2a.org#key-v1",
+      "algorithm": "Ed25519",
+      "value": "PLACEHOLDER_BASE64_ED25519_SIGNATURE"
+    },
+    {
+      "keyId": "did:opena2a:registry:opena2a.org#pqc-v1",
+      "algorithm": "ML-DSA-65",
+      "value": "PLACEHOLDER_BASE64_MLDSA65_SIGNATURE"
+    }
+  ],
+  "capabilities": [
+    "filesystem:read",
+    "filesystem:write",
+    "filesystem:list"
+  ],
+  "buildAttestation": {
+    "predicateType": "https://slsa.dev/provenance/v1",
+    "slsaLevel": 2,
+    "subjectDigest": "sha256:PLACEHOLDER_BUILD_ARTIFACT_DIGEST",
+    "builderId": "https://github.com/actions/runner"
+  },
+  "behavioralProfile": {
+    "checksum": "sha256:PLACEHOLDER_BEHAVIORAL_BASELINE_DIGEST",
+    "observationWindow": {
+      "from": "2026-04-19T00:00:00Z",
+      "to": "2026-05-19T00:00:00Z"
+    },
+    "sampleCount": 14823
+  },
+  "scanSummary": {
+    "checksRun": 199,
+    "criticalFindings": 0,
+    "highFindings": 1,
+    "mediumFindings": 4,
+    "lastScanned": "2026-05-19T12:00:00Z"
+  }
+}
