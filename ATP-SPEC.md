@@ -298,6 +298,32 @@ Content-Type: application/json
 
 Verifies a trust proof against the authority's public keys and transparency log. Returns verification result.
 
+### 4.6 Agent Trust eXtension (ATX)
+
+The Agent Trust eXtension (ATX) is the credential format defined by ATP for AI agents specifically. ATX builds on the base trust proof in Section 4.2 and adds agent-specific claims that generic credential formats do not encode.
+
+The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the canonical signing form in Section 4.3 covers. The fields below marked "Proposed (v1.1)" are draft extensions; when present, they are informational and are NOT part of the v1.0.0-rc1 canonical signed payload. A future v1.1 revision of this specification will define their normative treatment, including whether and how they extend the canonical form.
+
+#### Schema
+
+| Field | Status | Description |
+|-------|--------|-------------|
+| did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (v1.0.0-rc1) | Base trust proof. See Section 4.2. |
+| capabilities | Proposed (v1.1) | Declared capability set the agent is authorized to perform. |
+| buildAttestation | Proposed (v1.1) | SLSA-compatible build provenance digest. |
+| behavioralProfile | Proposed (v1.1) | Observed behavior baseline. Checksum and observation window. |
+| scanSummary | Proposed (v1.1) | HackMyAgent and equivalent scanner results at issuance time. |
+
+Note: Section 4.2 shows `scanSummary` and `transparencyLogIndex` in its example payload. These are illustrative fields, not enumerated as part of the canonical form. ATX names `scanSummary` as a proposed v1.1 claim so that its shape and semantics can be standardized.
+
+#### Reference Example
+
+See `examples/atx-example.json` for an illustrative v1.1-draft proof showing all Proposed fields. The example is informational and is not a verifiable proof.
+
+#### Why ATX
+
+DIDs answer who an agent is. ATX answers what the agent is authorized to do (`capabilities`), what its provenance is (`buildAttestation`), what its observed behavior looks like (`behavioralProfile`), and what scanners have verified it (`scanSummary`). The W3C Verifiable Credentials Data Model 2.0 supports the issuer, subject, and claims pattern. ATX uses that pattern with agent-specific claims tuned for short TTLs, behavioral attestation, and continuous re-verification.
+
 ---
 
 ## 5. Transparency Log
