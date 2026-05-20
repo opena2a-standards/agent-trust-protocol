@@ -1,7 +1,7 @@
 > **[OpenA2A](https://github.com/opena2a-org/opena2a)**: [CLI](https://github.com/opena2a-org/opena2a) · [HackMyAgent](https://github.com/opena2a-org/hackmyagent) · [Secretless](https://github.com/opena2a-org/secretless-ai) · [AIM](https://github.com/opena2a-org/agent-identity-management) · [Browser Guard](https://github.com/opena2a-org/AI-BrowserGuard) · [DVAA](https://github.com/opena2a-org/damn-vulnerable-ai-agent)
 # Agent Trust Protocol (ATP)
 
-An open standard for verifiable trust assertions about AI agents.
+An open standard for verifiable trust assertions about AI agents. The agent-specific credential format defined by ATP is the Agent Trust eXtension (ATX).
 
 ATP enables any party to answer "Should I trust this agent?" with a cryptographically verifiable, auditable, and decentralized response.
 
@@ -33,14 +33,35 @@ curl https://api.oa2a.org/.well-known/opena2a
 | 2 | Auditable Trust | + transparency log. Tamper-evident. |
 | 3 | Decentralized Trust | + federation consensus. Multi-authority. |
 
+## Agent Trust eXtension (ATX)
+
+The Agent Trust eXtension (ATX) is the credential format defined by ATP for AI agents specifically. ATX builds on the base ATP trust proof and adds agent-specific claims that generic credential formats do not encode.
+
+### Schema
+
+| Field | Status | Description |
+|-------|--------|-------------|
+| did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (v1.0.0-rc1) | Base trust proof. See examples/. |
+| capabilities | Proposed (v1.1) | Declared capability set the agent is authorized to perform. |
+| buildAttestation | Proposed (v1.1) | SLSA-compatible build provenance digest. |
+| behavioralProfile | Proposed (v1.1) | Observed behavior baseline. Checksum and observation window. |
+| scanSummary | Proposed (v1.1) | HackMyAgent and equivalent scanner results at issuance time. |
+
+### Why ATX
+
+DIDs answer who an agent is. ATX answers what the agent is authorized to do, what its provenance is, what its observed behavior looks like, and what scanners have verified it. The W3C Verifiable Credentials Data Model 2.0 supports the issuer, subject, and claims pattern. ATX uses that pattern with agent-specific claims tuned for short TTLs, behavioral attestation, and continuous re-verification.
+
+ATX is the credential primitive the agent internet needs. ATP is the protocol that defines it.
+
 ## Interoperability
 
 ATP is designed to complement:
-- [Google A2A Protocol](https://github.com/google/A2A) — trust proof in agent cards
-- [SLSA](https://slsa.dev) — provenance level factors into trust score
-- [Sigstore](https://sigstore.dev) — keyless co-signing of trust proofs
-- [Certificate Transparency (RFC 6962)](https://datatracker.ietf.org/doc/html/rfc6962) — compatible log structure
-- [W3C DID Core](https://www.w3.org/TR/did-core/) — agent identifiers
+- [Google A2A Protocol](https://github.com/google/A2A): trust proof in agent cards
+- [SLSA](https://slsa.dev): provenance level factors into trust score
+- [Sigstore](https://sigstore.dev): keyless co-signing of trust proofs
+- [Certificate Transparency (RFC 6962)](https://datatracker.ietf.org/doc/html/rfc6962): compatible log structure
+- [W3C DID Core](https://www.w3.org/TR/did-core/): agent identifiers
+- [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/): ATX is structurally compatible
 
 ## Reference Implementation
 
