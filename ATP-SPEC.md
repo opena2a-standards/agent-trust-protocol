@@ -313,6 +313,7 @@ The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the c
 | buildAttestation | Proposed (v1.1) | SLSA-compatible build provenance digest. |
 | behavioralProfile | Proposed (v1.1) | Observed behavior baseline. Checksum and observation window. |
 | scanSummary | Proposed (v1.1) | HackMyAgent and equivalent scanner results at issuance time. |
+| declaredPurpose | Proposed (v1.1) | Optional structured declaration of what the agent is *for* (category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). Identity/attestation claim and an offline detection signal only — never an authorization input. When present it is covered by the v1.1 signed payload. See [`atx-spec` core.md §1.5](https://github.com/opena2a-org/atx-spec). |
 
 Note: Section 4.2 shows `scanSummary` and `transparencyLogIndex` in its example payload. These are illustrative fields, not enumerated as part of the canonical form. ATX names `scanSummary` as a proposed v1.1 claim so that its shape and semantics can be standardized.
 
