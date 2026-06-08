@@ -1,5 +1,5 @@
 {
-  "$comment": "Illustrative ATX v1.1-draft. Shipped fields (did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures) match v1.0.0-rc1. Proposed v1.1 fields (capabilities, buildAttestation, behavioralProfile, scanSummary) are shown for shape only and are NOT part of the v1.0.0-rc1 canonical signing form in ATP-SPEC.md section 4.3. Signature values are placeholders; this file does not verify.",
+  "$comment": "Illustrative ATX v1.1-draft. Shipped fields (did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures) match v1.0.0-rc1. Proposed v1.1 fields (capabilities, buildAttestation, behavioralProfile, scanSummary, declaredPurpose) are shown for shape only and are NOT part of the v1.0.0-rc1 canonical signing form in ATP-SPEC.md section 4.3. Signature values are placeholders; this file does not verify.",
   "version": "1.1-draft",
   "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
   "trustLevel": 3,
@@ -45,5 +45,19 @@
     "highFindings": 1,
     "mediumFindings": 4,
     "lastScanned": "2026-05-19T12:00:00Z"
+  },
+  "declaredPurpose": {
+    "vocabVersion": "1",
+    "statement": "Reads, lists, and writes files in a sandboxed workspace on behalf of a coding assistant.",
+    "category": "software-development",
+    "taskScopes": ["dev:read_files", "dev:write_files"],
+    "capabilityJustification": {
+      "filesystem:read": ["dev:read_files"],
+      "filesystem:list": ["dev:read_files"],
+      "filesystem:write": ["dev:write_files"]
+    },
+    "autonomy": "supervised",
+    "dataScopes": ["workspace.source"],
+    "egressScopes": []
   }
 }
