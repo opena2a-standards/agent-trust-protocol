@@ -8,6 +8,22 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- `schemas/trust-proof-v1.schema.json`, `schemas/signed-tree-head-v1.schema.json`,
+  `schemas/discovery-v1.schema.json`: machine-readable JSON Schemas
+  (draft 2020-12) for the three fixture-backed ATP wire structures, derived
+  from §4.2/§5.6/§7.1 with the atp-conformance fixtures as ground truth (all
+  seven fixture payloads validate).
+- `scripts/validate_examples.py` + `schemas/examples-map.json` + CI workflow:
+  schemas metaschema-checked and the §4.2/§5.6/§7.1 examples validated on
+  every push/PR.
+- §5.6: `signedBy` (fragment-qualified key reference) ratified into the STH —
+  first pinned by the conformance suite; the signature is computed over the 32
+  raw bytes decoded from `rootHash`.
+- §7.1: suite-pinned wire shapes ratified as normative — `transparencySth`
+  endpoint key casing, `publicKeyHex` key material with per-key `status` /
+  `validFrom`, full-DID `keyId` values, `supportedMethods: ["did:opena2a"]`;
+  required-member set documented (`authorityDid`, `version`, `endpoints`,
+  `publicKeys`).
 - §2.1 Conformance testing: per-level traceability table mapping every
   `atp-conformance` byte-stable fixture to the spec section it tests and its
   pinned verdict; explicit list of requirements not yet fixture-covered;
@@ -17,6 +33,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   gain the normative alias before v1.0.0-final; consumer fallback and
   identical-document requirements specified. Appendix A row updated to match.
 - This changelog.
+
+### Changed
+
+- §4.2/§5.6/§7.1 example blocks now carry conformance-fixture bytes (artifacts
+  that verify against the reference verifiers) instead of placeholders; the
+  Proposed v1.1 fields (`slsaLevel`, `scanSummary`) moved out of the §4.2
+  example, which now shows exactly the rc1 canonical-form-covered shape.
+- §3.1/§3.4 examples and §11: `a2a_agent` example tokens replaced with the
+  registered `agent` type (`a2a_agent` documented as a deprecated legacy
+  alias); the type list now defers to the did-method-opena2a registry; the two
+  leftover `did:atp` references from v1.0.0-draft corrected to `did:opena2a`.
 
 ## [1.0.0-rc1] - 2026-04-28
 

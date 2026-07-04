@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json",
+  "title": "ATP trust proof (section 4.2, v1.0.0-rc1 wire form)",
+  "description": "Structural schema for the ATP trust proof, derived from section 4.2 with the atp-conformance fixtures as ground truth. Shape only: the signature covers the pipe-delimited seven-field canonical form of section 4.3, a byte rule the verifier enforces. slsaLevel and scanSummary are Proposed v1.1 fields (section 4.6), not part of the rc1 canonical form.",
+  "type": "object",
+  "required": [
+    "did",
+    "trustLevel",
+    "trustScore",
+    "verdict",
+    "issuedAt",
+    "expiresAt",
+    "issuerDid",
+    "signatures"
+  ],
+  "properties": {
+    "did": { "$ref": "#/$defs/did" },
+    "trustLevel": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "trustScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "0.0-1.0 scale; formatted %.6f inside the section 4.3 canonical string."
+    },
+    "verdict": { "enum": ["passed", "warning", "blocked", "listed", "verified", "unknown"] },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "issuerDid": { "$ref": "#/$defs/did" },
+    "signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["keyId", "algorithm", "value"],
+        "properties": {
+          "keyId": { "type": "string", "minLength": 1 },
+          "algorithm": { "enum": ["Ed25519", "ML-DSA-65"] },
+          "value": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "transparencyLogIndex": { "type": "integer", "minimum": 0 },
+    "slsaLevel": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "description": "Proposed v1.1 (section 4.6); not covered by the rc1 canonical form."
+    },
+    "scanSummary": {
+      "type": "object",
+      "description": "Proposed v1.1 (section 4.6); not covered by the rc1 canonical form.",
+      "properties": {
+        "checksRun": { "type": "integer", "minimum": 0 },
+        "criticalFindings": { "type": "integer", "minimum": 0 },
+        "highFindings": { "type": "integer", "minimum": 0 },
+        "lastScanned": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "did": {
+      "type": "string",
+      "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:@/-]+(#[A-Za-z0-9._-]+)?$"
+    }
+  }
+}

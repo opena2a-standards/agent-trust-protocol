@@ -1,0 +1,17 @@
+[
+  {
+    "file": "ATP-SPEC.md",
+    "heading": "### 4.2 Trust Proof Format",
+    "schema": "schemas/trust-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
+    "heading": "### 5.6 Signed Tree Head",
+    "schema": "schemas/signed-tree-head-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
+    "heading": "### 7.1 Well-Known Endpoint",
+    "schema": "schemas/discovery-v1.schema.json"
+  }
+]

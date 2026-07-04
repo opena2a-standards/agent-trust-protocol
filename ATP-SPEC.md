@@ -117,13 +117,16 @@ did:opena2a:<agent_type>:<agent_name>
 ```
 
 Where:
-- `agent_type` is one of: `mcp_server`, `a2a_agent`, `skill`, `ai_tool`, `llm`
+- `agent_type` is a resource type registered in the
+  [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a)
+  — for agents typically `agent`, `mcp_server`, `skill`, `ai_tool`, or `llm`
+  (`a2a_agent` is a deprecated legacy alias of `agent`)
 - `agent_name` is the package name, URL-encoded if it contains special characters
 
 Examples:
 ```
 did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem
-did:opena2a:a2a_agent:google/weather-agent
+did:opena2a:agent:google/weather-agent
 did:opena2a:skill:deployment-helper
 did:opena2a:ai_tool:langchain
 ```
@@ -199,7 +202,7 @@ A2A agents that participate in ATP SHOULD include their DID and a current trust 
   "url": "https://weather.example.com",
   "capabilities": ["weather_lookup"],
   "atp": {
-    "did": "did:opena2a:a2a_agent:weather-agent",
+    "did": "did:opena2a:agent:weather-agent",
     "trustProof": { ... },
     "trustAuthorityDid": "did:opena2a:authority:opena2a.org"
   }
@@ -232,30 +235,31 @@ A trust proof is a signed assertion about an agent's trust level:
 
 ```json
 {
-  "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+  "did": "did:opena2a:mcp_server:agent_conformance_test_001",
   "trustLevel": 3,
-  "trustScore": 0.82,
+  "trustScore": 0.825,
   "verdict": "passed",
-  "issuedAt": "2026-03-22T14:00:00Z",
-  "expiresAt": "2026-03-23T14:00:00Z",
+  "issuedAt": "2026-05-23T00:00:00Z",
+  "expiresAt": "2099-12-31T23:59:59Z",
   "issuerDid": "did:opena2a:authority:opena2a.org",
   "signatures": [
     {
-      "keyId": "did:opena2a:authority:opena2a.org#key-v3",
+      "keyId": "did:opena2a:authority:opena2a.org#key-1",
       "algorithm": "Ed25519",
-      "value": "base64-encoded-signature"
+      "value": "ayA1HZLb2Pg7NwPLGjwzRCiau2rA0x5LKkQPrZ6VNso6ftT0CX0n1G86yn9fLXpB2LSe8MT0itaK7kzYpokAAA=="
     }
   ],
-  "transparencyLogIndex": 1847293,
-  "slsaLevel": 2,
-  "scanSummary": {
-    "checksRun": 199,
-    "criticalFindings": 0,
-    "highFindings": 1,
-    "lastScanned": "2026-03-22T12:00:00Z"
-  }
+  "transparencyLogIndex": 42
 }
 ```
+
+The example is the suite's `trust-proof-baseline` fixture bytes — a proof that
+verifies against the reference verifiers. `verdict` is one of `passed`,
+`warning`, `blocked`, `listed`, `verified`, `unknown`; `trustScore` is on the
+0.0-1.0 scale (formatted `%.6f` inside the §4.3 canonical string). The
+Proposed v1.1 fields (`slsaLevel`, `scanSummary`, and the §4.6 set) are not
+part of the rc1 canonical form and are omitted here. The machine-readable
+shape is [`schemas/trust-proof-v1.schema.json`](./schemas/trust-proof-v1.schema.json).
 
 ### 4.3 Signing
 
@@ -423,11 +427,19 @@ The trust authority MUST periodically publish a Signed Tree Head (STH):
 ```json
 {
   "treeSize": 1847294,
-  "timestamp": "2026-03-22T14:00:00Z",
-  "rootHash": "SHA256:789abc...",
-  "signature": "base64-ed25519-signature-over-rootHash"
+  "timestamp": "2026-05-23T00:00:00Z",
+  "rootHash": "SHA256:111cc6504a7f35183bef35aa9d647cc3c799278325354d4446bb0157079b1602",
+  "signedBy": "did:opena2a:authority:opena2a.org#key-1",
+  "signature": "egu1YqeoHIW9w7e7fmaFUECdMv6HbOABUDwi6BHQMZn7vkPveBg34g3e3Jptlkw5GqipnytIKmLUs7W4xoCjCQ=="
 }
 ```
+
+The example is the suite's `transparency-log-sth` fixture bytes. `signedBy` is
+the fragment-qualified key reference resolving in the authority's discovery
+document (§7.1) — first pinned by the conformance suite and ratified here as
+normative. The Ed25519 signature is computed over the 32 raw bytes decoded
+from `rootHash`. The machine-readable shape is
+[`schemas/signed-tree-head-v1.schema.json`](./schemas/signed-tree-head-v1.schema.json).
 
 The STH SHOULD be published at least every hour. Monitors fetch the STH and verify consistency with their last-known state.
 
@@ -541,20 +553,20 @@ GET /.well-known/atp
     "trustBatch": "/api/v1/trust/batch",
     "transparencyLog": "/api/v1/transparency/trust-proofs",
     "transparencyProof": "/api/v1/transparency/proof/{index}",
-    "transparencySTH": "/api/v1/transparency/sth",
+    "transparencySth": "/api/v1/transparency/sth",
     "revocations": "/api/v1/trust/revocations",
     "federation": "/federation/v1/proposals"
   },
   "publicKeys": [
     {
-      "keyId": "#key-v3",
+      "keyId": "did:opena2a:authority:opena2a.org#key-1",
       "algorithm": "Ed25519",
-      "publicKeyMultibase": "z6Mkf5rGMoatrSj1f...",
+      "publicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
       "status": "active",
-      "validFrom": "2026-03-01T00:00:00Z"
+      "validFrom": "2026-01-01T00:00:00Z"
     }
   ],
-  "supportedMethods": ["did:atp"],
+  "supportedMethods": ["did:opena2a"],
   "capabilities": [
     "trust-proof",
     "transparency-log",
@@ -570,6 +582,17 @@ GET /.well-known/atp
 }
 ```
 
+The wire shapes above are the ones the conformance suite pins and the
+reference verifiers require, ratified here as normative: endpoint key
+`transparencySth` (not `transparencySTH`), key material as `publicKeyHex`
+(raw lowercase hex) with per-key `status` and `validFrom`, fragment-qualified
+full-DID `keyId` values, and `supportedMethods` naming the `did:opena2a`
+method. The suite's `discovery-valid` fixture additionally carries an
+ML-DSA-65 key entry (~2.6 KB hex), omitted here for readability. The
+machine-readable shape is
+[`schemas/discovery-v1.schema.json`](./schemas/discovery-v1.schema.json);
+required members are `authorityDid`, `version`, `endpoints`, `publicKeys`.
+
 ### 7.2 Batch Queries
 
 For efficiency, clients SHOULD use batch queries when verifying multiple agents:
@@ -581,7 +604,7 @@ Content-Type: application/json
 {
   "agents": [
     {"did": "did:opena2a:mcp_server:server-a"},
-    {"did": "did:opena2a:a2a_agent:agent-b"},
+    {"did": "did:opena2a:agent:agent-b"},
     {"did": "did:opena2a:skill:skill-c"}
   ]
 }
@@ -694,7 +717,7 @@ Implementations MUST NOT sign JSON-serialized payloads directly. JSON serializat
 
 This specification defines:
 
-- **DID Method:** `did:atp` — Decentralized Identifier method for AI agents
+- **DID Method:** `did:opena2a` — Decentralized Identifier method for catalogued agent-ecosystem resources (registered in the did-method-opena2a specification; `did:atp` was the pre-rc1 name)
 - **Well-Known URI:** `/.well-known/atp` — Trust authority discovery
 - **Media Type:** `application/atp+json` — ATP trust proof format
 
@@ -735,7 +758,7 @@ The OpenA2A Registry (`github.com/opena2a-org/opena2a-registry`) is the referenc
 import atp
 
 # Before accepting a delegated task from another agent
-proof = atp.get_trust_proof("did:opena2a:a2a_agent:requester-agent")
+proof = atp.get_trust_proof("did:opena2a:agent:requester-agent")
 
 if not atp.verify(proof):
     reject_task("Trust proof verification failed")
