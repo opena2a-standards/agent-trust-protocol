@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specs.opena2a.org/schemas/atp/signed-tree-head-v1.schema.json",
+  "title": "ATP Signed Tree Head (section 5.6)",
+  "description": "Structural schema for the transparency-log STH, derived from section 5.6 with the atp-conformance transparency-log-sth fixture as ground truth. The Ed25519 signature is computed over the 32 raw bytes decoded from rootHash - a byte rule the verifier enforces.",
+  "type": "object",
+  "required": ["treeSize", "timestamp", "rootHash", "signedBy", "signature"],
+  "properties": {
+    "treeSize": { "type": "integer", "minimum": 0 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "rootHash": {
+      "type": "string",
+      "pattern": "^SHA256:[0-9a-f]{64}$"
+    },
+    "signedBy": {
+      "type": "string",
+      "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:@/-]+#[A-Za-z0-9._-]+$",
+      "description": "Fragment-qualified key reference resolving in the authority's discovery document (section 7.1)."
+    },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$" }
+  },
+  "additionalProperties": false
+}
