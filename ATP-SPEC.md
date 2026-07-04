@@ -84,6 +84,26 @@ Requirements:
 - Multi-authority co-signing for trust level 3+
 - Cross-authority revocation propagation
 
+### 2.1 Conformance testing
+
+Two complementary suites test these levels:
+
+**Byte-stable fixtures** ([`opena2a-standards/atp-conformance`](https://github.com/opena2a-standards/atp-conformance)) — SHA-256-pinned wire artifacts verified by parity-gated Go and Python reference verifiers. An implementation claiming a level MUST produce the pinned verdict on every fixture covering that level's requirements:
+
+| Fixture | Level | Tests | Expected |
+|---|---|---|---|
+| `trust-proof-baseline.json` | 1 | §4.2 Trust Proof Format, §4.3 Signing | ACCEPT |
+| `trust-proof-hybrid.json` | 1 | §4.3 Signing (hybrid ML-DSA-65, FIPS 204) | ACCEPT |
+| `trust-proof-expired.json` | 1 | §4.4 Verification step 1 (expiry) | REJECT[EXPIRED] |
+| `trust-proof-untrusted-issuer.json` | 1 | §4.4 Verification step 2 (issuer trust) | REJECT[UNTRUSTED_ISSUER] |
+| `trust-proof-tampered-signature.json` | 1 | §4.4 Verification step 4 (signature) | REJECT[SIGNATURE_INVALID] |
+| `discovery-valid.json` | 1 | §7.1 Well-Known Endpoint | ACCEPT |
+| `transparency-log-sth.json` | 2 | §5.6 Signed Tree Head (RFC 6962 §3.5) | ACCEPT |
+
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): §5.4 inclusion proofs, §5.5 consistency proofs, §8.1 revocation CRL entries, and §6 Level 3 federation cosignature (blocked on a second production authority).
+
+**Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
+
 ---
 
 ## 3. Agent Identifiers
@@ -507,6 +527,8 @@ A trust authority MUST serve a discovery document at:
 GET /.well-known/atp
 ```
 
+**Legacy path migration.** `/.well-known/atp` is the normative discovery path. The reference implementation predates it and currently serves the same document at `/.well-known/opena2a`; it MUST add the normative path before ATP v1.0.0-final, after which the legacy path becomes an optional alias. Until then, consumers SHOULD request `/.well-known/atp` and fall back to `/.well-known/opena2a` on 404. An authority MAY serve both; the two MUST return identical documents.
+
 ```json
 {
   "authorityDid": "did:opena2a:authority:opena2a.org",
@@ -702,7 +724,7 @@ The OpenA2A Registry (`github.com/opena2a-org/opena2a-registry`) is the referenc
 | Trust proof signing | `internal/application/trust_proof_service.go` |
 | Transparency log | `internal/application/transparency_service.go` |
 | Federation domain | `internal/domain/federation.go` |
-| Discovery endpoint | `/.well-known/opena2a` (to be migrated to `/.well-known/atp`) |
+| Discovery endpoint | `/.well-known/opena2a` (legacy path; normative `/.well-known/atp` alias required before v1.0.0-final — see §7.1 migration rule) |
 | Hybrid PQC signatures | `internal/security/hybrid_signature.go` |
 
 ## Appendix B: Integration Examples

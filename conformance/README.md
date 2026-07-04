@@ -1,6 +1,8 @@
 # ATP Conformance Test Suite
 
-Tests that verify a running ATP authority conforms to the [Agent Trust Protocol specification](../ATP-SPEC.md).
+Tests that verify a **running ATP authority** conforms to the [Agent Trust Protocol specification](../ATP-SPEC.md).
+
+This is the live-endpoint half of ATP conformance. The other half — byte-stable, SHA-256-pinned wire-format fixtures with parity-gated Go and Python reference verifiers — lives at [`opena2a-standards/atp-conformance`](https://github.com/opena2a-standards/atp-conformance). See ATP-SPEC §2.1 for the per-level fixture traceability table. Fixtures prove wire-format interoperability; these scripts prove an operating deployment.
 
 ## Prerequisites
 
