@@ -99,8 +99,14 @@ Two complementary suites test these levels:
 | `trust-proof-tampered-signature.json` | 1 | §4.4 Verification step 4 (signature) | REJECT[SIGNATURE_INVALID] |
 | `discovery-valid.json` | 1 | §7.1 Well-Known Endpoint | ACCEPT |
 | `transparency-log-sth.json` | 2 | §5.6 Signed Tree Head (RFC 6962 §3.5) | ACCEPT |
+| `transparency-inclusion-proof-valid.json` | 2 | §5.4 Inclusion Proof (RFC 6962 §2.1.1 / RFC 9162 §2.1.3.2) | ACCEPT |
+| `transparency-inclusion-proof-tampered-path.json` | 2 | §5.4 rule 2 (root recomputation) | REJECT[PROOF_INVALID] |
+| `transparency-consistency-proof-valid.json` | 2 | §5.5 Consistency Proof (RFC 6962 §2.1.2 / RFC 9162 §2.1.4.2) | ACCEPT |
+| `transparency-consistency-proof-tampered-path.json` | 2 | §5.5 rule 2 (append-only) | REJECT[PROOF_INVALID] |
+| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |
+| `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): §5.4 inclusion proofs, §5.5 consistency proofs, §8.1 revocation CRL entries, and §6 Level 3 federation cosignature (blocked on a second production authority).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): §6 Level 3 federation cosignature (blocked on a second production authority), and §8.1 response authenticity (the body is unsigned by design — see §8.1).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
