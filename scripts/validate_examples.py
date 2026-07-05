@@ -23,11 +23,24 @@ import sys
 
 try:
     from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
 except ImportError:
     print("error: the 'jsonschema' package is required (pip install jsonschema)")
     sys.exit(2)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def local_registry() -> Registry:
+    """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
+    inclusion/consistency proofs embedding signed-tree-head-v1) resolve
+    locally — never over the network."""
+    resources = []
+    for sf in sorted((ROOT / "schemas").glob("*.schema.json")):
+        doc = json.loads(sf.read_text(encoding="utf-8"))
+        if "$id" in doc:
+            resources.append((doc["$id"], Resource.from_contents(doc)))
+    return Registry().with_resources(resources)
 
 
 def extract_block(md_path: pathlib.Path, heading: str) -> str:
@@ -81,7 +94,9 @@ def main() -> int:
             print(f"example INVALID JSON  {entry['file']} @ {entry['heading']!r}: {exc}")
             failures += 1
             continue
-        validator = Draft202012Validator(json.loads(schema_path.read_text(encoding="utf-8")))
+        validator = Draft202012Validator(
+            json.loads(schema_path.read_text(encoding="utf-8")), registry=local_registry()
+        )
         errors = sorted(validator.iter_errors(instance), key=lambda e: e.json_path)
         if errors:
             print(f"example FAIL   {entry['file']} @ {entry['heading']!r} vs {entry['schema']}")

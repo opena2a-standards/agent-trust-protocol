@@ -8,6 +8,27 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- §5.4 Inclusion Proof and §5.5 Consistency Proof: normative JSON response
+  bodies pinned (previously endpoint-plus-prose only). The §5.4 body embeds
+  the §5.6 signed tree head and is verified in two ordered rules (STH
+  signature, then RFC 9162 §2.1.3.2 root recomputation → `PROOF_INVALID`);
+  the §5.5 body carries both tree heads and the RFC 9162 §2.1.4.2 check.
+  The examples are the exact bytes of the new atp-conformance
+  `transparency-inclusion-proof-valid` / `transparency-consistency-proof-valid`
+  fixtures (the §5.6 ratification pattern: spec example == fixture payload).
+- §8.1: the revocation response body gains a machine-readable schema and a
+  clients-MUST-reject-malformed-timestamps rule; documented that the body is
+  unsigned (authenticity rides on transport + per-entry
+  `transparencyLogIndex`), with response signing recorded as an open
+  hardening question.
+- `schemas/inclusion-proof-v1.schema.json`,
+  `schemas/consistency-proof-v1.schema.json`,
+  `schemas/revocation-list-v1.schema.json`; `examples-map.json` now validates
+  the §5.4/§5.5/§8.1 examples on every push/PR.
+  `scripts/validate_examples.py` resolves cross-schema `$ref`s (the proofs
+  embed `signed-tree-head-v1`) from a local registry keyed by `$id` — never
+  over the network.
+
 - `schemas/trust-proof-v1.schema.json`, `schemas/signed-tree-head-v1.schema.json`,
   `schemas/discovery-v1.schema.json`: machine-readable JSON Schemas
   (draft 2020-12) for the three fixture-backed ATP wire structures, derived

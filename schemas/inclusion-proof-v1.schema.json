@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specs.opena2a.org/schemas/atp/inclusion-proof-v1.schema.json",
+  "title": "ATP transparency-log inclusion proof (section 5.4)",
+  "description": "Structural schema for the section 5.4 inclusion-proof response, derived from that section with the atp-conformance transparency-inclusion-proof-valid fixture as ground truth. Verification is two byte rules the verifier enforces: the embedded signed tree head verifies per section 5.6, and the RFC 9162 section 2.1.3.2 recomputation from leafHash along auditPath reproduces signedTreeHead.rootHash.",
+  "type": "object",
+  "required": ["logIndex", "leafHash", "auditPath", "signedTreeHead"],
+  "properties": {
+    "logIndex": { "type": "integer", "minimum": 0 },
+    "leafHash": {
+      "type": "string",
+      "pattern": "^SHA256:[0-9a-f]{64}$",
+      "description": "RFC 6962 leaf hash: SHA-256(0x00 || entry)."
+    },
+    "auditPath": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^SHA256:[0-9a-f]{64}$"
+      },
+      "description": "Sibling hashes leaf-to-root per RFC 6962 section 2.1.1. Empty only for a single-leaf tree."
+    },
+    "signedTreeHead": {
+      "$ref": "https://specs.opena2a.org/schemas/atp/signed-tree-head-v1.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

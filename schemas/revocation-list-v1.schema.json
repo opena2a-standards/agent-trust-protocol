@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specs.opena2a.org/schemas/atp/revocation-list-v1.schema.json",
+  "title": "ATP trust-proof revocation response (section 8.1)",
+  "description": "Structural schema for the section 8.1 revocation response, derived from that section's pinned body with the atp-conformance revocation-list-valid fixture as ground truth. The body is not signed: authenticity rides on the transport and each entry's transparencyLogIndex anchoring the revocation in the section 5 log. Timestamp formats are annotations here; the reference verifiers enforce RFC 3339 parsing and reject the whole response on a malformed timestamp.",
+  "type": "object",
+  "required": ["revocations", "nextSince"],
+  "properties": {
+    "revocations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agentDid", "revokedAt", "reason", "transparencyLogIndex", "revokedByKeyId"],
+        "properties": {
+          "agentDid": {
+            "type": "string",
+            "pattern": "^did:[a-z0-9]+:.+$"
+          },
+          "revokedAt": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string", "minLength": 1 },
+          "transparencyLogIndex": { "type": "integer", "minimum": 0 },
+          "revokedByKeyId": {
+            "type": "string",
+            "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:@/-]+#[A-Za-z0-9._-]+$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "nextSince": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}
