@@ -408,7 +408,43 @@ A client can verify that a specific trust proof was logged:
 GET /api/v1/transparency/proof/{logIndex}
 ```
 
-Returns the Merkle audit path from the leaf to the current tree root. The client reconstructs the root hash using the path and compares against the published root.
+Returns the RFC 6962 Section 2.1.1 audit path from the leaf at `logIndex` to
+a signed tree head:
+
+```json
+{
+  "logIndex": 3,
+  "leafHash": "SHA256:84d97aa4077eeac650af60087fd7afacea40531a4a54f8bb65e96d8faf1fa330",
+  "auditPath": [
+    "SHA256:2ec6c337f1120d96c0637e95752a84fc036530d3ecd1010a0432aa5aaa23515e",
+    "SHA256:668630319b60c026a6a07a8780bc7e0e55a1f7e2d53ae3451211612416abeb63",
+    "SHA256:d55d7780c96a0827bc35955770876e56c293b53ff4e9e496473617acf84f7699"
+  ],
+  "signedTreeHead": {
+    "treeSize": 8,
+    "timestamp": "2026-05-23T00:00:00Z",
+    "rootHash": "SHA256:ec38a2f3312fb0ad6b2ee34f2abcc0a3dbf28c82444da038b5f3505ad3eada9e",
+    "signedBy": "did:opena2a:authority:opena2a.org#key-1",
+    "signature": "6E6qwYGiz+VzpAm3fITM7L93+IS/5UfFKFmCIbWJjXNKGEmF9O+IgeMIf25iczVguIVpne7esoD5E2NY0qX+CA=="
+  }
+}
+```
+
+The example is the suite's `transparency-inclusion-proof-valid` fixture bytes
+(entry 3 of the suite's deterministic 8-leaf tree). All four members are
+REQUIRED. `leafHash` is the RFC 6962 leaf hash (`SHA-256(0x00 || entry)`) of
+the logged entry, `auditPath` lists sibling hashes leaf-to-root, and every
+hash is spelled `SHA256:<64 lowercase hex>`. A verifier MUST accept the proof
+only if BOTH hold, evaluated in this order:
+
+1. `signedTreeHead` verifies per §5.6 (reject category `SIGNATURE_INVALID`).
+2. Recomputing the root from `leafHash` along `auditPath` — the algorithm of
+   RFC 9162 Section 2.1.3.2, with `logIndex` and `signedTreeHead.treeSize` as
+   the leaf index and tree size — reproduces `signedTreeHead.rootHash`
+   exactly (reject category `PROOF_INVALID`).
+
+The machine-readable shape is
+[`schemas/inclusion-proof-v1.schema.json`](./schemas/inclusion-proof-v1.schema.json).
 
 ### 5.5 Consistency Proof
 
@@ -418,7 +454,47 @@ A monitor can verify that the log is append-only (no entries were deleted or mod
 GET /api/v1/transparency/consistency?from={oldSize}&to={newSize}
 ```
 
-Returns the consistency proof between two tree states. Compatible with RFC 6962 Section 2.1.2.
+Returns the RFC 6962 Section 2.1.2 consistency proof between two tree states,
+together with both signed tree heads:
+
+```json
+{
+  "fromSize": 4,
+  "toSize": 8,
+  "consistencyPath": [
+    "SHA256:d55d7780c96a0827bc35955770876e56c293b53ff4e9e496473617acf84f7699"
+  ],
+  "fromSignedTreeHead": {
+    "treeSize": 4,
+    "timestamp": "2026-05-22T00:00:00Z",
+    "rootHash": "SHA256:c129e42e800e0d7b8cc86cfb23048830a56e6e9453797703f874089b7265dbce",
+    "signedBy": "did:opena2a:authority:opena2a.org#key-1",
+    "signature": "D++h/JN7ZSyCF4xqDOtAUIIoBULBciQicpoW4Y3DNOr3/LPrVa1a1GW7GbCU1OIZ4v8iPKxqTR82BmvDPfybBw=="
+  },
+  "toSignedTreeHead": {
+    "treeSize": 8,
+    "timestamp": "2026-05-23T00:00:00Z",
+    "rootHash": "SHA256:ec38a2f3312fb0ad6b2ee34f2abcc0a3dbf28c82444da038b5f3505ad3eada9e",
+    "signedBy": "did:opena2a:authority:opena2a.org#key-1",
+    "signature": "6E6qwYGiz+VzpAm3fITM7L93+IS/5UfFKFmCIbWJjXNKGEmF9O+IgeMIf25iczVguIVpne7esoD5E2NY0qX+CA=="
+  }
+}
+```
+
+The example is the suite's `transparency-consistency-proof-valid` fixture
+bytes (the 4-leaf to 8-leaf growth of the same deterministic tree). All five
+members are REQUIRED; `fromSize`/`toSize` MUST equal the embedded tree heads'
+`treeSize` values, with `fromSize` < `toSize`. A verifier MUST accept the
+proof only if both hold, evaluated in this order:
+
+1. Both tree heads verify per §5.6 (reject category `SIGNATURE_INVALID`).
+2. The RFC 9162 Section 2.1.4.2 algorithm over `consistencyPath` reproduces
+   `fromSignedTreeHead.rootHash` and `toSignedTreeHead.rootHash` exactly
+   (reject category `PROOF_INVALID`).
+
+A log that cannot produce a valid consistency path between two roots it
+published has broken its append-only claim. The machine-readable shape is
+[`schemas/consistency-proof-v1.schema.json`](./schemas/consistency-proof-v1.schema.json).
 
 ### 5.6 Signed Tree Head
 
@@ -652,6 +728,18 @@ Returns all revocations since the given timestamp:
 ```
 
 Clients SHOULD poll this endpoint periodically (RECOMMENDED: every 5 minutes) and compare against locally cached trust proofs.
+
+The example is the suite's `revocation-list-valid` fixture bytes. All body
+members are REQUIRED (`revocations` MAY be empty); `revokedAt` and `nextSince`
+are RFC 3339 UTC timestamps and a client MUST treat a malformed timestamp as
+a rejection of the whole response, not a skippable entry — silently dropping
+an unparseable revocation keeps a revoked agent trusted. The machine-readable
+shape is
+[`schemas/revocation-list-v1.schema.json`](./schemas/revocation-list-v1.schema.json).
+The response body itself is not signed: authenticity rides on the transport
+and on each entry's `transparencyLogIndex` anchoring the revocation in the
+§5 log. Signing the revocation response is an open hardening question for a
+future revision, like the STH timestamp coverage noted in §5.6.
 
 ### 8.2 Key Revocation
 

@@ -6,8 +6,23 @@
   },
   {
     "file": "ATP-SPEC.md",
+    "heading": "### 5.4 Inclusion Proof",
+    "schema": "schemas/inclusion-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
+    "heading": "### 5.5 Consistency Proof",
+    "schema": "schemas/consistency-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
     "heading": "### 5.6 Signed Tree Head",
     "schema": "schemas/signed-tree-head-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
+    "heading": "### 8.1 Trust Proof Revocation",
+    "schema": "schemas/revocation-list-v1.schema.json"
   },
   {
     "file": "ATP-SPEC.md",
