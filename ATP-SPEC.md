@@ -334,6 +334,8 @@ The Agent Trust eXtension (ATX) is the credential format defined by ATP for AI a
 
 The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the canonical signing form in Section 4.3 covers. The fields below marked "Proposed (v1.1)" are draft extensions; when present, they are informational and are NOT part of the v1.0.0-rc1 canonical signed payload. A future v1.1 revision of this specification will define their normative treatment, including whether and how they extend the canonical form.
 
+> **Editorial note (2026-08-25).** "Proposed (v1.1)" describes these fields' status in the ATP v1.0.0-rc1 trust proof only. The ATX 1.1 credential format is already final: [atx-spec core.md §1.3a](https://github.com/opena2a-standards/atx-spec/blob/main/core.md) (document version 1.1.0-final) is the normative definition of the ATX 1.1 signed form, including which of these fields the JCS canonicalization covers. Documents describing an ATX 1.1 credential, such as a Passport or profile page, cite core.md §1.3a, not this table.
+
 #### Schema
 
 | Field | Status | Description |
