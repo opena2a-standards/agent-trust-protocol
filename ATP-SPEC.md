@@ -2,9 +2,9 @@
 
 ## A Standard for Verifiable Trust Assertions About AI Agents
 
-**Version:** 1.0.0-rc1
+**Version:** 1.1.0-draft
 **Authors:** OpenA2A
-**Date:** April 2026
+**Date:** September 2026
 
 > **Note (2026-04-28).** v1.0.0-rc1 reconciles the DID method prefix from `did:atp:` (used in v1.0.0-draft) to `did:opena2a:` to match the production reference implementation at `api.oa2a.org`. No other normative changes from v1.0.0-draft.
 
@@ -106,7 +106,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): §6 Level 3 federation cosignature (blocked on a second production authority), and §8.1 response authenticity (the body is unsigned by design — see §8.1).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority), and §8.1 response authenticity (the body is unsigned by design — see §8.1).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -396,38 +396,88 @@ DIDs answer who an agent is. ATX answers what the agent is authorized to do (`ca
 
 The ATP transparency log is an append-only Merkle tree compatible with RFC 6962 (Certificate Transparency).
 
-Each leaf in the tree represents a trust event:
+Each leaf in the tree represents a trust event. A served entry carries the log-assigned
+members (`logIndex`, `previousHash`, and any `leafHash` or Merkle member), the `timestamp`,
+the entry type as both its registered name (`entryType`) and its registered byte
+(`entryTypeByte`), and a `data` object whose members are fixed per type:
 
 ```json
 {
   "logIndex": 1847293,
   "timestamp": "2026-03-22T14:00:00Z",
   "entryType": "trust_proof_issued",
-  "agentDid": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
-  "trustLevel": 3,
-  "trustScore": 0.82,
-  "proofHash": "SHA256:abc123...",
-  "signingKeyId": "did:opena2a:authority:opena2a.org#key-v3",
+  "entryTypeByte": 1,
+  "data": {
+    "agentDid": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+    "trustLevel": 3,
+    "trustScore": 0.82,
+    "verdict": "passed",
+    "proofHash": "SHA256:abc123...",
+    "signingKeyId": "did:opena2a:authority:opena2a.org#key-v3",
+    "expiresAt": "2026-03-23T14:00:00Z"
+  },
   "previousHash": "SHA256:def456..."
 }
 ```
 
-Entry types:
-- `trust_proof_issued` — new trust proof created
-- `trust_proof_revoked` — existing proof invalidated
-- `trust_level_changed` — agent's trust level changed
-- `key_rotated` — signing key added or retired
-- `key_revoked` — signing key compromised and invalidated
-- `authority_joined` — new trust authority joined federation
-- `authority_suspended` — trust authority suspended from federation
+#### 5.1.1 Entry type registry
+
+This table is the one home of the transparency-log entry types for the OpenA2A
+specification family; ATX and the reference implementation cite it, and
+[`registries/transparency-entry-types.json`](./registries/transparency-entry-types.json)
+is generated from it. Bytes `0x01` to `0x7F` are assigned only by a revision of this
+specification; a leaf carrying an unassigned byte in that range is non-conforming. Bytes
+`0x80` to `0xFE` are private use: an authority MAY log its own event types there, their
+names are unregistered and MUST NOT equal a registered name, and a conforming verifier or
+monitor treats a private-use leaf as opaque (inclusion is verified, the content is never
+interpreted). `0x00` and `0xFF` are reserved and never assigned. Digest members are the
+string `SHA256:` followed by 64 lowercase hexadecimal characters; a `?` marks an OPTIONAL
+member; every `data` object is closed (no member outside its row).
+
+<!-- opena2a-definition: transparency-entry-types -->
+| Name | Byte | Data members | Since |
+|------|------|--------------|-------|
+| `trust_proof_issued` | 0x01 | agentDid, trustLevel, trustScore, verdict, proofHash (over the Section 4.3 canonical string bytes), signingKeyId, expiresAt | 1.0.0-rc1 |
+| `trust_proof_revoked` | 0x02 | agentDid, reason, revokedByKeyId, proofHash? | 1.0.0-rc1 |
+| `trust_level_changed` | 0x03 | agentDid, previousLevel, newLevel, previousScore?, newScore?, reason? | 1.0.0-rc1 |
+| `key_rotated` | 0x04 | authorityDid, keyId, action (`added` or `retired`), algorithm | 1.0.0-rc1 |
+| `key_revoked` | 0x05 | authorityDid, keyId, reason | 1.0.0-rc1 |
+| `authority_joined` | 0x06 | authorityDid, tier (a Section 6.1 tier name) | 1.0.0-rc1 |
+| `authority_suspended` | 0x07 | authorityDid, reason, suspendedByDid | 1.0.0-rc1 |
+| `atx_issued` | 0x08 | agentDid, atxVersion, credentialDigest (over the signed `JCS(TBS)` bytes), contentHash, trustLevel, trustScore, buildAttestationDigest? | 1.1.0 |
+| `atx_revoked` | 0x09 | agentDid, credentialDigest, reason, revokedByKeyId | 1.1.0 |
+| `work_attestation` | 0x0A | producerDid, predicateType, payloadDigest (over the DSSE payload bytes as transmitted), subjects[]? (each `{name, digest}`) | 1.1.0 |
+| `work_attestation_superseded` | 0x0B | producerDid, supersededDigest, supersedingDigest, reason? | 1.1.0 |
+| `work_attestation_refuted` | 0x0C | refuterDid, refutedDigest, reason, evidenceDigest? | 1.1.0 |
+
+`atx_issued` and `atx_revoked` are distinct from the trust-proof events because a trust
+proof and an ATX credential are two signed artifacts with two canonical forms (Section 4.6).
+The registered name and the registered byte of a served entry MUST agree with this table;
+a verifier rejects an entry where they do not.
 
 ### 5.2 Leaf Hash
 
 ```
-leaf_hash = SHA-256(0x00 || timestamp || entry_type || entry_data)
+leaf_hash = SHA-256(0x00 || timestamp || entry_type_byte || entry_data)
 ```
 
+where `timestamp` is the UTF-8 bytes of the served `timestamp` member (RFC 3339 UTC,
+grammar `YYYY-MM-DDTHH:MM:SS(.fff)?Z`, so the leaf is computable from the served entry
+with no second encoding), `entry_type_byte` is the one octet registered in Section 5.1.1,
+and `entry_data` is `JCS(data)` (RFC 8785, the canonicalization the family already pins for
+ATX). The concatenation is unambiguous: the timestamp ends in `Z`, the byte is one octet,
+and JCS output begins with `{`. `logIndex`, `previousHash` and any `leafHash` or Merkle
+member are assigned by the log and are outside the hash.
+
 The `0x00` prefix distinguishes leaf hashes from internal node hashes (RFC 6962 Section 2.1).
+
+**Leaf-format boundary.** A log that was built before this revision publishes
+`leafFormatSince` in its discovery document (Section 7.1): the first `logIndex` whose leaf
+was hashed as above. Absent, the whole log conforms. Below the boundary a verifier checks
+inclusion against the served `leafHash` only and MUST report the result as
+inclusion-verified with the entry binding unverifiable; at or above it a verifier MAY
+recompute the leaf from the served entry and MUST reject a mismatch, and a monitor flags
+every mismatch it finds there.
 
 ### 5.3 Merkle Tree Hash
 
@@ -707,6 +757,10 @@ ML-DSA-65 key entry (~2.6 KB hex), omitted here for readability. The
 machine-readable shape is
 [`schemas/discovery-v1.schema.json`](./schemas/discovery-v1.schema.json);
 required members are `authorityDid`, `version`, `endpoints`, `publicKeys`.
+
+The discovery document MAY carry `leafFormatSince` (integer, the first `logIndex` hashed
+under Section 5.2 of this revision). A log built before this revision MUST publish it;
+absent, every leaf in the log conforms to Section 5.2.
 
 ### 7.2 Batch Queries
 

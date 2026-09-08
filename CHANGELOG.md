@@ -8,6 +8,19 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- Version header 1.1.0-draft: the 1.1 revision series is open on main.
+- Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
+  for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
+  `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,
+  `work_attestation_refuted`), 0x0D to 0x7F unassigned, 0x80 to 0xFE private use (opaque to
+  verifiers), closed per-type `data` members. `registries/transparency-entry-types.json` is
+  generated from the table (name and byte uniqueness checked in CI).
+- Section 5.2: the leaf hash is `SHA-256(0x00 || timestamp || entry_type_byte || JCS(data))`
+  with the log-assigned members outside it; a log built before this revision publishes
+  `leafFormatSince` (Section 7.1, discovery schema) as the boundary below which inclusion is
+  verified against the served leaf hash only and reported as such.
+- Section 2.1: leaf recomputation from a served entry listed as not yet covered by fixtures.
+
 - One home per shared definition, marked for the family drift gate: Section 4.1
   is the home of the trust level numbers and names and of the 0.0-1.0 score scale
   (with the frozen ATX 1.1 wire exception recorded there); Section 4.2 states that
