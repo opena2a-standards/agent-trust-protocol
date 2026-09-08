@@ -20,6 +20,13 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `leafFormatSince` (Section 7.1, discovery schema) as the boundary below which inclusion is
   verified against the served leaf hash only and reported as such.
 - Section 2.1: leaf recomputation from a served entry listed as not yet covered by fixtures.
+- Section 6.4.2: the inter-node revocation push. On each revocation entry the issuing
+  authority POSTs the Section 8.1 object to every active peer (delivery attempted within 5
+  seconds, completed within 60 seconds, acknowledged only after durable record, peer flagged
+  unreachable after 30 seconds); a receiver persists a per-sender cursor, pulls after any gap
+  and every 5 minutes without a push, and applies entries idempotently. The 6.4 delta feed is
+  now 6.4.1. Section 8.1 states that a subscribed client still polls. The signed Section 8.1
+  object (which the push then carries by reference) lands with the 1.1 signing revision.
 
 - One home per shared definition, marked for the family drift gate: Section 4.1
   is the home of the trust level numbers and names and of the 0.0-1.0 score scale
