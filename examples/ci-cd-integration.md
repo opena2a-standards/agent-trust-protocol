@@ -71,7 +71,7 @@ jobs:
             label: "Filesystem MCP"
           - did: "did:opena2a:mcp_server:@modelcontextprotocol/server-github"
             label: "GitHub MCP"
-          - did: "did:opena2a:a2a_agent:weather-agent"
+          - did: "did:opena2a:agent:weather-agent"
             label: "Weather Agent"
     steps:
       - name: Verify ${{ matrix.agent.label }}
@@ -141,7 +141,7 @@ With an `agents.json` file:
 [
   "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
   "did:opena2a:mcp_server:@modelcontextprotocol/server-github",
-  "did:opena2a:a2a_agent:weather-agent"
+  "did:opena2a:agent:weather-agent"
 ]
 ```
 

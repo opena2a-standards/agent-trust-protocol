@@ -36,10 +36,10 @@ An A2A agent card with ATP trust embedded in the `atp` field:
     }
   ],
   "atp": {
-    "did": "did:opena2a:a2a_agent:weather-agent",
+    "did": "did:opena2a:agent:weather-agent",
     "trustLevel": 3,
     "trustProof": {
-      "did": "did:opena2a:a2a_agent:weather-agent",
+      "did": "did:opena2a:agent:weather-agent",
       "trustLevel": 3,
       "trustScore": 0.82,
       "verdict": "passed",

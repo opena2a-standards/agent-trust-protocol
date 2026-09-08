@@ -8,6 +8,24 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- One home per shared definition, marked for the family drift gate: Section 4.1
+  is the home of the trust level numbers and names and of the 0.0-1.0 score scale
+  (with the frozen ATX 1.1 wire exception recorded there); Section 4.2 states that
+  `verdict` is the proof-outcome axis, distinct from level names; Section 10.2 carries
+  the family clock-skew bound (60 seconds, symmetric, never extending a TTL).
+  `registries/trust-levels.json` is generated from the Section 4.1 table by
+  `scripts/gen_registries.py`, checked in CI.
+
+### Changed
+
+- Section 4.4 step 4: every declared signature entry verifies, and an ML-DSA-65 entry
+  requires a verifying Ed25519 entry (the family signature gate, AAP Section 9.4);
+  previously "at least one signature". Step 5 cites the Section 4.1 scale.
+- Section 3.1: the DID form for signed artifacts cites the did:opena2a method
+  specification (unescaped form, compare after normalization) instead of restating it.
+- Examples: `did:opena2a:a2a_agent:` literals use the `agent` resource type (digits are
+  not legal in a resource type; `a2a_agent` is the deprecated alias).
+
 - §5.4 Inclusion Proof and §5.5 Consistency Proof: normative JSON response
   bodies pinned (previously endpoint-plus-prose only). The §5.4 body embeds
   the §5.6 signed tree head and is verified in two ordered rules (STH

@@ -1,0 +1,46 @@
+{
+  "id": "trust-levels",
+  "source": {
+    "file": "ATP-SPEC.md",
+    "marker": "<!-- opena2a-definition: trust-levels -->"
+  },
+  "columns": [
+    "Level",
+    "Name",
+    "Meaning",
+    "Requirements"
+  ],
+  "key": "Level",
+  "rows": [
+    {
+      "Level": "0",
+      "Name": "Blocked",
+      "Meaning": "Known malicious or critically vulnerable",
+      "Requirements": "Active threat or critical unpatched vulnerability"
+    },
+    {
+      "Level": "1",
+      "Name": "Warning",
+      "Meaning": "Significant security concerns",
+      "Requirements": "High-severity findings, behavioral violations"
+    },
+    {
+      "Level": "2",
+      "Name": "Listed",
+      "Meaning": "Indexed, not yet evaluated",
+      "Requirements": "Exists in a package registry, no security assessment"
+    },
+    {
+      "Level": "3",
+      "Name": "Scanned",
+      "Meaning": "Passed automated security assessment",
+      "Requirements": "Static + semantic analysis passed, SLSA L1+"
+    },
+    {
+      "Level": "4",
+      "Name": "Verified",
+      "Meaning": "Full verification, multi-authority consensus",
+      "Requirements": "Publisher verified, 30+ days observed, federation co-signed"
+    }
+  ]
+}

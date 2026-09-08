@@ -127,7 +127,10 @@ Where:
   [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a)
   — for agents typically `agent`, `mcp_server`, `skill`, `ai_tool`, or `llm`
   (`a2a_agent` is a deprecated legacy alias of `agent`)
-- `agent_name` is the package name, URL-encoded if it contains special characters
+- `agent_name` is the package name in the unescaped form that the
+  [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a)
+  Section 3.1.1 defines for signed artifacts; verifiers compare identifiers after
+  normalization (its Section 3.3) and never normalize before signature verification
 
 Examples:
 ```
@@ -223,8 +226,11 @@ An A2A client receiving a task delegation SHOULD verify the delegating agent's t
 
 ### 4.1 Trust Levels
 
-ATP defines five trust levels:
+ATP defines five trust levels. This table is the one home of the level numbers and
+names the family uses; other specifications cite it rather than restate it, and
+[`registries/trust-levels.json`](./registries/trust-levels.json) is generated from it.
 
+<!-- opena2a-definition: trust-levels -->
 | Level | Name | Meaning | Requirements |
 |-------|------|---------|-------------|
 | 0 | Blocked | Known malicious or critically vulnerable | Active threat or critical unpatched vulnerability |
@@ -234,6 +240,26 @@ ATP defines five trust levels:
 | 4 | Verified | Full verification, multi-authority consensus | Publisher verified, 30+ days observed, federation co-signed |
 
 Trust levels 0-2 can be assigned by a single trust authority. Trust levels 3-4 MUST be co-signed by at least one additional authority in Level 3 conforming implementations (Section 6).
+
+<!-- opena2a-definition: trust-score-scale -->
+`trustScore` MUST be a number on the 0.0-1.0 scale everywhere in the family. The one
+exception is frozen: ATX 1.1 credentials carry `trustScore` on a 0-100 wire scale because
+their signatures cover its string encoding; a verifier converts by dividing by 100, and
+ATX 2.0 adopts this scale. The block below is machine-readable for the family drift gate.
+
+```json
+{
+  "scale": {"min": 0.0, "max": 1.0},
+  "exceptions": [
+    {"repo": "atx-spec", "file": "schemas/atx-credential-v1.1.schema.json",
+     "path": "properties.trustScore.maximum", "value": 100,
+     "reason": "ATX 1.1 wire encoding is frozen (core.md section 1.3a.2 rule 3)"},
+    {"repo": "atx-conformance", "file": "schemas/vendor/atx-spec/atx-credential-v1.1.schema.json",
+     "path": "properties.trustScore.maximum", "value": 100,
+     "reason": "byte-exact vendored copy of the frozen ATX 1.1 schema"}
+  ]
+}
+```
 
 ### 4.2 Trust Proof Format
 
@@ -258,6 +284,10 @@ A trust proof is a signed assertion about an agent's trust level:
   "transparencyLogIndex": 42
 }
 ```
+
+<!-- opena2a-definition: trust-verdict -->
+`verdict` is the proof outcome, an axis distinct from the trust level names of
+Section 4.1, and its value set is frozen in the rc1 canonical string (Section 4.3).
 
 The example is the suite's `trust-proof-baseline` fixture bytes — a proof that
 verifies against the reference verifiers. `verdict` is one of `passed`,
@@ -302,10 +332,10 @@ A verifier MUST perform the following checks in order:
 1. **Expiry:** `expiresAt` MUST be in the future. Expired proofs MUST be rejected.
 2. **Issuer:** `issuerDid` MUST resolve to a known trust authority.
 3. **Key lookup:** `signatures[*].keyId` MUST resolve to a valid, non-revoked public key.
-4. **Signature:** At least one signature MUST verify against the canonical payload.
+4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload, and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4).
 5. **Semantic validation:**
    - `trustLevel` MUST be 0-4
-   - `trustScore` MUST be 0.0-1.0
+   - `trustScore` MUST be on the Section 4.1 scale (0.0-1.0)
    - `verdict` MUST be one of: `passed`, `warning`, `blocked`, `listed`, `verified`, `unknown`
    - `issuedAt` MUST be before `expiresAt`
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
@@ -802,6 +832,18 @@ ATP assumes the following threats and provides the corresponding defenses:
 ### 10.2 Trust Proof Validity
 
 Trust proofs MUST have a maximum validity period of 24 hours. This limits the window of exposure if a key is compromised or an agent's trust status changes.
+
+<!-- opena2a-definition: clock-skew -->
+Verifiers MUST tolerate at most 60 seconds of clock skew, symmetrically, when evaluating
+`issuedAt` and `expiresAt` here, `iat` and `exp` in AAP tokens, and `issuedAt` and
+`expiresAt` in ATX credentials and AIP challenges. The tolerance MUST NOT extend any TTL
+or cache window (the ATX five-minute revocation cache, the AIP five-minute challenge
+window, the 24-hour validity above). This is the one skew bound in the family; the other
+specifications cite this section.
+
+```json
+{"maxSkewSeconds": 60}
+```
 
 ### 10.3 Canonical Serialization
 
