@@ -683,6 +683,8 @@ Blocks propagate to all federation members immediately. Other authorities MAY co
 
 ### 6.4 Sync Protocol
 
+#### 6.4.1 Delta pull
+
 Federation members sync trust data via delta exchange:
 
 ```
@@ -693,6 +695,30 @@ Authorization: Bearer {federation-api-key}
 Returns trust score changes since the given timestamp. Each delta includes the transparency log index for verification.
 
 ---
+
+#### 6.4.2 Revocation push
+
+Revocation has two layers built on one object. Section 8.1 is the verifier-facing poll;
+this section is the inter-node push that keeps the family's revocation budget. On each
+revocation entry it appends to its log (`trust_proof_revoked`, `atx_revoked`), the issuing
+authority MUST `POST /federation/v1/revocations` to every active federation peer. The
+request body is the Section 8.1 revocation object (`revocations[]` and `nextSince`),
+restricted to the entries that peer has not yet acknowledged. Authenticity rides on the
+federation bearer key over TLS, as for the delta pull, and on each entry's
+`transparencyLogIndex` anchoring the revocation in the Section 5 log; when the Section 8.1
+object is signed, the push is signed by reference.
+
+Budget: the sender SHOULD attempt delivery within 5 seconds of the log entry and MUST
+complete delivery to every reachable peer within 60 seconds. A peer MUST respond 2xx only
+after it has durably recorded the entries; the sender retries with backoff and flags a peer
+unreachable after 30 seconds without acknowledgement.
+
+Missed pushes: a receiver persists the last acknowledged `nextSince` per sender. On
+startup, after any delivery gap, and whenever 5 minutes pass with no push from a sender, the
+receiver MUST pull `GET {sender}/api/v1/trust/revocations?since={cursor}` before serving
+that sender's revocations, and the sender SHOULD push an empty batch at least every 5
+minutes as the liveness signal. Entries apply idempotently, keyed on `agentDid` and
+`transparencyLogIndex`; the cursor advances to the greatest `nextSince` received.
 
 ## 7. Discovery
 
@@ -820,7 +846,7 @@ Returns all revocations since the given timestamp:
 }
 ```
 
-Clients SHOULD poll this endpoint periodically (RECOMMENDED: every 5 minutes) and compare against locally cached trust proofs.
+Clients SHOULD poll this endpoint periodically (RECOMMENDED: every 5 minutes) and compare against locally cached trust proofs. A client subscribed to Section 7.3 `revocation` events SHOULD still poll: the poll is the bound, the subscription is the latency.
 
 The example is the suite's `revocation-list-valid` fixture bytes. All body
 members are REQUIRED (`revocations` MAY be empty); `revokedAt` and `nextSince`
