@@ -293,8 +293,9 @@ The example is the suite's `trust-proof-baseline` fixture bytes — a proof that
 verifies against the reference verifiers. `verdict` is one of `passed`,
 `warning`, `blocked`, `listed`, `verified`, `unknown`; `trustScore` is on the
 0.0-1.0 scale (formatted `%.6f` inside the §4.3 canonical string). The
-Proposed v1.1 fields (`slsaLevel`, `scanSummary`, and the §4.6 set) are not
-part of the rc1 canonical form and are omitted here. The machine-readable
+ATX v1.1 fields (the Section 4.6 set) are signed only inside the ATX credential's
+`JCS(TBS)` (atx-spec core.md Section 1.3a.2), never in the rc1 trust-proof canonical
+string, and are omitted here; `slsaLevel` is illustrative and signed nowhere. The machine-readable
 shape is [`schemas/trust-proof-v1.schema.json`](./schemas/trust-proof-v1.schema.json).
 
 ### 4.3 Signing
@@ -362,26 +363,26 @@ Verifies a trust proof against the authority's public keys and transparency log.
 
 The Agent Trust eXtension (ATX) is the credential format defined by ATP for AI agents specifically. ATX builds on the base trust proof in Section 4.2 and adds agent-specific claims that generic credential formats do not encode.
 
-The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the canonical signing form in Section 4.3 covers. The fields below marked "Proposed (v1.1)" are draft extensions; when present, they are informational and are NOT part of the v1.0.0-rc1 canonical signed payload. A future v1.1 revision of this specification will define their normative treatment, including whether and how they extend the canonical form.
+The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the canonical signing form in Section 4.3 covers. The fields below marked "ATX v1.1" are the agent-specific claims of the ATX 1.1 credential: the reference issuer signs them inside the ATX `JCS(TBS)` exactly as [atx-spec core.md Section 1.3a.2](https://github.com/opena2a-standards/atx-spec/blob/main/core.md) lists them (the registry builds that projection field for field), and they are never part of the Section 4.3 trust-proof canonical string. A trust proof and an ATX credential are two signed artifacts with two canonical forms.
 
-> **Editorial note (2026-08-25).** "Proposed (v1.1)" describes these fields' status in the ATP v1.0.0-rc1 trust proof only. The ATX 1.1 credential format is already final: [atx-spec core.md §1.3a](https://github.com/opena2a-standards/atx-spec/blob/main/core.md) (document version 1.1.0-final) is the normative definition of the ATX 1.1 signed form, including which of these fields the JCS canonicalization covers. Documents describing an ATX 1.1 credential, such as a Passport or profile page, cite core.md §1.3a, not this table.
+> **Editorial note (2026-09-08).** Earlier revisions marked these fields "Proposed (v1.1)", a status that described the ATP v1.0.0-rc1 trust proof and was read as "unsigned". The ATX 1.1 format has been final since July 2026 and its issuer signs every field in the table below; the status column now says what is signed and where.
 
 #### Schema
 
 | Field | Status | Description |
 |-------|--------|-------------|
 | did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (v1.0.0-rc1) | Base trust proof. See Section 4.2. |
-| capabilities | Proposed (v1.1) | Declared capability set the agent is authorized to perform. |
-| buildAttestation | Proposed (v1.1) | SLSA-compatible build provenance digest. |
-| behavioralProfile | Proposed (v1.1) | Observed behavior baseline. Checksum and observation window. |
-| scanSummary | Proposed (v1.1) | HackMyAgent and equivalent scanner results at issuance time. |
-| declaredPurpose | Proposed (v1.1) | Optional structured declaration of what the agent is *for* (category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). Identity/attestation claim and an offline detection signal only — never an authorization input. When present it is covered by the v1.1 signed payload. See [`atx-spec` core.md §1.5](https://github.com/opena2a-org/atx-spec). |
+| capabilities | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Declared capability set the agent is authorized to perform. |
+| buildAttestation | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | SLSA-compatible build provenance digest. |
+| behavioralProfile | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Observed behavior baseline. Checksum and observation window. |
+| scanSummary | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | HackMyAgent and equivalent scanner results at issuance time. |
+| declaredPurpose | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Optional structured declaration of what the agent is *for* (category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). Identity/attestation claim and an offline detection signal only — never an authorization input. When present it is covered by the v1.1 signed payload. See [`atx-spec` core.md §1.5](https://github.com/opena2a-org/atx-spec). |
 
-Note: Section 4.2 shows `scanSummary` and `transparencyLogIndex` in its example payload. These are illustrative fields, not enumerated as part of the canonical form. ATX names `scanSummary` as a proposed v1.1 claim so that its shape and semantics can be standardized.
+Note: Section 4.2 shows `scanSummary` and `transparencyLogIndex` in its example payload. These are illustrative fields, not enumerated as part of the canonical form. ATX signs `scanSummary` inside its v1.1 TBS so that its shape and semantics can be standardized.
 
 #### Reference Example
 
-See `examples/atx-example.json` for an illustrative v1.1-draft proof showing all Proposed fields. The example is informational and is not a verifiable proof.
+See `examples/atx-example.json` for an illustrative v1.1-draft proof showing all ATX v1.1 fields. The example is informational and is not a verifiable proof.
 
 #### Why ATX
 

@@ -18,6 +18,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 4.6: the five agent-specific claims (`capabilities`, `buildAttestation`,
+  `behavioralProfile`, `scanSummary`, `declaredPurpose`) are no longer "Proposed (v1.1)";
+  their status is "ATX v1.1 (signed in the ATX TBS)", which is what the reference issuer
+  signs (atx-spec core.md Section 1.3a.2, field for field). The Section 4.2 note and the
+  trust-proof schema description say the same; `slsaLevel` is illustrative and signed nowhere.
+  A trust proof and an ATX credential are two signed artifacts with two canonical forms.
 - Section 4.4 step 4: every declared signature entry verifies, and an ML-DSA-65 entry
   requires a verifying Ed25519 entry (the family signature gate, AAP Section 9.4);
   previously "at least one signature". Step 5 cites the Section 4.1 scale.

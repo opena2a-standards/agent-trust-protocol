@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json",
   "title": "ATP trust proof (section 4.2, v1.0.0-rc1 wire form)",
-  "description": "Structural schema for the ATP trust proof, derived from section 4.2 with the atp-conformance fixtures as ground truth. Shape only: the signature covers the pipe-delimited seven-field canonical form of section 4.3, a byte rule the verifier enforces. slsaLevel and scanSummary are Proposed v1.1 fields (section 4.6), not part of the rc1 canonical form.",
+  "description": "Structural schema for the ATP trust proof, derived from section 4.2 with the atp-conformance fixtures as ground truth. Shape only: the signature covers the pipe-delimited seven-field canonical form of section 4.3, a byte rule the verifier enforces. slsaLevel and scanSummary are ATX v1.1 fields (section 4.6), signed only inside the ATX credential's JCS(TBS), not part of the rc1 canonical form.",
   "type": "object",
   "required": [
     "did",
