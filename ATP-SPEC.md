@@ -97,6 +97,7 @@ Two complementary suites test these levels:
 | `trust-proof-expired.json` | 1 | §4.4 Verification step 1 (expiry) | REJECT[EXPIRED] |
 | `trust-proof-untrusted-issuer.json` | 1 | §4.4 Verification step 2 (issuer trust) | REJECT[UNTRUSTED_ISSUER] |
 | `trust-proof-tampered-signature.json` | 1 | §4.4 Verification step 4 (signature) | REJECT[SIGNATURE_INVALID] |
+| `trust-proof-window-exceeds-max.json` | 1 | §4.4 step 5 (validity window, §10.2) | REJECT[SEMANTIC_INVALID] |
 | `discovery-valid.json` | 1 | §7.1 Well-Known Endpoint | ACCEPT |
 | `transparency-log-sth.json` | 2 | §5.6 Signed Tree Head (RFC 6962 §3.5) | ACCEPT |
 | `transparency-inclusion-proof-valid.json` | 2 | §5.4 Inclusion Proof (RFC 6962 §2.1.1 / RFC 9162 §2.1.3.2) | ACCEPT |
@@ -339,6 +340,7 @@ A verifier MUST perform the following checks in order:
    - `trustScore` MUST be on the Section 4.1 scale (0.0-1.0)
    - `verdict` MUST be one of: `passed`, `warning`, `blocked`, `listed`, `verified`, `unknown`
    - `issuedAt` MUST be before `expiresAt`
+   - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
 7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present.
 
@@ -913,6 +915,8 @@ ATP assumes the following threats and provides the corresponding defenses:
 ### 10.2 Trust Proof Validity
 
 Trust proofs MUST have a maximum validity period of 24 hours. This limits the window of exposure if a key is compromised or an agent's trust status changes.
+
+Verifiers enforce this maximum as Section 4.4 step 5, whatever their clock.
 
 <!-- opena2a-definition: clock-skew -->
 Verifiers MUST tolerate at most 60 seconds of clock skew, symmetrically, when evaluating

@@ -27,6 +27,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   and every 5 minutes without a push, and applies entries idempotently. The 6.4 delta feed is
   now 6.4.1. Section 8.1 states that a subscribed client still polls. The signed Section 8.1
   object (which the push then carries by reference) lands with the 1.1 signing revision.
+- Section 4.4 step 5: a declared validity window longer than the Section 10.2 maximum is a
+  verifier MUST-REJECT. `expiresAt` MUST NOT be more than 24 hours after `issuedAt`; a proof
+  declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew
+  tolerance (the Section 10.2 skew bound never extends the window). Section 10.2 names the
+  step that enforces it. The Section 2.1 fixture table gains
+  `trust-proof-window-exceeds-max.json` (REJECT[SEMANTIC_INVALID]).
 
 - One home per shared definition, marked for the family drift gate: Section 4.1
   is the home of the trust level numbers and names and of the 0.0-1.0 score scale
