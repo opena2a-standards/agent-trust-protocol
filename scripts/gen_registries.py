@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "ATP-SPEC.md"
 REGISTRIES = ROOT / "registries"
 # Marker ids whose table is exported. Keep in step with the drift harness homes.
-TABLES = {"trust-levels": {"key": "Level"}}
+TABLES = {"trust-levels": {"key": "Level"}, "transparency-entry-types": {"key": "Name", "unique": ["Name", "Byte"]}}
 
 
 def strip_cell(cell: str) -> str:
@@ -54,6 +54,11 @@ def generate() -> dict:
     out = {}
     for rid, cfg in TABLES.items():
         headers, rows = table_after_marker(lines, f"<!-- opena2a-definition: {rid} -->")
+        for col in cfg.get("unique", []):
+            vals = [r.get(col) for r in rows]
+            dup = sorted({v for v in vals if vals.count(v) > 1})
+            if dup:
+                raise SystemExit(f"{rid}: duplicate {col} values {dup}")
         out[rid] = {
             "id": rid,
             "source": {"file": SPEC.name, "marker": f"<!-- opena2a-definition: {rid} -->"},

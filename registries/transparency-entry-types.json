@@ -1,0 +1,88 @@
+{
+  "id": "transparency-entry-types",
+  "source": {
+    "file": "ATP-SPEC.md",
+    "marker": "<!-- opena2a-definition: transparency-entry-types -->"
+  },
+  "columns": [
+    "Name",
+    "Byte",
+    "Data members",
+    "Since"
+  ],
+  "key": "Name",
+  "rows": [
+    {
+      "Name": "trust_proof_issued",
+      "Byte": "0x01",
+      "Data members": "agentDid, trustLevel, trustScore, verdict, proofHash (over the Section 4.3 canonical string bytes), signingKeyId, expiresAt",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "trust_proof_revoked",
+      "Byte": "0x02",
+      "Data members": "agentDid, reason, revokedByKeyId, proofHash?",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "trust_level_changed",
+      "Byte": "0x03",
+      "Data members": "agentDid, previousLevel, newLevel, previousScore?, newScore?, reason?",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "key_rotated",
+      "Byte": "0x04",
+      "Data members": "authorityDid, keyId, action (`added` or `retired`), algorithm",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "key_revoked",
+      "Byte": "0x05",
+      "Data members": "authorityDid, keyId, reason",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "authority_joined",
+      "Byte": "0x06",
+      "Data members": "authorityDid, tier (a Section 6.1 tier name)",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "authority_suspended",
+      "Byte": "0x07",
+      "Data members": "authorityDid, reason, suspendedByDid",
+      "Since": "1.0.0-rc1"
+    },
+    {
+      "Name": "atx_issued",
+      "Byte": "0x08",
+      "Data members": "agentDid, atxVersion, credentialDigest (over the signed `JCS(TBS)` bytes), contentHash, trustLevel, trustScore, buildAttestationDigest?",
+      "Since": "1.1.0"
+    },
+    {
+      "Name": "atx_revoked",
+      "Byte": "0x09",
+      "Data members": "agentDid, credentialDigest, reason, revokedByKeyId",
+      "Since": "1.1.0"
+    },
+    {
+      "Name": "work_attestation",
+      "Byte": "0x0A",
+      "Data members": "producerDid, predicateType, payloadDigest (over the DSSE payload bytes as transmitted), subjects[]? (each `{name, digest}`)",
+      "Since": "1.1.0"
+    },
+    {
+      "Name": "work_attestation_superseded",
+      "Byte": "0x0B",
+      "Data members": "producerDid, supersededDigest, supersedingDigest, reason?",
+      "Since": "1.1.0"
+    },
+    {
+      "Name": "work_attestation_refuted",
+      "Byte": "0x0C",
+      "Data members": "refuterDid, refutedDigest, reason, evidenceDigest?",
+      "Since": "1.1.0"
+    }
+  ]
+}

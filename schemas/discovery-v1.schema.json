@@ -4,15 +4,31 @@
   "title": "ATP well-known discovery document (section 7.1)",
   "description": "Structural schema for the authority discovery document served at /.well-known/atp (normative path per section 7.1; the reference implementation's /.well-known/opena2a is the legacy alias). Derived from section 7.1 with the atp-conformance discovery-valid fixture as ground truth. Required-field set matches the reference verifiers: authorityDid, version, endpoints, publicKeys.",
   "type": "object",
-  "required": ["authorityDid", "version", "endpoints", "publicKeys"],
+  "required": [
+    "authorityDid",
+    "version",
+    "endpoints",
+    "publicKeys"
+  ],
   "properties": {
-    "authorityDid": { "$ref": "#/$defs/did" },
-    "version": { "const": "1.0" },
-    "conformanceLevel": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "authorityDid": {
+      "$ref": "#/$defs/did"
+    },
+    "version": {
+      "const": "1.0"
+    },
+    "conformanceLevel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
     "endpoints": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": { "type": "string", "minLength": 1 },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
       "description": "Endpoint-name to path/URL map. The reference implementation serves didResolve, trustProof, trustVerify, trustBatch, transparencyLog, transparencyProof, transparencySth, revocations, and optionally federation."
     },
     "publicKeys": {
@@ -20,23 +36,66 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["keyId", "algorithm", "publicKeyHex", "status", "validFrom"],
+        "required": [
+          "keyId",
+          "algorithm",
+          "publicKeyHex",
+          "status",
+          "validFrom"
+        ],
         "properties": {
           "keyId": {
             "type": "string",
             "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:@/-]+#[A-Za-z0-9._-]+$"
           },
-          "algorithm": { "enum": ["Ed25519", "ML-DSA-65"] },
-          "publicKeyHex": { "type": "string", "pattern": "^[0-9a-f]+$" },
-          "status": { "enum": ["active", "retired", "revoked"] },
-          "validFrom": { "type": "string", "format": "date-time" }
+          "algorithm": {
+            "enum": [
+              "Ed25519",
+              "ML-DSA-65"
+            ]
+          },
+          "publicKeyHex": {
+            "type": "string",
+            "pattern": "^[0-9a-f]+$"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "retired",
+              "revoked"
+            ]
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
         "additionalProperties": false
       }
     },
-    "supportedMethods": { "type": "array", "items": { "type": "string" } },
-    "capabilities": { "type": "array", "items": { "type": "string" } },
-    "federationPeers": { "type": "array", "items": { "$ref": "#/$defs/did" } }
+    "supportedMethods": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "federationPeers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/did"
+      }
+    },
+    "leafFormatSince": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "First logIndex whose leaf is hashed per section 5.2 of ATP 1.1 (timestamp || entry type byte || JCS(data)); absent means the whole log conforms."
+    }
   },
   "additionalProperties": false,
   "$defs": {
