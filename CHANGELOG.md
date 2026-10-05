@@ -57,6 +57,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   specification (unescaped form, compare after normalization) instead of restating it.
 - Examples: `did:opena2a:a2a_agent:` literals use the `agent` resource type (digits are
   not legal in a resource type; `a2a_agent` is the deprecated alias).
+- Section 8.1: `reason` is a registered code, no longer free text. The new Section 8.1.1
+  registry holds `unspecified`, `content_hash_violation`, `security_incident`, `manual` and
+  `expiry_reissuance_failed`, plus a private-use `x-` grammar (1 to 32 of `a-z`, `0-9`,
+  `_`); no other value is a reason, so operator prose never reaches the unauthenticated,
+  cross-organization response. A client applies a revocation whatever its `reason` and
+  processes a code it does not recognise, or pre-1.1 free text, as `unspecified`. The
+  `reason` of a `trust_proof_revoked` or `atx_revoked` log entry is the same code (Section
+  5.1.1). The Section 8.1 example now reads `security_incident`;
+  `schemas/revocation-list-v1.schema.json` admits only the registered codes and the
+  private-use grammar; `registries/revocation-reasons.json` is generated from the table, and
+  `scripts/validate_examples.py` fails when the schema's codes and the table differ or the
+  schema accepts free text. Section 2.1 lists reason codes as not yet fixture-covered.
 
 - §5.4 Inclusion Proof and §5.5 Consistency Proof: normative JSON response
   bodies pinned (previously endpoint-plus-prose only). The §5.4 body embeds

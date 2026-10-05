@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority), and §8.1 response authenticity (the body is unsigned by design — see §8.1).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); and §8.1.1 revocation reason codes (1.1; the `revocation-list-valid` fixture predates them).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -456,7 +456,9 @@ member; every `data` object is closed (no member outside its row).
 `atx_issued` and `atx_revoked` are distinct from the trust-proof events because a trust
 proof and an ATX credential are two signed artifacts with two canonical forms (Section 4.6).
 The registered name and the registered byte of a served entry MUST agree with this table;
-a verifier rejects an entry where they do not.
+a verifier rejects an entry where they do not. The `reason` of a `trust_proof_revoked` or
+`atx_revoked` entry is a Section 8.1.1 code, the same code the Section 8.1 entry anchored
+at that log index carries.
 
 ### 5.2 Leaf Hash
 
@@ -840,7 +842,7 @@ Returns all revocations since the given timestamp:
     {
       "agentDid": "did:opena2a:mcp_server:compromised-package",
       "revokedAt": "2026-03-22T15:00:00Z",
-      "reason": "Supply chain compromise detected",
+      "reason": "security_incident",
       "transparencyLogIndex": 1847300,
       "revokedByKeyId": "did:opena2a:authority:opena2a.org#key-v3"
     }
@@ -851,7 +853,8 @@ Returns all revocations since the given timestamp:
 
 Clients SHOULD poll this endpoint periodically (RECOMMENDED: every 5 minutes) and compare against locally cached trust proofs. A client subscribed to Section 7.3 `revocation` events SHOULD still poll: the poll is the bound, the subscription is the latency.
 
-The example is the suite's `revocation-list-valid` fixture bytes. All body
+The example is the suite's `revocation-list-valid` fixture, with `reason` written as its
+Section 8.1.1 code. All body
 members are REQUIRED (`revocations` MAY be empty); `revokedAt` and `nextSince`
 are RFC 3339 UTC timestamps and a client MUST treat a malformed timestamp as
 a rejection of the whole response, not a skippable entry — silently dropping
@@ -862,6 +865,39 @@ The response body itself is not signed: authenticity rides on the transport
 and on each entry's `transparencyLogIndex` anchoring the revocation in the
 §5 log. Signing the revocation response is an open hardening question for a
 future revision, like the STH timestamp coverage noted in §5.6.
+
+`reason` is a Section 8.1.1 code, never free text. The response is read across
+organizations without authentication, so whatever an authority puts in `reason` reaches
+every subscriber: an authority maps its trigger to a code and keeps any narrative (operator
+notes, evidence) in its own records. A client MUST apply a revocation whatever its `reason`
+holds: the code tells a client why, so it can branch, never whether the revocation applies.
+A client processes a `reason` it does not recognise (a private-use code, a code registered
+after the client was built, or free text from a pre-1.1 authority) as `unspecified`, and
+never rejects an entry or the response on its `reason`.
+
+#### 8.1.1 Revocation reason registry
+
+This table registers the codes a `reason` carries, in a Section 8.1 entry and in a
+`trust_proof_revoked` or `atx_revoked` transparency entry (Section 5.1.1);
+[`registries/revocation-reasons.json`](./registries/revocation-reasons.json) is generated
+from it. Codes are assigned only by a revision of this specification. A code of the form
+`x-` followed by 1 to 32 characters from `a-z`, `0-9` and `_` is private use: an authority
+MAY emit one for a trigger no registered code covers, its meaning is unregistered, and a
+client that does not recognise it processes the entry as `unspecified`. No other value is a
+reason.
+
+<!-- opena2a-definition: revocation-reasons -->
+| Reason | Trigger | Since |
+|--------|---------|-------|
+| `unspecified` | No registered code applies, or the authority does not state a trigger | 1.1.0 |
+| `content_hash_violation` | The agent's content no longer matches the content hash its trust proof or credential attested | 1.1.0 |
+| `security_incident` | A security incident affecting the agent, such as a compromise of the agent or its supply chain | 1.1.0 |
+| `manual` | An operator of the issuing authority revoked outside the automated triggers | 1.1.0 |
+| `expiry_reissuance_failed` | The proof or credential expired and its reissuance failed | 1.1.0 |
+
+The codes other than `unspecified` are the revocation triggers of atx-spec core.md Section
+3.3, so a trust-proof revocation and an ATX revocation for the same trigger carry the same
+bytes.
 
 ### 8.2 Key Revocation
 
