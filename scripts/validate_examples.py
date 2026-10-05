@@ -14,12 +14,17 @@ Formats (date-time, uuid) are treated as annotations, not assertions, matching
 library defaults across implementations; structural keywords (type, enum,
 pattern, required) carry the contract.
 
+A rule JSON Schema cannot express runs after a schema-valid example: a trust
+proof example must declare a validity window a verifier accepts (Section 4.4
+step 5, the Section 10.2 24-hour maximum).
+
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
 import json
 import pathlib
 import sys
+from datetime import datetime, timedelta
 
 try:
     from jsonschema import Draft202012Validator
@@ -29,6 +34,35 @@ except ImportError:
     sys.exit(2)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# Section 10.2: a trust proof is valid for at most 24 hours, which a verifier
+# enforces as Section 4.4 step 5 with no skew tolerance.
+MAX_PROOF_WINDOW = timedelta(hours=24)
+
+
+def trust_proof_window_errors(proof: dict) -> list[str]:
+    """Section 4.4 step 5: issuedAt before expiresAt, and expiresAt no more
+    than the Section 10.2 maximum after issuedAt."""
+    try:
+        issued = datetime.fromisoformat(proof["issuedAt"].replace("Z", "+00:00"))
+        expires = datetime.fromisoformat(proof["expiresAt"].replace("Z", "+00:00"))
+        window = expires - issued
+    except (KeyError, AttributeError, TypeError, ValueError) as exc:
+        return [f"issuedAt/expiresAt are not comparable RFC 3339 timestamps: {exc}"]
+    if window <= timedelta(0):
+        return [f"issuedAt {proof['issuedAt']} is not before expiresAt {proof['expiresAt']}"]
+    if window > MAX_PROOF_WINDOW:
+        return [
+            f"validity window {window} (issuedAt {proof['issuedAt']}, expiresAt "
+            f"{proof['expiresAt']}) exceeds the Section 10.2 maximum of 24 hours"
+        ]
+    return []
+
+
+# Checks a schema cannot express, keyed by the schema an example is mapped to.
+SEMANTIC_CHECKS = {
+    "schemas/trust-proof-v1.schema.json": trust_proof_window_errors,
+}
 
 
 def local_registry() -> Registry:
@@ -97,11 +131,16 @@ def main() -> int:
         validator = Draft202012Validator(
             json.loads(schema_path.read_text(encoding="utf-8")), registry=local_registry()
         )
-        errors = sorted(validator.iter_errors(instance), key=lambda e: e.json_path)
+        errors = [
+            f"{err.json_path}: {err.message}"
+            for err in sorted(validator.iter_errors(instance), key=lambda e: e.json_path)
+        ]
+        if not errors and entry["schema"] in SEMANTIC_CHECKS:
+            errors = [f"$: {msg}" for msg in SEMANTIC_CHECKS[entry["schema"]](instance)]
         if errors:
             print(f"example FAIL   {entry['file']} @ {entry['heading']!r} vs {entry['schema']}")
             for err in errors:
-                print(f"    {err.json_path}: {err.message}")
+                print(f"    {err}")
             failures += 1
         else:
             print(f"example OK     {entry['file']} @ {entry['heading']!r}")

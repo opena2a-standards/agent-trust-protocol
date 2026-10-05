@@ -272,14 +272,14 @@ A trust proof is a signed assertion about an agent's trust level:
   "trustLevel": 3,
   "trustScore": 0.825,
   "verdict": "passed",
-  "issuedAt": "2026-05-23T00:00:00Z",
-  "expiresAt": "2099-12-31T23:59:59Z",
+  "issuedAt": "2026-05-23T12:00:00Z",
+  "expiresAt": "2026-05-24T06:00:00Z",
   "issuerDid": "did:opena2a:authority:opena2a.org",
   "signatures": [
     {
       "keyId": "did:opena2a:authority:opena2a.org#key-1",
       "algorithm": "Ed25519",
-      "value": "ayA1HZLb2Pg7NwPLGjwzRCiau2rA0x5LKkQPrZ6VNso6ftT0CX0n1G86yn9fLXpB2LSe8MT0itaK7kzYpokAAA=="
+      "value": "L6Q6Dh+zPLq+BB9NutK9OV+zX2/cxbSd33k23OwZxmhvlJr+I5/eEDdcxEnSHpgqRFFLt/+b19IMb1mNseWtBw=="
     }
   ],
   "transparencyLogIndex": 42
@@ -291,7 +291,8 @@ A trust proof is a signed assertion about an agent's trust level:
 Section 4.1, and its value set is frozen in the rc1 canonical string (Section 4.3).
 
 The example is the suite's `trust-proof-baseline` fixture bytes — a proof that
-verifies against the reference verifiers. `verdict` is one of `passed`,
+verifies against the reference verifiers. Its 18-hour window sits inside the
+Section 10.2 maximum that Section 4.4 step 5 enforces. `verdict` is one of `passed`,
 `warning`, `blocked`, `listed`, `verified`, `unknown`; `trustScore` is on the
 0.0-1.0 scale (formatted `%.6f` inside the §4.3 canonical string). The
 ATX v1.1 fields (the Section 4.6 set) are signed only inside the ATX credential's

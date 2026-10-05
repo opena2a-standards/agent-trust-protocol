@@ -116,6 +116,16 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   alias); the type list now defers to the did-method-opena2a registry; the two
   leftover `did:atp` references from v1.0.0-draft corrected to `did:opena2a`.
 
+### Fixed
+
+- Section 4.2: the example trust proof declared a validity window of more than 26,000 days
+  (`expiresAt` 2099-12-31), which Section 4.4 step 5 rejects under the Section 10.2 24-hour
+  maximum. It now carries the current `trust-proof-baseline` fixture bytes: issued
+  2026-05-23T12:00:00Z, expiring 2026-05-24T06:00:00Z (18 hours), signed by the same
+  `#key-1` over the new canonical string. `scripts/validate_examples.py` now checks a trust
+  proof example's validity window as well as its shape, so an example outside the maximum
+  fails CI.
+
 ## [1.0.0-rc1] - 2026-04-28
 
 ### Changed
