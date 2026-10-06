@@ -20,7 +20,11 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "ATP-SPEC.md"
 REGISTRIES = ROOT / "registries"
 # Marker ids whose table is exported. Keep in step with the drift harness homes.
-TABLES = {"trust-levels": {"key": "Level"}, "transparency-entry-types": {"key": "Name", "unique": ["Name", "Byte"]}}
+TABLES = {
+    "trust-levels": {"key": "Level"},
+    "transparency-entry-types": {"key": "Name", "unique": ["Name", "Byte"]},
+    "revocation-reasons": {"key": "Reason", "unique": ["Reason"]},
+}
 
 
 def strip_cell(cell: str) -> str:

@@ -1,0 +1,40 @@
+{
+  "id": "revocation-reasons",
+  "source": {
+    "file": "ATP-SPEC.md",
+    "marker": "<!-- opena2a-definition: revocation-reasons -->"
+  },
+  "columns": [
+    "Reason",
+    "Trigger",
+    "Since"
+  ],
+  "key": "Reason",
+  "rows": [
+    {
+      "Reason": "unspecified",
+      "Trigger": "No registered code applies, or the authority does not state a trigger",
+      "Since": "1.1.0"
+    },
+    {
+      "Reason": "content_hash_violation",
+      "Trigger": "The agent's content no longer matches the content hash its trust proof or credential attested",
+      "Since": "1.1.0"
+    },
+    {
+      "Reason": "security_incident",
+      "Trigger": "A security incident affecting the agent, such as a compromise of the agent or its supply chain",
+      "Since": "1.1.0"
+    },
+    {
+      "Reason": "manual",
+      "Trigger": "An operator of the issuing authority revoked outside the automated triggers",
+      "Since": "1.1.0"
+    },
+    {
+      "Reason": "expiry_reissuance_failed",
+      "Trigger": "The proof or credential expired and its reissuance failed",
+      "Since": "1.1.0"
+    }
+  ]
+}

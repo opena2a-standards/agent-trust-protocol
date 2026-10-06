@@ -18,6 +18,9 @@ A rule JSON Schema cannot express runs after a schema-valid example: a trust
 proof example must declare a validity window a verifier accepts (Section 4.4
 step 5, the Section 10.2 24-hour maximum).
 
+The revocation schema's `reason` is checked against the Section 8.1.1 registry:
+its codes are the table's, and free text is refused.
+
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
@@ -63,6 +66,47 @@ def trust_proof_window_errors(proof: dict) -> list[str]:
 SEMANTIC_CHECKS = {
     "schemas/trust-proof-v1.schema.json": trust_proof_window_errors,
 }
+
+# Section 8.1.1: values the revocation schema must refuse as a `reason`: the
+# pre-1.1 example's prose, operator text, an unregistered bare code, and
+# malformed private-use codes.
+NOT_A_REASON = [
+    "Supply chain compromise detected",
+    "Revoked by J. Smith after a customer call",
+    "",
+    "supply_chain_compromise",
+    "x-",
+    "x-with space",
+    "X-UPPER",
+    "x-" + "a" * 33,
+]
+
+
+def revocation_reason_errors() -> list[str]:
+    """Section 8.1.1: the revocation schema's `reason` admits the registered
+    codes and the private-use grammar, and no free text."""
+    schema = json.loads(
+        (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8")
+    )
+    reason = schema["properties"]["revocations"]["items"]["properties"]["reason"]
+    validator = Draft202012Validator(reason)
+    errors = [
+        f"reason {value!r} is accepted; Section 8.1.1 admits no free text"
+        for value in NOT_A_REASON
+        if validator.is_valid(value)
+    ]
+    if not validator.is_valid("x-private_use"):
+        errors.append("private-use reason 'x-private_use' is refused")
+    registry = ROOT / "registries" / "revocation-reasons.json"
+    if not registry.is_file():
+        return errors + [f"{registry.relative_to(ROOT)} is missing (run scripts/gen_registries.py)"]
+    registered = [row["Reason"] for row in json.loads(registry.read_text(encoding="utf-8"))["rows"]]
+    codes = next((branch["enum"] for branch in reason.get("anyOf", []) if "enum" in branch), [])
+    if sorted(codes) != sorted(registered):
+        errors.append(
+            f"schema codes {sorted(codes)} differ from the Section 8.1.1 table {sorted(registered)}"
+        )
+    return errors
 
 
 def local_registry() -> Registry:
@@ -115,6 +159,15 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - report and fail
             print(f"schema INVALID {sf.relative_to(ROOT)}: {exc}")
             failures += 1
+
+    reason_errors = revocation_reason_errors()
+    if reason_errors:
+        print("reasons FAIL   schemas/revocation-list-v1.schema.json vs Section 8.1.1")
+        for err in reason_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("reasons OK     schemas/revocation-list-v1.schema.json vs Section 8.1.1")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
