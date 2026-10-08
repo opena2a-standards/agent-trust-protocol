@@ -25,6 +25,10 @@ Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
 
+The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
+is the second signature of the optional hybrid mode, so a README sentence that
+names ML-DSA-65 also names hybrid mode.
+
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
@@ -139,6 +143,21 @@ def discovery_path_errors() -> list[str]:
     return errors
 
 
+def readme_signing_errors() -> list[str]:
+    """Section 4.3: Ed25519 MUST, hybrid Ed25519 + ML-DSA-65 SHOULD. A README
+    sentence naming ML-DSA-65 without hybrid mode reads as a mandatory second
+    signature."""
+    readme = ROOT / "README.md"
+    errors = []
+    for lineno, line in enumerate(readme.read_text(encoding="utf-8").splitlines(), 1):
+        for sentence in re.split(r"(?<=[.!?])\s+", line):
+            if "ML-DSA-65" in sentence and "hybrid" not in sentence.lower():
+                errors.append(
+                    f"README.md:{lineno}: names ML-DSA-65 without hybrid mode: {sentence.strip()!r}"
+                )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -207,6 +226,15 @@ def main() -> int:
         failures += 1
     else:
         print("discovery OK   README.md vs Section 7.1")
+
+    signing_errors = readme_signing_errors()
+    if signing_errors:
+        print("signing FAIL   README.md vs Section 4.3")
+        for err in signing_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("signing OK     README.md vs Section 4.3")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
