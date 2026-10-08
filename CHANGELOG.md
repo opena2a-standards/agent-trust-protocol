@@ -137,6 +137,11 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `#key-1` over the new canonical string. `scripts/validate_examples.py` now checks a trust
   proof example's validity window as well as its shape, so an example outside the maximum
   fails CI.
+- LICENSE: restored the canonical Apache License 2.0 text. Clause 6 had dropped "reasonable
+  and customary use in", clause 9 read "Support" for "Additional Liability", and the leading
+  blank line and appendix wrapping differed; the appendix copyright line is now the only
+  change from the published text. `scripts/check_license.py` compares the file, with that
+  line put back to its placeholder, against the SHA-256 of the canonical text.
 
 ## [1.0.0-rc1] - 2026-04-28
 
