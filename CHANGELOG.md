@@ -142,6 +142,22 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   blank line and appendix wrapping differed; the appendix copyright line is now the only
   change from the published text. `scripts/check_license.py` compares the file, with that
   line put back to its placeholder, against the SHA-256 of the canonical text.
+- README: the Quick Start discovery command requested `/.well-known/opena2a`; it now requests
+  the Section 7.1 normative path `/.well-known/atp`, and the legacy alias is named in a comment
+  only. `scripts/validate_examples.py` fails when a command in a README code block requests
+  any other well-known path.
+- README: the trust proof was described as signed with Ed25519 and ML-DSA-65, which reads as a
+  mandatory second signature; it now states Section 4.3: Ed25519 is required and ML-DSA-65 is
+  the second signature of the optional hybrid mode. `scripts/validate_examples.py` fails on a
+  README sentence that names ML-DSA-65 without hybrid mode.
+- `scripts/check_license.py` reads LICENSE byte for byte, so a copy with CRLF line endings
+  fails, and reports a path it cannot read in one line with exit 1 instead of a traceback.
+- `scripts/validate_examples.py` README checks: a sentence wrapped across lines is checked
+  whole (its paragraph's lines are joined before it is split into sentences), and a code
+  block closes only on a fence of its own character at least as long as the opening one, so
+  a fence inside a longer fence no longer swaps prose and code for the rest of the README.
+  `scripts/test_checks.py` covers both scripts.
+- `.gitignore` excludes `__pycache__/`, which running the scripts leaves behind.
 
 ## [1.0.0-rc1] - 2026-04-28
 
