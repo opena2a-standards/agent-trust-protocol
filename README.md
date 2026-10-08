@@ -18,8 +18,8 @@ curl -X POST https://api.oa2a.org/api/v1/trust/verify \
   -H "Content-Type: application/json" \
   -d @proof.json
 
-# Discover the trust authority (current endpoint; will migrate to /.well-known/atp)
-curl https://api.oa2a.org/.well-known/opena2a
+# Discover the trust authority (/.well-known/opena2a is a legacy alias for the same document)
+curl https://api.oa2a.org/.well-known/atp
 ```
 
 ## Use cases
