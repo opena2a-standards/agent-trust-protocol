@@ -21,11 +21,20 @@ step 5, the Section 10.2 24-hour maximum).
 The revocation schema's `reason` is checked against the Section 8.1.1 registry:
 its codes are the table's, and free text is refused.
 
+Every command in a README.md code block that requests a well-known URI
+requests the Section 7.1 normative path `/.well-known/atp`; the legacy
+`/.well-known/opena2a` may be named in a comment only.
+
+The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
+is the second signature of the optional hybrid mode, so a README sentence that
+names ML-DSA-65 also names hybrid mode.
+
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
 import json
 import pathlib
+import re
 import sys
 from datetime import datetime, timedelta
 
@@ -109,6 +118,46 @@ def revocation_reason_errors() -> list[str]:
     return errors
 
 
+WELL_KNOWN = re.compile(r"/\.well-known/([A-Za-z0-9._-]+)")
+
+
+def discovery_path_errors() -> list[str]:
+    """Section 7.1: consumers SHOULD request `/.well-known/atp`, so a README
+    command that a reader copies requests that path. Comment lines in a code
+    block may name the legacy alias."""
+    errors = []
+    in_block = False
+    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+    for number, line in enumerate(lines, start=1):
+        if line.strip().startswith("```"):
+            in_block = not in_block
+            continue
+        if not in_block or line.lstrip().startswith("#"):
+            continue
+        for name in WELL_KNOWN.findall(line):
+            if name != "atp":
+                errors.append(
+                    f"README.md:{number} requests /.well-known/{name}; "
+                    "Section 7.1 makes /.well-known/atp the discovery path"
+                )
+    return errors
+
+
+def readme_signing_errors() -> list[str]:
+    """Section 4.3: Ed25519 MUST, hybrid Ed25519 + ML-DSA-65 SHOULD. A README
+    sentence naming ML-DSA-65 without hybrid mode reads as a mandatory second
+    signature."""
+    readme = ROOT / "README.md"
+    errors = []
+    for lineno, line in enumerate(readme.read_text(encoding="utf-8").splitlines(), 1):
+        for sentence in re.split(r"(?<=[.!?])\s+", line):
+            if "ML-DSA-65" in sentence and "hybrid" not in sentence.lower():
+                errors.append(
+                    f"README.md:{lineno}: names ML-DSA-65 without hybrid mode: {sentence.strip()!r}"
+                )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -168,6 +217,24 @@ def main() -> int:
         failures += 1
     else:
         print("reasons OK     schemas/revocation-list-v1.schema.json vs Section 8.1.1")
+
+    discovery_errors = discovery_path_errors()
+    if discovery_errors:
+        print("discovery FAIL README.md vs Section 7.1")
+        for err in discovery_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("discovery OK   README.md vs Section 7.1")
+
+    signing_errors = readme_signing_errors()
+    if signing_errors:
+        print("signing FAIL   README.md vs Section 4.3")
+        for err in signing_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("signing OK     README.md vs Section 4.3")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []

@@ -18,8 +18,8 @@ curl -X POST https://api.oa2a.org/api/v1/trust/verify \
   -H "Content-Type: application/json" \
   -d @proof.json
 
-# Discover the trust authority (current endpoint; will migrate to /.well-known/atp)
-curl https://api.oa2a.org/.well-known/opena2a
+# Discover the trust authority (/.well-known/opena2a is a legacy alias for the same document)
+curl https://api.oa2a.org/.well-known/atp
 ```
 
 ## Use cases
@@ -28,7 +28,7 @@ curl https://api.oa2a.org/.well-known/opena2a
 
 Before you let an agent in or install an MCP server, you want a signed statement from a party you can identify, not a star rating on a listing page. You also want to check that statement yourself, with the authority's published key, so a compromised listing cannot forge it.
 
-ATP defines the trust proof: a short-lived signed statement of an agent's trust level, score and verdict, signed with Ed25519 and ML-DSA-65, valid for at most 24 hours, and verifiable against the authority's published keys.
+ATP defines the trust proof: a short-lived signed statement of an agent's trust level, score and verdict, signed with Ed25519 (and with ML-DSA-65 as well in hybrid mode), valid for at most 24 hours, and verifiable against the authority's published keys.
 
 What you can do today: the Quick Start above fetches a live proof from the reference authority and checks it. On 2026-10-08 the verify call returned `{"valid":true,"expired":false,"issuerOk":true,"signatureOk":true}`, and the authority's discovery document also answered at `https://api.oa2a.org/.well-known/atp`.
 
@@ -143,7 +143,7 @@ Returns a hybrid Ed25519 plus ML-DSA-65 signed trust proof:
 }
 ```
 
-The proof carries both an Ed25519 signature for fast local verification today and an ML-DSA-65 signature (FIPS 204, post-quantum) for forward compatibility. Local verification requires no further network calls.
+This hybrid proof carries both an Ed25519 signature for fast local verification today and an ML-DSA-65 signature (FIPS 204, post-quantum) for forward compatibility. Local verification requires no further network calls.
 
 ## Related Standards
 
