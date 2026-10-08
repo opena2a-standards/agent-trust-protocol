@@ -5,8 +5,10 @@ The one permitted change from https://www.apache.org/licenses/LICENSE-2.0.txt
 is the appendix copyright line, which names the year and owner instead of the
 `[yyyy] [name of copyright owner]` placeholder. That line is put back to the
 placeholder and the result is compared, by SHA-256, with the canonical file.
-Any other edit (a reworded clause, a rewrapped line, a dropped blank line)
-fails. python3 standard library only.
+The file is read byte for byte, so any other edit (a reworded clause, a
+rewrapped line, a dropped blank line, CRLF line endings) fails. A path that
+cannot be read is reported in one line and exits 1. python3 standard library
+only.
 """
 from __future__ import annotations
 
@@ -25,7 +27,14 @@ COPYRIGHT_LINE = re.compile(r"^   Copyright .+$", re.MULTILINE)
 
 
 def check(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8")
+    # newline="" keeps CR bytes, so a CRLF copy hashes differently from the
+    # canonical LF file instead of being normalized to it.
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            text = handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        return [f"{path}: cannot read: {reason}"]
     lines = COPYRIGHT_LINE.findall(text)
     if len(lines) != 1:
         return [f"{path.name}: expected one appendix copyright line, found {len(lines)}"]

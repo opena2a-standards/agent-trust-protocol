@@ -27,7 +27,13 @@ requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 
 The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
 is the second signature of the optional hybrid mode, so a README sentence that
-names ML-DSA-65 also names hybrid mode.
+names ML-DSA-65 also names hybrid mode. A prose sentence may wrap across lines;
+the lines of a paragraph are joined before it is split into sentences.
+
+A code block opens on a line of three or more backticks or tildes and closes
+only on a line of the same character at least as long, as in CommonMark, so a
+fence inside a longer fence does not flip prose and code for the rest of the
+README.
 
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
@@ -36,6 +42,7 @@ import json
 import pathlib
 import re
 import sys
+from bisect import bisect_right
 from datetime import datetime, timedelta
 
 try:
@@ -119,20 +126,46 @@ def revocation_reason_errors() -> list[str]:
 
 
 WELL_KNOWN = re.compile(r"/\.well-known/([A-Za-z0-9._-]+)")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+# A line that starts a new Markdown block, so it never continues the paragraph
+# above it: a heading, list item, table row or block quote.
+BLOCK_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>)")
+SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
 
-def discovery_path_errors() -> list[str]:
+def markdown_lines(text: str):
+    """Yield (line number, line, kind) for each line, kind being "fence" for a
+    code-block delimiter, "code" inside a block and "prose" outside one. A
+    block closes only on a fence of its own character at least as long as the
+    opening fence, with nothing after it."""
+    fence = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = FENCE.match(line)
+        if fence is None:
+            if match and not (match.group(1)[0] == "`" and "`" in match.group(2)):
+                fence = match.group(1)
+                yield number, line, "fence"
+            else:
+                yield number, line, "prose"
+        elif (
+            match
+            and match.group(1)[0] == fence[0]
+            and len(match.group(1)) >= len(fence)
+            and not match.group(2).strip()
+        ):
+            fence = None
+            yield number, line, "fence"
+        else:
+            yield number, line, "code"
+
+
+def discovery_path_errors(text: str) -> list[str]:
     """Section 7.1: consumers SHOULD request `/.well-known/atp`, so a README
     command that a reader copies requests that path. Comment lines in a code
     block may name the legacy alias."""
     errors = []
-    in_block = False
-    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
-    for number, line in enumerate(lines, start=1):
-        if line.strip().startswith("```"):
-            in_block = not in_block
-            continue
-        if not in_block or line.lstrip().startswith("#"):
+    for number, line, kind in markdown_lines(text):
+        if kind != "code" or line.lstrip().startswith("#"):
             continue
         for name in WELL_KNOWN.findall(line):
             if name != "atp":
@@ -143,15 +176,50 @@ def discovery_path_errors() -> list[str]:
     return errors
 
 
-def readme_signing_errors() -> list[str]:
+def readme_units(text: str):
+    """Yield each prose paragraph, and each code line on its own, as a list of
+    (line number, line). A blank line, a fence or a new block ends a
+    paragraph."""
+    paragraph: list[tuple[int, str]] = []
+    for number, line, kind in markdown_lines(text):
+        if kind == "prose" and line.strip() and not (paragraph and BLOCK_START.match(line)):
+            paragraph.append((number, line))
+            continue
+        if paragraph:
+            yield paragraph
+            paragraph = []
+        if kind == "code":
+            yield [(number, line)]
+        elif kind == "prose" and line.strip():
+            paragraph.append((number, line))
+    if paragraph:
+        yield paragraph
+
+
+def sentences(text: str):
+    """Yield (offset, sentence) for each sentence of a joined paragraph."""
+    begin = 0
+    for match in SENTENCE_BREAK.finditer(text):
+        yield begin, text[begin:match.start()]
+        begin = match.end()
+    yield begin, text[begin:]
+
+
+def readme_signing_errors(text: str) -> list[str]:
     """Section 4.3: Ed25519 MUST, hybrid Ed25519 + ML-DSA-65 SHOULD. A README
     sentence naming ML-DSA-65 without hybrid mode reads as a mandatory second
-    signature."""
-    readme = ROOT / "README.md"
+    signature. Reported at the line the sentence starts on."""
     errors = []
-    for lineno, line in enumerate(readme.read_text(encoding="utf-8").splitlines(), 1):
-        for sentence in re.split(r"(?<=[.!?])\s+", line):
+    for unit in readme_units(text):
+        starts, parts, offset = [], [], 0
+        for _, line in unit:
+            starts.append(offset)
+            parts.append(line.strip())
+            offset += len(parts[-1]) + 1
+        joined = " ".join(parts)
+        for begin, sentence in sentences(joined):
             if "ML-DSA-65" in sentence and "hybrid" not in sentence.lower():
+                lineno = unit[bisect_right(starts, begin) - 1][0]
                 errors.append(
                     f"README.md:{lineno}: names ML-DSA-65 without hybrid mode: {sentence.strip()!r}"
                 )
@@ -218,7 +286,8 @@ def main() -> int:
     else:
         print("reasons OK     schemas/revocation-list-v1.schema.json vs Section 8.1.1")
 
-    discovery_errors = discovery_path_errors()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    discovery_errors = discovery_path_errors(readme)
     if discovery_errors:
         print("discovery FAIL README.md vs Section 7.1")
         for err in discovery_errors:
@@ -227,7 +296,7 @@ def main() -> int:
     else:
         print("discovery OK   README.md vs Section 7.1")
 
-    signing_errors = readme_signing_errors()
+    signing_errors = readme_signing_errors(readme)
     if signing_errors:
         print("signing FAIL   README.md vs Section 4.3")
         for err in signing_errors:
