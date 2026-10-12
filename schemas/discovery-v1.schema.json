@@ -29,7 +29,7 @@
         "type": "string",
         "minLength": 1
       },
-      "description": "Endpoint-name to path/URL map. The reference implementation serves didResolve, trustProof, trustVerify, trustBatch, transparencyLog, transparencyProof, transparencySth, revocations, and optionally federation."
+      "description": "Endpoint-name to path/URL map. The section 7.1 example names didResolve, trustProof, trustVerify, trustBatch, transparencyLog, transparencyProof, transparencySth, revocations and federation; Appendix A maps the reference authority's components to the endpoints it serves publicly."
     },
     "publicKeys": {
       "type": "array",

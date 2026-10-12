@@ -230,7 +230,9 @@ NOT_DEMONSTRATED = "not yet demonstrated"
 SPEC_ATX_HEADING = "### 4.6 Agent Trust eXtension (ATX)"
 README_ATX_HEADING = "## Agent Trust eXtension (ATX)"
 ATX_V11_STATUS = "ATX v1.1"
-RETIRED_STATUS = re.compile(r"\bproposed\s*\(?\s*v1\.1\b", re.IGNORECASE)
+# The second whitespace run only follows a "(", so a run of spaces after
+# "proposed" has one way to match, not one per split point (linear time).
+RETIRED_STATUS = re.compile(r"\bproposed\s*(?:\(\s*)?v1\.1\b", re.IGNORECASE)
 
 # Section 2.1: the spec's own list of requirements no fixture covers yet.
 COVERAGE_LIST = "Not yet covered by fixtures"
@@ -369,11 +371,13 @@ def status_table(text: str, heading: str) -> dict[str, tuple[int, str]] | None:
     return {cells[0]: (number, cells[1] if len(cells) > 1 else "") for number, cells in table[2:]}
 
 
-def atx_status_errors(spec: str, readme: str, example: str, schema: str) -> list[str]:
+def atx_status_errors(spec: str, readme: str, example: str | None, schema: str) -> list[str]:
     """Section 4.6 is the one home of the ATX field statuses. The README table
     restates its rows with the same status, the example file shows every ATX
     v1.1 field, the trust-proof schema describes an ATX v1.1 member as ATX
-    v1.1, and no file labels a v1.1 field with the retired "Proposed" status."""
+    v1.1, and no file labels a v1.1 field with the retired "Proposed" status.
+    An example that is missing (None) or not JSON is one error, not one per
+    field."""
     spec_rows = status_table(spec, SPEC_ATX_HEADING)
     if not spec_rows:
         return [f"ATP-SPEC.md: no schema table under {SPEC_ATX_HEADING!r}"]
@@ -398,18 +402,25 @@ def atx_status_errors(spec: str, readme: str, example: str, schema: str) -> list
         if field not in spec_rows:
             errors.append(f"README.md:{number}: the ATX table lists {field}, which Section 4.6 does not")
 
-    try:
-        example_doc = json.loads(example)
-    except json.JSONDecodeError as exc:
-        errors.append(f"examples/atx-example.json: not JSON: {exc}")
-        example_doc = {}
-    if not isinstance(example_doc, dict):
-        example_doc = {}
-    for field in atx_fields:
-        if field not in example_doc:
-            errors.append(
-                f"examples/atx-example.json: no {field} member; Section 4.6 says the example shows every ATX v1.1 field"
-            )
+    parsed = False
+    if example is None:
+        errors.append(
+            "examples/atx-example.json: missing; Section 4.6 says the example shows every ATX v1.1 field"
+        )
+    else:
+        try:
+            example_doc = json.loads(example)
+            parsed = True
+        except json.JSONDecodeError as exc:
+            errors.append(f"examples/atx-example.json: not JSON: {exc}")
+    if parsed:
+        if not isinstance(example_doc, dict):
+            example_doc = {}
+        for field in atx_fields:
+            if field not in example_doc:
+                errors.append(
+                    f"examples/atx-example.json: no {field} member; Section 4.6 says the example shows every ATX v1.1 field"
+                )
 
     properties = json.loads(schema).get("properties", {})
     for field in atx_fields:
@@ -422,7 +433,7 @@ def atx_status_errors(spec: str, readme: str, example: str, schema: str) -> list
 
     for name, text in (
         ("README.md", readme),
-        ("examples/atx-example.json", example),
+        ("examples/atx-example.json", example or ""),
         ("schemas/trust-proof-v1.schema.json", schema),
     ):
         for number, line in enumerate(text.splitlines(), start=1):
@@ -475,8 +486,11 @@ def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
 
 # Repositories an anonymous reader cannot open: GitHub answers 404 for them.
 NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
+# The name may carry `.git` and may end a sentence; a dot followed by a word
+# character continues it into another repository's name.
 NOT_PUBLIC_LINK = re.compile(
-    r"github\.com/(" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES) + r")(?![\w.-])",
+    r"github\.com/(" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
+    + r")(?:\.git)?(?![\w-]|\.\w)",
     re.IGNORECASE,
 )
 APPENDIX_A = "## Appendix A: Reference Implementation"
@@ -863,10 +877,11 @@ def main() -> int:
         print("signing OK     README.md vs Section 4.3")
 
     spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+    example_path = ROOT / "examples" / "atx-example.json"
     atx_errors = atx_status_errors(
         spec,
         readme,
-        (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"),
+        example_path.read_text(encoding="utf-8") if example_path.is_file() else None,
         (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
     )
     if atx_errors:
