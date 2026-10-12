@@ -104,10 +104,10 @@ Two complementary suites test these levels:
 | `transparency-inclusion-proof-tampered-path.json` | 2 | §5.4 rule 2 (root recomputation) | REJECT[PROOF_INVALID] |
 | `transparency-consistency-proof-valid.json` | 2 | §5.5 Consistency Proof (RFC 6962 §2.1.2 / RFC 9162 §2.1.4.2) | ACCEPT |
 | `transparency-consistency-proof-tampered-path.json` | 2 | §5.5 rule 2 (append-only) | REJECT[PROOF_INVALID] |
-| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |
+| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes (1.1; the `revocation-list-valid` fixture predates them).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -1022,16 +1022,16 @@ This specification defines:
 
 ## Appendix A: Reference Implementation
 
-The OpenA2A Registry (`github.com/opena2a-org/opena2a-registry`) is the reference implementation of ATP at Conformance Level 2, with Level 3 federation in development.
+The OpenA2A Registry is the reference implementation of ATP at Conformance Level 2, with Level 3 federation in development. Its source code is not public. The trust authority it runs at `https://api.oa2a.org` is, and the table maps each component to the public endpoint that demonstrates it, with the status an anonymous request received on 2026-10-11.
 
-| Component | Implementation |
-|-----------|---------------|
-| DID resolution | `internal/application/did_service.go` |
-| Trust proof signing | `internal/application/trust_proof_service.go` |
-| Transparency log | `internal/application/transparency_service.go` |
-| Federation domain | `internal/domain/federation.go` |
-| Discovery endpoint | `/.well-known/opena2a` (legacy path; normative `/.well-known/atp` alias required before v1.0.0-final — see §7.1 migration rule) |
-| Hybrid PQC signatures | `internal/security/hybrid_signature.go` |
+| Component | Public endpoint at `https://api.oa2a.org` | Status (2026-10-11) |
+|-----------|-------------------------------------------|---------------------|
+| DID resolution | `GET /api/v1/did/{did}` (§3.3) | 200: a DID document with an Ed25519 verification method |
+| Trust proof signing | `GET /api/v1/trust/proof?did={did}` (§4.3, §4.5) | 200: a trust proof signed with Ed25519, verifiable against `publicKeys` in the discovery document |
+| Transparency log | `GET /api/v1/transparency/trust-proofs`, `/api/v1/transparency/sth` and `/api/v1/transparency/proof/{index}` (§5) | 404: not yet served publicly; the log's Signed Tree Head, inclusion proof and consistency proof formats are demonstrated by the [atp-conformance](https://github.com/opena2a-standards/atp-conformance) fixtures |
+| Federation domain | `/api/v1/federation/sync`, listed as `endpoints.federation` in the discovery document (§6.4) | 401 without federation peer credentials |
+| Discovery endpoint | `GET /.well-known/atp` (§7.1); the legacy path `/.well-known/opena2a` returns the identical document, as the §7.1 migration rule requires of an authority serving both | 200 at both paths |
+| Hybrid PQC signatures | the `signatures` array of the `GET /api/v1/trust/proof?did={did}` response (§4.3) | 200: an `ed25519` and an `ML-DSA-65` signature; the ML-DSA-65 key is `pqcPublicKey` in the discovery document |
 
 ## Appendix B: Integration Examples
 

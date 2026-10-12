@@ -34,10 +34,28 @@ is the second signature of the optional hybrid mode, so a README sentence that
 names ML-DSA-65 also names hybrid mode. A prose sentence may wrap across lines;
 the lines of a paragraph are joined before it is split into sentences.
 
+The reference implementation's source is not public, so README.md and ATP-SPEC.md
+link to no repository an anonymous reader cannot open, and every Appendix A row
+maps its component to a public endpoint of the reference authority (an `/api/` or
+`/.well-known/` path) instead of a source file.
+
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
 README.
+
+The README ATX table lists the fields of the Section 4.6 schema table with the
+same status, the example file carries every ATX v1.1 field, the trust-proof
+schema describes an ATX v1.1 member as ATX v1.1, and none of the three labels
+a v1.1 field "Proposed" (the status Section 4.6 retired).
+
+Section 2.1 lists the requirements no fixture covers yet and says that list is
+authoritative: the suite's `notCovered` list can lag it. The suite's
+revocation-list-valid fixture carries a free-text `reason` from before the
+Section 8.1.1 codes, which the revocation schema refuses and a client processes
+as `unspecified`, so every prose sentence in ATP-SPEC.md or the README, and
+every sentence of the revocation schema's description, that cites the fixture
+names Section 8.1.1.
 
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
@@ -177,6 +195,18 @@ FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 BLOCK_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>)")
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
+# Section 4.6: the schema table is the one home of each ATX field's status.
+SPEC_ATX_HEADING = "### 4.6 Agent Trust eXtension (ATX)"
+README_ATX_HEADING = "## Agent Trust eXtension (ATX)"
+ATX_V11_STATUS = "ATX v1.1"
+RETIRED_STATUS = re.compile(r"\bproposed\s*\(?\s*v1\.1\b", re.IGNORECASE)
+
+# Section 2.1: the spec's own list of requirements no fixture covers yet.
+COVERAGE_LIST = "Not yet covered by fixtures"
+COVERAGE_AUTHORITY = "this list is authoritative"
+# The suite's Section 8.1 fixture, byte-pinned with a pre-8.1.1 free-text reason.
+REVOCATION_FIXTURE = "revocation-list-valid"
+
 
 def markdown_lines(text: str):
     """Yield (line number, line, kind) for each line, kind being "fence" for a
@@ -250,24 +280,201 @@ def sentences(text: str):
     yield begin, text[begin:]
 
 
+def unit_sentences(unit):
+    """Yield (line number, sentence) for each sentence of a unit from
+    readme_units, the line number being the one the sentence starts on."""
+    starts, parts, offset = [], [], 0
+    for _, line in unit:
+        starts.append(offset)
+        parts.append(line.strip())
+        offset += len(parts[-1]) + 1
+    for begin, sentence in sentences(" ".join(parts)):
+        yield unit[bisect_right(starts, begin) - 1][0], sentence
+
+
 def readme_signing_errors(text: str) -> list[str]:
     """Section 4.3: Ed25519 MUST, hybrid Ed25519 + ML-DSA-65 SHOULD. A README
     sentence naming ML-DSA-65 without hybrid mode reads as a mandatory second
     signature. Reported at the line the sentence starts on."""
     errors = []
     for unit in readme_units(text):
-        starts, parts, offset = [], [], 0
-        for _, line in unit:
-            starts.append(offset)
-            parts.append(line.strip())
-            offset += len(parts[-1]) + 1
-        joined = " ".join(parts)
-        for begin, sentence in sentences(joined):
+        for lineno, sentence in unit_sentences(unit):
             if "ML-DSA-65" in sentence and "hybrid" not in sentence.lower():
-                lineno = unit[bisect_right(starts, begin) - 1][0]
                 errors.append(
                     f"README.md:{lineno}: names ML-DSA-65 without hybrid mode: {sentence.strip()!r}"
                 )
+    return errors
+
+
+def status_table(text: str, heading: str) -> dict[str, tuple[int, str]] | None:
+    """The first table after `heading` as {field cell: (line number, status
+    cell)}, the header and delimiter rows skipped; None when the heading is
+    absent."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == heading), None)
+    if start is None:
+        return None
+    table: list[tuple[int, list[str]]] = []
+    for number, line in enumerate(lines[start + 1:], start=start + 2):
+        if line.lstrip().startswith("|"):
+            table.append((number, [cell.strip() for cell in line.strip().strip("|").split("|")]))
+        elif table:
+            break
+    return {cells[0]: (number, cells[1] if len(cells) > 1 else "") for number, cells in table[2:]}
+
+
+def atx_status_errors(spec: str, readme: str, example: str, schema: str) -> list[str]:
+    """Section 4.6 is the one home of the ATX field statuses. The README table
+    restates its rows with the same status, the example file shows every ATX
+    v1.1 field, the trust-proof schema describes an ATX v1.1 member as ATX
+    v1.1, and no file labels a v1.1 field with the retired "Proposed" status."""
+    spec_rows = status_table(spec, SPEC_ATX_HEADING)
+    if not spec_rows:
+        return [f"ATP-SPEC.md: no schema table under {SPEC_ATX_HEADING!r}"]
+    atx_fields = [
+        field for field, (_, status) in spec_rows.items() if status.startswith(ATX_V11_STATUS)
+    ]
+    if not atx_fields:
+        return ["ATP-SPEC.md: the Section 4.6 schema table has no ATX v1.1 row"]
+    errors = []
+
+    readme_rows = status_table(readme, README_ATX_HEADING)
+    if not readme_rows:
+        errors.append(f"README.md: no ATX table under {README_ATX_HEADING!r}")
+        readme_rows = {}
+    for field, (_, status) in spec_rows.items():
+        if field not in readme_rows:
+            errors.append(f"README.md: the ATX table has no {field} row; Section 4.6 lists it as {status!r}")
+        elif readme_rows[field][1] != status:
+            number, found = readme_rows[field]
+            errors.append(f"README.md:{number}: {field} is {found!r}; Section 4.6 says {status!r}")
+    for field, (number, _) in readme_rows.items():
+        if field not in spec_rows:
+            errors.append(f"README.md:{number}: the ATX table lists {field}, which Section 4.6 does not")
+
+    try:
+        example_doc = json.loads(example)
+    except json.JSONDecodeError as exc:
+        errors.append(f"examples/atx-example.json: not JSON: {exc}")
+        example_doc = {}
+    if not isinstance(example_doc, dict):
+        example_doc = {}
+    for field in atx_fields:
+        if field not in example_doc:
+            errors.append(
+                f"examples/atx-example.json: no {field} member; Section 4.6 says the example shows every ATX v1.1 field"
+            )
+
+    properties = json.loads(schema).get("properties", {})
+    for field in atx_fields:
+        description = properties.get(field, {}).get("description", ATX_V11_STATUS)
+        if not description.startswith(ATX_V11_STATUS):
+            errors.append(
+                f"schemas/trust-proof-v1.schema.json: {field} is described as {description!r}; "
+                f"Section 4.6 says {ATX_V11_STATUS}"
+            )
+
+    for name, text in (
+        ("README.md", readme),
+        ("examples/atx-example.json", example),
+        ("schemas/trust-proof-v1.schema.json", schema),
+    ):
+        for number, line in enumerate(text.splitlines(), start=1):
+            if RETIRED_STATUS.search(line):
+                errors.append(f"{name}:{number}: labels a field \"Proposed\" v1.1, a status Section 4.6 retired")
+    return errors
+
+
+def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
+    """Section 2.1's list of requirements no fixture covers yet is the spec's
+    own, so it says it is authoritative rather than deferring to the suite's
+    `notCovered` list, which can lag it. The revocation-list-valid fixture's
+    free-text `reason` predates the Section 8.1.1 codes: the revocation schema
+    refuses it and a client processes it as `unspecified`. A sentence citing
+    the fixture names Section 8.1.1, so it never reads as a body the schema
+    accepts. Code blocks are not checked."""
+    errors = []
+    coverage = [
+        unit for unit in readme_units(spec) if unit[0][1].startswith(COVERAGE_LIST)
+    ]
+    if not coverage:
+        errors.append(f"ATP-SPEC.md: no {COVERAGE_LIST!r} list in Section 2.1")
+    elif COVERAGE_AUTHORITY not in " ".join(line.strip() for _, line in coverage[0]):
+        errors.append(
+            f"ATP-SPEC.md:{coverage[0][0][0]}: the {COVERAGE_LIST!r} list does not say "
+            f"{COVERAGE_AUTHORITY!r}; the suite's notCovered list can lag the spec"
+        )
+
+    for name, text in (("ATP-SPEC.md", spec), ("README.md", readme)):
+        code = {number for number, _, kind in markdown_lines(text) if kind != "prose"}
+        for unit in readme_units(text):
+            if unit[0][0] in code:
+                continue
+            for lineno, sentence in unit_sentences(unit):
+                if REVOCATION_FIXTURE in sentence and "8.1.1" not in sentence:
+                    errors.append(
+                        f"{name}:{lineno}: cites {REVOCATION_FIXTURE} without Section 8.1.1, "
+                        f"whose codes its free-text reason predates: {sentence.strip()!r}"
+                    )
+
+    description = json.loads(schema).get("description", "")
+    for _, sentence in sentences(description):
+        if REVOCATION_FIXTURE in sentence and "8.1.1" not in sentence:
+            errors.append(
+                "schemas/revocation-list-v1.schema.json: the description cites "
+                f"{REVOCATION_FIXTURE} without section 8.1.1: {sentence.strip()!r}"
+            )
+    return errors
+
+
+# Repositories an anonymous reader cannot open: GitHub answers 404 for them.
+NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
+NOT_PUBLIC_LINK = re.compile(
+    r"github\.com/(" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES) + r")(?![\w.-])",
+    re.IGNORECASE,
+)
+APPENDIX_A = "## Appendix A: Reference Implementation"
+
+
+def unpublished_link_errors(text: str, name: str) -> list[str]:
+    """A link into a repository that is not public is a dead end for a reader;
+    the reference implementation is shown through its public endpoints
+    (Appendix A) instead."""
+    return [
+        f"{name}:{number} links to github.com/{match.group(1)}, which is not public; "
+        "cite the reference authority's public endpoints (ATP-SPEC Appendix A)"
+        for number, line in enumerate(text.splitlines(), start=1)
+        for match in NOT_PUBLIC_LINK.finditer(line)
+    ]
+
+
+def reference_endpoint_errors(text: str) -> list[str]:
+    """Appendix A maps each reference-implementation component to the public
+    endpoint that demonstrates it: every table row's second cell names an
+    `/api/` or `/.well-known/` path, never a file in the unpublished source."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == APPENDIX_A)
+    except StopIteration:
+        return [f"ATP-SPEC.md: heading {APPENDIX_A!r} not found"]
+    rows = []
+    for number, line in enumerate(lines[start + 1:], start=start + 2):
+        if line.startswith("## "):
+            break
+        if line.lstrip().startswith("|"):
+            rows.append((number, [cell.strip() for cell in line.strip().strip("|").split("|")]))
+    # The first table line is the header and the second its delimiter row.
+    body = rows[2:]
+    if not body:
+        return ["ATP-SPEC.md: Appendix A has no component table"]
+    errors = []
+    for number, cells in body:
+        target = cells[1] if len(cells) > 1 else ""
+        if "/api/" not in target and "/.well-known/" not in target:
+            errors.append(
+                f"ATP-SPEC.md:{number} Appendix A maps {cells[0]!r} to {target!r}, "
+                "which names no public /api/ or /.well-known/ endpoint"
+            )
     return errors
 
 
@@ -358,6 +565,47 @@ def main() -> int:
         failures += 1
     else:
         print("signing OK     README.md vs Section 4.3")
+
+    spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+    atx_errors = atx_status_errors(
+        spec,
+        readme,
+        (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"),
+        (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
+    )
+    if atx_errors:
+        print("atx FAIL       README.md, example and schema vs Section 4.6")
+        for err in atx_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("atx OK         README.md, example and schema vs Section 4.6")
+
+    coverage_errors = fixture_coverage_errors(
+        spec,
+        readme,
+        (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8"),
+    )
+    if coverage_errors:
+        print("fixtures FAIL  Section 2.1, README.md and revocation schema vs Section 8.1.1")
+        for err in coverage_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("fixtures OK    Section 2.1, README.md and revocation schema vs Section 8.1.1")
+
+    reference_errors = (
+        unpublished_link_errors(readme, "README.md")
+        + unpublished_link_errors(spec, "ATP-SPEC.md")
+        + reference_endpoint_errors(spec)
+    )
+    if reference_errors:
+        print("reference FAIL README.md and ATP-SPEC.md vs Appendix A")
+        for err in reference_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("reference OK   README.md and ATP-SPEC.md vs Appendix A")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []

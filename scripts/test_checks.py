@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Regression tests for check_license.py, the README and revocation schema
-checks in validate_examples.py, the conformance scripts (run against
-fixture_authority.py; needs bash, curl and jq), and the test-suite sentence of
-the .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+"""Regression tests for check_license.py, the README, reference implementation,
+revocation schema, ATX status and fixture coverage checks in
+validate_examples.py, the conformance scripts (run against fixture_authority.py;
+needs bash, curl and jq), the registry generation and --check mode of
+gen_registries.py, and the test-suite sentences of the
+.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -24,6 +26,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import check_license  # noqa: E402
 import fixture_authority  # noqa: E402
+import gen_registries  # noqa: E402
 import validate_examples  # noqa: E402
 from jsonschema import Draft202012Validator, FormatChecker  # noqa: E402
 
@@ -121,6 +124,74 @@ class ReadmeDiscoveryTest(unittest.TestCase):
     def test_comment_line_may_name_legacy_alias(self):
         text = "```bash\n# /.well-known/opena2a is a legacy alias\ncurl https://x/.well-known/atp\n```\n"
         self.assertEqual(validate_examples.discovery_path_errors(text), [])
+
+
+class ReferenceImplementationTest(unittest.TestCase):
+    APPENDIX = (
+        "## Appendix A: Reference Implementation\n"
+        "\n"
+        "| Component | Public endpoint | Status |\n"
+        "|-----------|-----------------|--------|\n"
+        "{rows}"
+        "\n"
+        "## Appendix B: Integration Examples\n"
+        "\n"
+        "| Not | Appendix A |\n"
+    )
+
+    def test_repository_readme_and_spec_pass(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.unpublished_link_errors(readme, "README.md"), [])
+        self.assertEqual(validate_examples.unpublished_link_errors(spec, "ATP-SPEC.md"), [])
+        self.assertEqual(validate_examples.reference_endpoint_errors(spec), [])
+
+    def test_link_to_unpublished_repository_fails(self):
+        text = "Intro.\n\nThe [Registry](https://github.com/opena2a-org/opena2a-registry) implements ATP.\n"
+        errors = validate_examples.unpublished_link_errors(text, "README.md")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:3 "), errors[0])
+
+    def test_link_match_ignores_case_and_stops_at_the_repository_name(self):
+        upper = "See `GitHub.com/OpenA2A-org/OpenA2A-Registry`.\n"
+        self.assertEqual(len(validate_examples.unpublished_link_errors(upper, "ATP-SPEC.md")), 1)
+        longer = "See https://github.com/opena2a-org/opena2a-registry-web.\n"
+        self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
+
+    def test_endpoint_rows_pass(self):
+        rows = (
+            "| DID resolution | `GET /api/v1/did/{did}` | 200 |\n"
+            "| Discovery endpoint | `GET /.well-known/atp` | 200 |\n"
+        )
+        text = self.APPENDIX.format(rows=rows)
+        self.assertEqual(validate_examples.reference_endpoint_errors(text), [])
+
+    def test_source_file_row_fails(self):
+        rows = (
+            "| DID resolution | `GET /api/v1/did/{did}` | 200 |\n"
+            "| Trust proof signing | `internal/application/trust_proof_service.go` | |\n"
+        )
+        errors = validate_examples.reference_endpoint_errors(self.APPENDIX.format(rows=rows))
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:6 "), errors[0])
+        self.assertIn("Trust proof signing", errors[0])
+
+    def test_missing_appendix_or_table_fails(self):
+        missing = validate_examples.reference_endpoint_errors("## 12. References\n")
+        self.assertEqual(len(missing), 1)
+        self.assertIn("not found", missing[0])
+        empty = validate_examples.reference_endpoint_errors(self.APPENDIX.format(rows=""))
+        self.assertEqual(len(empty), 1)
+        self.assertIn("no component table", empty[0])
+
+    def test_main_fails_on_reference_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "reference_endpoint_errors", return_value=["row names a file"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("reference FAIL", out.getvalue())
+        self.assertIn("row names a file", out.getvalue())
 
 
 class RevocationIndexTest(unittest.TestCase):
@@ -481,13 +552,288 @@ class SchemaCheckTest(unittest.TestCase):
         self.assertTrue(any(expected) and not all(expected))
 
 
+class GenRegistriesTest(unittest.TestCase):
+    TABLE = (
+        "<!-- opena2a-definition: revocation-reasons -->\n"
+        "| Reason | Since |\n"
+        "|--------|-------|\n"
+        "| `manual` | 1.1.0 |\n"
+        "| **unspecified** | 1.1.0 |\n"
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["gen_registries.py", *args]), contextlib.redirect_stdout(
+            out
+        ), contextlib.redirect_stderr(err):
+            code = gen_registries.main()
+        return code, out.getvalue(), err.getvalue()
+
+    def generate_from(self, spec_text):
+        spec = self.dir / "ATP-SPEC.md"
+        spec.write_text(spec_text, encoding="utf-8")
+        tables = {"revocation-reasons": gen_registries.TABLES["revocation-reasons"]}
+        with mock.patch.object(gen_registries, "SPEC", spec), mock.patch.object(
+            gen_registries, "TABLES", tables
+        ):
+            return gen_registries.generate()
+
+    def test_repository_registries_match_the_spec(self):
+        code, out, err = self.run_main("--check")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("registries match the specification tables", out)
+
+    def test_table_cells_lose_backticks_and_bold(self):
+        data = self.generate_from("# Spec\n\n" + self.TABLE)["revocation-reasons"]
+        self.assertEqual(data["columns"], ["Reason", "Since"])
+        self.assertEqual(
+            data["rows"],
+            [{"Reason": "manual", "Since": "1.1.0"}, {"Reason": "unspecified", "Since": "1.1.0"}],
+        )
+
+    def test_duplicate_unique_value_fails(self):
+        with self.assertRaisesRegex(SystemExit, r"duplicate Reason values \['manual'\]"):
+            self.generate_from(self.TABLE + "| manual | 1.2.0 |\n")
+
+    def test_missing_marker_fails(self):
+        with self.assertRaisesRegex(SystemExit, "marker not found"):
+            self.generate_from("# Spec\n\n| Reason | Since |\n")
+
+    def test_heading_before_table_fails(self):
+        text = self.TABLE.replace("\n", "\n## Next section\n\n", 1)
+        with self.assertRaisesRegex(SystemExit, "no table before the next heading"):
+            self.generate_from(text)
+
+    def test_check_fails_on_stale_and_missing_files(self):
+        registries = self.dir / "registries"
+        with mock.patch.object(gen_registries, "ROOT", self.dir), mock.patch.object(
+            gen_registries, "REGISTRIES", registries
+        ):
+            code, out, _ = self.run_main()
+            self.assertEqual(code, 0)
+            self.assertEqual(len(out.splitlines()), len(gen_registries.TABLES))
+            self.assertEqual(self.run_main("--check")[0], 0)
+            (registries / "trust-levels.json").write_text("{}\n", encoding="utf-8")
+            (registries / "revocation-reasons.json").unlink()
+            code, _, err = self.run_main("--check")
+        self.assertEqual(code, 1)
+        self.assertIn("registries/trust-levels.json", err)
+        self.assertIn("registries/revocation-reasons.json", err)
+        self.assertNotIn("transparency-entry-types", err)
+
+
 class TestSuiteMarkerTest(unittest.TestCase):
+    def setUp(self):
+        self.marker = (ROOT / ".pre-push-review-not-required").read_text(encoding="utf-8")
+
     def test_marker_names_the_only_unit_test_suite(self):
-        marker = (ROOT / ".pre-push-review-not-required").read_text(encoding="utf-8")
         title = (ROOT / "conformance" / "README.md").read_text(encoding="utf-8").splitlines()[0]
         self.assertIn("Test Suite", title)
-        self.assertNotIn("The only test suite", marker)
-        self.assertIn("The only unit test suite is scripts/test_checks.py", marker)
+        self.assertNotIn("The only test suite", self.marker)
+        self.assertIn("The only unit test suite is scripts/test_checks.py", self.marker)
+
+    def test_marker_run_command_runs_this_file(self):
+        this = Path(__file__).resolve().relative_to(ROOT).as_posix()
+        self.assertIn(f"(run: python3 {this})", self.marker)
+
+    def test_marker_names_the_conformance_test_suite(self):
+        scripts = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "conformance").glob("level*.sh"))
+        self.assertTrue(scripts)
+        self.assertEqual(sorted(re.findall(r"conformance/[\w.-]+\.sh", self.marker)), scripts)
+        clause = f"the conformance test suite ({', '.join(scripts)}) tests a running authority"
+        self.assertIn(clause, self.marker)
+
+    def test_every_check_script_has_unit_tests(self):
+        source = Path(__file__).read_text(encoding="utf-8")
+        for script in sorted(SCRIPTS.glob("*.py")):
+            if script.name == Path(__file__).name:
+                continue
+            with self.subTest(script=script.name):
+                imported = re.search(rf"(?m)^import {script.stem}\b", source)
+                called = re.search(rf"\b{script.stem}\.\w+\(", source)
+                self.assertTrue(imported and called, f"no unit test calls {script.name}")
+
+    def test_marker_names_no_undescribed_gate(self):
+        self.assertNotRegex(self.marker, r"\d+-phase")
+
+
+class AtxStatusTest(unittest.TestCase):
+    def files(self):
+        return {
+            "spec": (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"),
+            "readme": (ROOT / "README.md").read_text(encoding="utf-8"),
+            "example": (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"),
+            "schema": (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
+        }
+
+    def readme_row(self, readme, field):
+        return next(line for line in readme.splitlines() if line.startswith(f"| {field} |"))
+
+    def test_repository_files_pass(self):
+        self.assertEqual(validate_examples.atx_status_errors(**self.files()), [])
+
+    def test_readme_lists_every_section_4_6_field(self):
+        readme = self.files()["readme"]
+        for field in ["capabilities", "buildAttestation", "behavioralProfile", "scanSummary", "declaredPurpose"]:
+            with self.subTest(field=field):
+                self.assertIn("ATX v1.1", self.readme_row(readme, field))
+
+    def test_proposed_readme_status_fails(self):
+        files = self.files()
+        row = self.readme_row(files["readme"], "capabilities")
+        files["readme"] = files["readme"].replace(
+            row, "| capabilities | Proposed (v1.1) | Declared capability set. |"
+        )
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("capabilities is 'Proposed (v1.1)'", errors[0])
+        self.assertRegex(errors[1], r"^README\.md:\d+: labels a field \"Proposed\" v1\.1")
+
+    def test_readme_without_declared_purpose_row_fails(self):
+        files = self.files()
+        row = self.readme_row(files["readme"], "declaredPurpose")
+        files["readme"] = files["readme"].replace(row + "\n", "")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("the ATX table has no declaredPurpose row", errors[0])
+
+    def test_readme_row_section_4_6_does_not_list_fails(self):
+        files = self.files()
+        row = self.readme_row(files["readme"], "declaredPurpose")
+        files["readme"] = files["readme"].replace(row, row + "\n| slsaLevel | ATX v1.1 | Build level. |")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("the ATX table lists slsaLevel, which Section 4.6 does not", errors[0])
+
+    def test_example_without_a_v1_1_field_fails(self):
+        files = self.files()
+        example = json.loads(files["example"])
+        del example["declaredPurpose"]
+        files["example"] = json.dumps(example, indent=2)
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("examples/atx-example.json: no declaredPurpose member", errors[0])
+
+    def test_proposed_example_comment_fails(self):
+        files = self.files()
+        example = json.loads(files["example"])
+        example["$comment"] = "Proposed v1.1 fields are shown for shape only."
+        files["example"] = json.dumps(example, indent=2)
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertRegex(errors[0], r"^examples/atx-example\.json:2: labels a field \"Proposed\"")
+
+    def test_proposed_schema_description_fails(self):
+        files = self.files()
+        schema = json.loads(files["schema"])
+        schema["properties"]["scanSummary"]["description"] = "Proposed v1.1 (section 4.6)."
+        files["schema"] = json.dumps(schema, indent=2)
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("scanSummary is described as 'Proposed v1.1 (section 4.6).'", errors[0])
+        self.assertRegex(errors[1], r"^schemas/trust-proof-v1\.schema\.json:\d+: labels a field \"Proposed\"")
+
+    def test_spec_without_the_table_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace(validate_examples.SPEC_ATX_HEADING, "### 4.6 ATX")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("no schema table", errors[0])
+
+    def test_main_fails_on_atx_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "atx_status_errors", return_value=["status differs"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("atx FAIL", out.getvalue())
+        self.assertIn("status differs", out.getvalue())
+
+
+class FixtureCoverageTest(unittest.TestCase):
+    PRE_FIX_ROW = "| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |"
+
+    def files(self):
+        return {
+            "spec": (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"),
+            "readme": (ROOT / "README.md").read_text(encoding="utf-8"),
+            "schema": (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8"),
+        }
+
+    def test_repository_files_pass(self):
+        self.assertEqual(validate_examples.fixture_coverage_errors(**self.files()), [])
+
+    def test_readme_citing_fixture_without_8_1_1_fails(self):
+        files = self.files()
+        files["readme"] += (
+            "\nThe conformance suite pins the Section 8.1 body\n"
+            "(`fixtures/revocation-list-valid.json`) and the malformed-timestamp rejection.\n"
+        )
+        line = len(files["readme"].splitlines()) - 1
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith(f"README.md:{line}: cites revocation-list-valid"), errors[0])
+
+    def test_spec_table_row_without_8_1_1_fails(self):
+        files = self.files()
+        row = next(
+            line for line in files["spec"].splitlines() if line.startswith("| `revocation-list-valid.json` |")
+        )
+        files["spec"] = files["spec"].replace(row, self.PRE_FIX_ROW)
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertRegex(errors[0], r"^ATP-SPEC\.md:\d+: cites revocation-list-valid")
+
+    def test_coverage_list_deferring_to_the_suite_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace(
+            "this list is authoritative, and the suite's `notCovered` list can lag it",
+            "the suite's `notCovered` list is authoritative",
+        )
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("does not say 'this list is authoritative'", errors[0])
+
+    def test_spec_without_coverage_list_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace(validate_examples.COVERAGE_LIST, "Uncovered")
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("no 'Not yet covered by fixtures' list", errors[0])
+
+    def test_schema_description_calling_fixture_ground_truth_fails(self):
+        files = self.files()
+        schema = json.loads(files["schema"])
+        schema["description"] = (
+            "Structural schema for the section 8.1 revocation response, derived from that section's "
+            "pinned body with the atp-conformance revocation-list-valid fixture as ground truth. "
+            "`reason` is a section 8.1.1 code, never free text."
+        )
+        files["schema"] = json.dumps(schema, indent=2)
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("the description cites revocation-list-valid without section 8.1.1", errors[0])
+
+    def test_code_block_may_cite_fixture(self):
+        files = self.files()
+        files["readme"] += "\n```bash\nls fixtures/revocation-list-valid.json\n```\n"
+        self.assertEqual(validate_examples.fixture_coverage_errors(**files), [])
+
+    def test_main_fails_on_fixture_coverage_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "fixture_coverage_errors", return_value=["coverage differs"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("fixtures FAIL", out.getvalue())
+        self.assertIn("coverage differs", out.getvalue())
 
 
 if __name__ == "__main__":

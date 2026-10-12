@@ -197,6 +197,34 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   scripts against `scripts/fixture_authority.py`, which serves the specification's examples
   (all 17 tests pass), with one member removed or corrupted at a time (exactly the tests that
   check it fail), and checks that `checks.jq` agrees with a JSON Schema validator.
+- README ATX table, `examples/atx-example.json` and `schemas/trust-proof-v1.schema.json`
+  still labelled the ATX v1.1 fields "Proposed (v1.1)", the status Section 4.6 retired, and
+  the README table left out `declaredPurpose`. The README table now lists all five fields
+  with the Section 4.6 status "ATX v1.1 (signed in the ATX TBS)", the example comment and the
+  schema's `scanSummary` description say the same, and the schema describes `slsaLevel` as
+  illustrative and signed nowhere, as Section 4.2 does. `scripts/validate_examples.py` fails
+  when a README ATX row is missing, extra or differs in status from the Section 4.6 table,
+  when the example lacks an ATX v1.1 field, when the schema describes one as anything but
+  ATX v1.1, or when any of the three files says "Proposed v1.1"; `scripts/test_checks.py`
+  covers each case.
+- Section 2.1 called the suite's `notCovered` list authoritative, though that list can lag
+  the specification and leave out requirements Section 2.1 lists; the Section 2.1 list is now
+  the authoritative one and says the suite's list can lag it. The README said the suite pins the Section 8.1 body,
+  the Section 2.1 table listed `revocation-list-valid.json` as a structural ACCEPT and the
+  revocation schema called that fixture its ground truth, yet the fixture's free-text
+  `reason` predates the Section 8.1.1 codes and the schema refuses it. All three now say so,
+  and that a client processes the reason as `unspecified`; the README names the reason-code
+  and index-less cases no fixture pins yet. `scripts/validate_examples.py` fails when the
+  Section 2.1 list does not say it is authoritative, or when a prose sentence in the
+  specification or README, or a sentence of the schema description, cites the fixture
+  without Section 8.1.1; `scripts/test_checks.py` covers each case.
+- Appendix A and the README linked the reference implementation's repository, which is not
+  public (an anonymous request gets HTTP 404), and Appendix A mapped five of its six components
+  to source files in it. Both now say the source is not public, and Appendix A maps each component to
+  the public endpoint at `api.oa2a.org` that demonstrates it, with the status an anonymous
+  request received on 2026-10-11 (the transparency-log endpoints answer 404 and federation
+  sync 401). `scripts/validate_examples.py` fails on a link to a repository listed as not
+  public and on an Appendix A row that names no `/api/` or `/.well-known/` endpoint.
 
 ## [1.0.0-rc1] - 2026-04-28
 
