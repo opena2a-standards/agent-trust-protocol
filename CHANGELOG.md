@@ -197,6 +197,16 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   scripts against `scripts/fixture_authority.py`, which serves the specification's examples
   (all 17 tests pass), with one member removed or corrupted at a time (exactly the tests that
   check it fail), and checks that `checks.jq` agrees with a JSON Schema validator.
+- README ATX table, `examples/atx-example.json` and `schemas/trust-proof-v1.schema.json`
+  still labelled the ATX v1.1 fields "Proposed (v1.1)", the status Section 4.6 retired, and
+  the README table left out `declaredPurpose`. The README table now lists all five fields
+  with the Section 4.6 status "ATX v1.1 (signed in the ATX TBS)", the example comment and the
+  schema's `scanSummary` description say the same, and the schema describes `slsaLevel` as
+  illustrative and signed nowhere, as Section 4.2 does. `scripts/validate_examples.py` fails
+  when a README ATX row is missing, extra or differs in status from the Section 4.6 table,
+  when the example lacks an ATX v1.1 field, when the schema describes one as anything but
+  ATX v1.1, or when any of the three files says "Proposed v1.1"; `scripts/test_checks.py`
+  covers each case.
 
 ## [1.0.0-rc1] - 2026-04-28
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Regression tests for check_license.py, the README and revocation schema
-checks in validate_examples.py, the conformance scripts (run against
+"""Regression tests for check_license.py, the README, revocation schema and ATX
+status checks in validate_examples.py, the conformance scripts (run against
 fixture_authority.py; needs bash, curl and jq), and the test-suite sentence of
 the .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
@@ -488,6 +488,99 @@ class TestSuiteMarkerTest(unittest.TestCase):
         self.assertIn("Test Suite", title)
         self.assertNotIn("The only test suite", marker)
         self.assertIn("The only unit test suite is scripts/test_checks.py", marker)
+
+
+class AtxStatusTest(unittest.TestCase):
+    def files(self):
+        return {
+            "spec": (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"),
+            "readme": (ROOT / "README.md").read_text(encoding="utf-8"),
+            "example": (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"),
+            "schema": (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
+        }
+
+    def readme_row(self, readme, field):
+        return next(line for line in readme.splitlines() if line.startswith(f"| {field} |"))
+
+    def test_repository_files_pass(self):
+        self.assertEqual(validate_examples.atx_status_errors(**self.files()), [])
+
+    def test_readme_lists_every_section_4_6_field(self):
+        readme = self.files()["readme"]
+        for field in ["capabilities", "buildAttestation", "behavioralProfile", "scanSummary", "declaredPurpose"]:
+            with self.subTest(field=field):
+                self.assertIn("ATX v1.1", self.readme_row(readme, field))
+
+    def test_proposed_readme_status_fails(self):
+        files = self.files()
+        row = self.readme_row(files["readme"], "capabilities")
+        files["readme"] = files["readme"].replace(
+            row, "| capabilities | Proposed (v1.1) | Declared capability set. |"
+        )
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("capabilities is 'Proposed (v1.1)'", errors[0])
+        self.assertRegex(errors[1], r"^README\.md:\d+: labels a field \"Proposed\" v1\.1")
+
+    def test_readme_without_declared_purpose_row_fails(self):
+        files = self.files()
+        row = self.readme_row(files["readme"], "declaredPurpose")
+        files["readme"] = files["readme"].replace(row + "\n", "")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("the ATX table has no declaredPurpose row", errors[0])
+
+    def test_readme_row_section_4_6_does_not_list_fails(self):
+        files = self.files()
+        row = self.readme_row(files["readme"], "declaredPurpose")
+        files["readme"] = files["readme"].replace(row, row + "\n| slsaLevel | ATX v1.1 | Build level. |")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("the ATX table lists slsaLevel, which Section 4.6 does not", errors[0])
+
+    def test_example_without_a_v1_1_field_fails(self):
+        files = self.files()
+        example = json.loads(files["example"])
+        del example["declaredPurpose"]
+        files["example"] = json.dumps(example, indent=2)
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("examples/atx-example.json: no declaredPurpose member", errors[0])
+
+    def test_proposed_example_comment_fails(self):
+        files = self.files()
+        example = json.loads(files["example"])
+        example["$comment"] = "Proposed v1.1 fields are shown for shape only."
+        files["example"] = json.dumps(example, indent=2)
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertRegex(errors[0], r"^examples/atx-example\.json:2: labels a field \"Proposed\"")
+
+    def test_proposed_schema_description_fails(self):
+        files = self.files()
+        schema = json.loads(files["schema"])
+        schema["properties"]["scanSummary"]["description"] = "Proposed v1.1 (section 4.6)."
+        files["schema"] = json.dumps(schema, indent=2)
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("scanSummary is described as 'Proposed v1.1 (section 4.6).'", errors[0])
+        self.assertRegex(errors[1], r"^schemas/trust-proof-v1\.schema\.json:\d+: labels a field \"Proposed\"")
+
+    def test_spec_without_the_table_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace(validate_examples.SPEC_ATX_HEADING, "### 4.6 ATX")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("no schema table", errors[0])
+
+    def test_main_fails_on_atx_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "atx_status_errors", return_value=["status differs"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("atx FAIL", out.getvalue())
+        self.assertIn("status differs", out.getvalue())
 
 
 if __name__ == "__main__":

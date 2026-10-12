@@ -39,6 +39,11 @@ only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
 README.
 
+The README ATX table lists the fields of the Section 4.6 schema table with the
+same status, the example file carries every ATX v1.1 field, the trust-proof
+schema describes an ATX v1.1 member as ATX v1.1, and none of the three labels
+a v1.1 field "Proposed" (the status Section 4.6 retired).
+
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
@@ -177,6 +182,12 @@ FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 BLOCK_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>)")
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
+# Section 4.6: the schema table is the one home of each ATX field's status.
+SPEC_ATX_HEADING = "### 4.6 Agent Trust eXtension (ATX)"
+README_ATX_HEADING = "## Agent Trust eXtension (ATX)"
+ATX_V11_STATUS = "ATX v1.1"
+RETIRED_STATUS = re.compile(r"\bproposed\s*\(?\s*v1\.1\b", re.IGNORECASE)
+
 
 def markdown_lines(text: str):
     """Yield (line number, line, kind) for each line, kind being "fence" for a
@@ -271,6 +282,85 @@ def readme_signing_errors(text: str) -> list[str]:
     return errors
 
 
+def status_table(text: str, heading: str) -> dict[str, tuple[int, str]] | None:
+    """The first table after `heading` as {field cell: (line number, status
+    cell)}, the header and delimiter rows skipped; None when the heading is
+    absent."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == heading), None)
+    if start is None:
+        return None
+    table: list[tuple[int, list[str]]] = []
+    for number, line in enumerate(lines[start + 1:], start=start + 2):
+        if line.lstrip().startswith("|"):
+            table.append((number, [cell.strip() for cell in line.strip().strip("|").split("|")]))
+        elif table:
+            break
+    return {cells[0]: (number, cells[1] if len(cells) > 1 else "") for number, cells in table[2:]}
+
+
+def atx_status_errors(spec: str, readme: str, example: str, schema: str) -> list[str]:
+    """Section 4.6 is the one home of the ATX field statuses. The README table
+    restates its rows with the same status, the example file shows every ATX
+    v1.1 field, the trust-proof schema describes an ATX v1.1 member as ATX
+    v1.1, and no file labels a v1.1 field with the retired "Proposed" status."""
+    spec_rows = status_table(spec, SPEC_ATX_HEADING)
+    if not spec_rows:
+        return [f"ATP-SPEC.md: no schema table under {SPEC_ATX_HEADING!r}"]
+    atx_fields = [
+        field for field, (_, status) in spec_rows.items() if status.startswith(ATX_V11_STATUS)
+    ]
+    if not atx_fields:
+        return ["ATP-SPEC.md: the Section 4.6 schema table has no ATX v1.1 row"]
+    errors = []
+
+    readme_rows = status_table(readme, README_ATX_HEADING)
+    if not readme_rows:
+        errors.append(f"README.md: no ATX table under {README_ATX_HEADING!r}")
+        readme_rows = {}
+    for field, (_, status) in spec_rows.items():
+        if field not in readme_rows:
+            errors.append(f"README.md: the ATX table has no {field} row; Section 4.6 lists it as {status!r}")
+        elif readme_rows[field][1] != status:
+            number, found = readme_rows[field]
+            errors.append(f"README.md:{number}: {field} is {found!r}; Section 4.6 says {status!r}")
+    for field, (number, _) in readme_rows.items():
+        if field not in spec_rows:
+            errors.append(f"README.md:{number}: the ATX table lists {field}, which Section 4.6 does not")
+
+    try:
+        example_doc = json.loads(example)
+    except json.JSONDecodeError as exc:
+        errors.append(f"examples/atx-example.json: not JSON: {exc}")
+        example_doc = {}
+    if not isinstance(example_doc, dict):
+        example_doc = {}
+    for field in atx_fields:
+        if field not in example_doc:
+            errors.append(
+                f"examples/atx-example.json: no {field} member; Section 4.6 says the example shows every ATX v1.1 field"
+            )
+
+    properties = json.loads(schema).get("properties", {})
+    for field in atx_fields:
+        description = properties.get(field, {}).get("description", ATX_V11_STATUS)
+        if not description.startswith(ATX_V11_STATUS):
+            errors.append(
+                f"schemas/trust-proof-v1.schema.json: {field} is described as {description!r}; "
+                f"Section 4.6 says {ATX_V11_STATUS}"
+            )
+
+    for name, text in (
+        ("README.md", readme),
+        ("examples/atx-example.json", example),
+        ("schemas/trust-proof-v1.schema.json", schema),
+    ):
+        for number, line in enumerate(text.splitlines(), start=1):
+            if RETIRED_STATUS.search(line):
+                errors.append(f"{name}:{number}: labels a field \"Proposed\" v1.1, a status Section 4.6 retired")
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -358,6 +448,20 @@ def main() -> int:
         failures += 1
     else:
         print("signing OK     README.md vs Section 4.3")
+
+    atx_errors = atx_status_errors(
+        (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"),
+        readme,
+        (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"),
+        (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
+    )
+    if atx_errors:
+        print("atx FAIL       README.md, example and schema vs Section 4.6")
+        for err in atx_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("atx OK         README.md, example and schema vs Section 4.6")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
