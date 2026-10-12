@@ -390,6 +390,24 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   header is on. One entry above is corrected: it said the legacy path must gain the
   normative alias before v1.0.0-final, where Section 7.1 says the reference implementation
   serves it as an optional alias.
+- Conformance scripts, follow-up: every request now goes through one `fetch` helper in
+  `conformance/lib.sh`. An authority URL with a brace list or bracket range in its host or
+  port, which `curl` rejects with globbing off, failed every test with "no JSON body"; the
+  tests that send a request now say "the authority URL is not a valid URL", and the
+  conformance README says such a URL is rejected. `curl` removed `.` and `..` segments, so an
+  `endpoints.trustProof` of `/x/../api/v1/trust/proof` passed T1.7 without a request to the
+  declared path; every request now passes `--path-as-is`. `authorityDid` went into the T1.4
+  path and the T1.7 query as written, so a `#` dropped the rest of the request; it is now
+  percent-encoded (as jq's `@uri` encodes it, except for `:` and `@`), and T1.7 fails without a
+  request, naming the reason, when `endpoints.trustProof` holds `#`, whitespace or a control
+  character. T1.7 adds the `did` parameter after `&` when the endpoint has a query. Reading an
+  `endpoints.trustProof` with a NUL character printed a shell warning on stderr; the NUL is
+  now removed in `jq`. No request had a time limit, so an address that does not answer held
+  each one for the system connect timeout; each request now stops after 10 seconds to connect
+  and 30 seconds in all, set by `ATP_CONNECT_TIMEOUT` and `ATP_MAX_TIME` (a value that is not a
+  number exits 69), and the failure names the limits. `scripts/test_checks.py` covers each
+  of these, and checks that every `curl` call passes `-g`, `--path-as-is`, `--connect-timeout`
+  and `--max-time`.
 
 ## [1.0.0-rc1] - 2026-04-28
 

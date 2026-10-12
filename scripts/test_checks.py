@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
@@ -1117,7 +1119,7 @@ class ConformanceScriptTest(unittest.TestCase):
         cls.authority.shutdown()
         cls.authority.server_close()
 
-    def run_scripts(self, url=None, **overrides):
+    def run_scripts(self, url=None, env=None, **overrides):
         self.authority.overrides = overrides
         self.authority.requests.clear()
         run = subprocess.run(
@@ -1125,6 +1127,7 @@ class ConformanceScriptTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=120,
+            env={**os.environ, **(env or {})},
         )
         failed = [
             name
@@ -1193,7 +1196,7 @@ class ConformanceScriptTest(unittest.TestCase):
     def test_trust_proof_endpoint_reading(self):
         """T1.7 requests /api/v1/trust/proof when endpoints.trustProof is not a
         string, and reads a string with its NUL characters and trailing
-        newlines removed."""
+        newlines removed, without a shell warning on stderr."""
         did = self.authority.examples["discovery"]["authorityDid"]
         for label, expected, value in (
             ("number", [T1[2]], 42),
@@ -1202,8 +1205,97 @@ class ConformanceScriptTest(unittest.TestCase):
             ("NUL character inside the path", [], "/api/v1/trust\x00/proof"),
         ):
             with self.subTest(label):
-                self.probe(expected, discovery=inside("endpoints", put(trustProof=value)))
+                run = self.probe(expected, discovery=inside("endpoints", put(trustProof=value)))
                 self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={did}"])
+                self.assertEqual(run.stderr, "")
+
+    def test_trust_proof_endpoint_that_breaks_the_url_fails_without_a_request(self):
+        """A "#" would end the path and drop the did parameter, and curl sends
+        nothing for a URL that holds whitespace or a control character."""
+        for label, value in (
+            ("fragment", "/api/v1/trust/proof#frag"),
+            ("space", "/api/v1/trust/pro of"),
+            ("tab", "/api/v1/trust/proof\tx"),
+            ("newline inside the path", "/api/v1/trust\n/proof"),
+            ("control character", "/api/v1/trust/proof\x01"),
+            ("DEL character", "/api/v1/trust/proof\x7f"),
+        ):
+            with self.subTest(label):
+                run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=value)))
+                self.assertIn(
+                    "(endpoints.trustProof holds #, whitespace or a control character)", run.stdout
+                )
+                self.assertEqual(self.received("/trust/pro"), [])
+
+    def test_trust_proof_endpoint_with_a_query_gets_the_did_after_an_ampersand(self):
+        did = self.authority.examples["discovery"]["authorityDid"]
+        self.probe([], discovery=inside("endpoints", put(trustProof="/api/v1/trust/proof?v=1")))
+        self.assertEqual(self.received("did="), [f"GET /api/v1/trust/proof?v=1&did={did}"])
+
+    def test_dot_segments_are_sent_as_written(self):
+        """curl does not remove . and .. segments: the declared path gets the
+        request, and the tests fail when it is not served."""
+        did = self.authority.examples["discovery"]["authorityDid"]
+        self.probe(LEVEL1[6:],
+                   discovery=inside("endpoints", put(trustProof="/x/../api/v1/trust/proof")))
+        self.assertEqual(self.received("?did="), [f"GET /x/../api/v1/trust/proof?did={did}"])
+
+        self.probe([T1[2], T1[8]], discovery=put(authorityDid=".."))
+        self.assertEqual(self.received("/api/v1/did/"), ["GET /api/v1/did/.."])
+
+        run, failed = self.run_scripts(url=self.authority.url + "/x/..")
+        self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+        self.assertEqual(self.authority.requests, [
+            "GET /x/../.well-known/atp",
+            "GET /x/../api/v1/transparency/trust-proofs?limit=5",
+            "GET /x/../api/v1/trust/revocations?since=2026-01-01T00:00:00Z",
+        ])
+
+    def test_authority_did_is_percent_encoded(self):
+        """The DID goes into the T1.4 path and the T1.7 query percent-encoded
+        except for ":" and "@", so a "#", "?", "/", "%" or space in it does not
+        change the request, and the proof is still for the declared DID."""
+        for did in ("did:opena2a:authority:opena2a.org#key-1",
+                    "did:opena2a:agent@opena2a.org/a?b c%d"):
+            with self.subTest(did):
+                in_url = quote(did, safe=":@")
+                self.probe([] if "#" in did else [T1[2], T1[8]], discovery=put(authorityDid=did))
+                self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{in_url}"])
+                self.assertEqual(self.received("?did="),
+                                 [f"GET /api/v1/trust/proof?did={in_url}"])
+
+    def test_pattern_in_the_authority_host_or_port_is_not_a_valid_url(self):
+        """With URL globbing off, curl rejects a brace list or bracket range in
+        the host or port: no request is sent, and every test fails."""
+        port = self.authority.server_address[1]
+        for url in (f"http://127.0.0.[1-1]:{port}", f"http://127.0.0.{{1}}:{port}",
+                    f"http://127.0.0.1:{{{port}}}"):
+            with self.subTest(url):
+                run, failed = self.run_scripts(url=url)
+                self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+                self.assertEqual(run.returncode, len(LEVEL1 + LEVEL2), run.stdout)
+                self.assertEqual(self.authority.requests, [])
+                for name in (T1[1], T2[1], T2[3]):
+                    self.assertIn(f"FAIL: {name} (the authority URL is not a valid URL)",
+                                  run.stdout)
+
+    def test_unanswered_request_fails_at_the_time_limit(self):
+        """A server that accepts the connection and never answers holds each
+        request for ATP_MAX_TIME seconds, and the failure names the limit."""
+        silent = socket.socket()
+        self.addCleanup(silent.close)
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(8)
+        start = time.monotonic()
+        run, failed = self.run_scripts(url=f"http://127.0.0.1:{silent.getsockname()[1]}",
+                                       env={"ATP_CONNECT_TIMEOUT": "5", "ATP_MAX_TIME": "1"})
+        self.assertLess(time.monotonic() - start, 60)
+        self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+        for name in (T1[1], T2[1], T2[3]):
+            self.assertIn(
+                f"FAIL: {name} (no answer within the time limit: 5 s to connect, 1 s in all)",
+                run.stdout,
+            )
 
     def test_bracketed_trust_proof_endpoint_is_one_request(self):
         """curl does not expand a pattern in endpoints.trustProof: the declared
@@ -1215,9 +1307,10 @@ class ConformanceScriptTest(unittest.TestCase):
 
     def test_bracketed_authority_did_is_one_request(self):
         did = self.authority.examples["discovery"]["authorityDid"][:-1] + "[f-g]"
+        in_url = did[:-5] + "%5Bf-g%5D"
         self.probe([T1[2], T1[8]], discovery=put(authorityDid=did))
-        self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{did}"])
-        self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={did}"])
+        self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{in_url}"])
+        self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={in_url}"])
 
     def test_braces_in_the_authority_url_are_sent_as_written(self):
         run, failed = self.run_scripts(url=self.authority.url + "/{a,b}")
@@ -1228,14 +1321,23 @@ class ConformanceScriptTest(unittest.TestCase):
             "GET /{a,b}/api/v1/trust/revocations?since=2026-01-01T00:00:00Z",
         ])
 
-    def test_every_curl_call_turns_url_globbing_off(self):
-        for script in ("level1.sh", "level2.sh"):
-            with self.subTest(script):
-                text = (CONFORMANCE / script).read_text(encoding="utf-8")
-                options = re.findall(r"^[^#\n]*\bcurl[ \t]+(\S+)", text, re.M)
-                self.assertTrue(options)
-                for option in options:
-                    self.assertRegex(option, r"^(-[A-Za-z]*g[A-Za-z]*|--globoff)$")
+    def test_every_curl_call_passes_the_shared_options(self):
+        """Every curl call turns URL globbing off, sends dot segments as written
+        and has both time limits."""
+        calls = []
+        for script in ("lib.sh", "level1.sh", "level2.sh"):
+            text = (CONFORMANCE / script).read_text(encoding="utf-8")
+            calls += re.findall(r"(?:^[ \t]*|\$\(|[;&|][ \t]*)curl[ \t]+([^\n]*)", text, re.M)
+        self.assertTrue(calls)
+        for call in calls:
+            with self.subTest(call):
+                options = call.split()
+                self.assertTrue(
+                    any(re.fullmatch(r"-[A-Za-z]*g[A-Za-z]*|--globoff", option)
+                        for option in options)
+                )
+                for option in ("--path-as-is", "--connect-timeout", "--max-time"):
+                    self.assertIn(option, options)
 
     def test_did_document_probes(self):
         self.probes([
@@ -1337,7 +1439,7 @@ class SetupErrorTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def assert_setup_error(self, conformance, path, message):
+    def assert_setup_error(self, conformance, path, message, env=None):
         for script in ("level1.sh", "level2.sh"):
             with self.subTest(script):
                 run = subprocess.run(
@@ -1345,7 +1447,7 @@ class SetupErrorTest(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     timeout=60,
-                    env={"PATH": path},
+                    env={"PATH": path, **(env or {})},
                 )
                 self.assertEqual(run.returncode, 69, run.stderr)
                 self.assertIn(message, run.stderr)
@@ -1363,6 +1465,14 @@ class SetupErrorTest(unittest.TestCase):
         copied = self.dir / "conformance"
         shutil.copytree(CONFORMANCE, copied)
         self.assert_setup_error(copied, os.environ.get("PATH", ""), "schema.json not found")
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_time_limit_that_is_not_a_number_exits_69(self):
+        for name, value in (("ATP_CONNECT_TIMEOUT", "ten"), ("ATP_MAX_TIME", "-1")):
+            with self.subTest(name):
+                self.assert_setup_error(CONFORMANCE, os.environ.get("PATH", ""),
+                                        f"error: {name} must be a number of seconds",
+                                        env={name: value})
 
 
 # Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC

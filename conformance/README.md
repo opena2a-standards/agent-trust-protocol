@@ -32,17 +32,23 @@ The test suite mirrors the three conformance levels defined in ATP-SPEC.md Secti
 ./conformance/level2.sh https://api.oa2a.org
 ```
 
-Both scripts exit with the number of failed tests as the exit code (0 = all passed). When `curl`, `jq` or a schema file is missing they exit 69 before running any test, a code no failed-test count reaches. A failed test names what is not met:
+Both scripts exit with the number of failed tests as the exit code (0 = all passed). When `curl`, `jq` or a schema file is missing, or `ATP_CONNECT_TIMEOUT` or `ATP_MAX_TIME` is not a number, they exit 69 before running any test, a code no failed-test count reaches. A failed test names what is not met:
 
 ```
 FAIL: Trust proof has all required fields (not met: verdict, issuedAt)
+```
+
+Each request has a time limit: 10 seconds to connect and 30 seconds in all. Set `ATP_CONNECT_TIMEOUT` and `ATP_MAX_TIME` to other numbers of seconds to change them. A request that reaches a limit fails its test, and the failure names the limits:
+
+```
+FAIL: Discovery endpoint returns JSON (no answer within the time limit: 10 s to connect, 30 s in all)
 ```
 
 ## Test Coverage
 
 A test that names several members checks each one on its own. "Matches the schema" means the member's value is valid against its property in the named file under `schemas/`; timestamps must be RFC 3339 (a UTC offset from 00:00 to 23:59, and nothing after the timestamp, not even a newline) and are compared as times, whatever their UTC offset.
 
-`curl` runs with URL globbing off (`-g`): it does not expand `{a,b}` or `[x-y]` in the authority URL, in `authorityDid` or in `endpoints.trustProof`, so a URL that holds one stays one URL and is not requested once per expansion.
+`curl` runs with URL globbing off (`-g`): it does not expand `{a,b}` or `[x-y]` in the authority URL, in `authorityDid` or in `endpoints.trustProof`, so a URL that holds one stays one URL and is not requested once per expansion. An authority URL with a brace list or bracket range in its host or port, such as `http://127.0.0.[1-1]:8080` or `http://127.0.0.1:{8080}`, is not a valid URL: no request is sent, every test fails, and each test that sends a request says `the authority URL is not a valid URL`. `curl` also runs with `--path-as-is`, so `.` and `..` segments in the authority URL, in `authorityDid` and in `endpoints.trustProof` are sent as written, not removed.
 
 ### Level 1: Basic Trust (14 tests)
 
@@ -51,10 +57,10 @@ A test that names several members checks each one on its own. "Matches the schem
 | T1.1 | `/.well-known/atp` returns a JSON object |
 | T1.2 | Discovery document has `authorityDid`, `version` and `endpoints`, each matching `discovery-v1.schema.json` |
 | T1.3 | `conformanceLevel` is present and matches `discovery-v1.schema.json` (an integer from 1 to 3) |
-| T1.4 | DID resolution returns a JSON document for the authority's own DID |
+| T1.4 | DID resolution returns a JSON document for the authority's own DID, requested at `/api/v1/did/` followed by the DID percent-encoded (as jq's `@uri` encodes it, except for `:` and `@`), so a `/`, `#`, `?` or space in the DID does not change the request |
 | T1.5 | DID Document has `@context`, a non-empty string or a non-empty array |
 | T1.6 | DID Document has a non-empty `verificationMethod` array |
-| T1.7 | Trust proof endpoint returns a JSON proof whose `did` is the authority DID. The request goes to `endpoints.trustProof` appended to the authority URL (`/api/v1/trust/proof` when it is absent, empty or not a string), and the test fails without a request when it is a non-empty string that does not start with `/`. The script reads the value with its NUL characters and trailing newlines removed |
+| T1.7 | Trust proof endpoint returns a JSON proof whose `did` is the authority DID. The request goes to `endpoints.trustProof` appended to the authority URL (`/api/v1/trust/proof` when it is absent, empty or not a string), with the `did` query parameter percent-encoded as in T1.4 and added after `&` when the endpoint has a query. The test fails without a request when the value is a non-empty string that does not start with `/`, or holds `#`, whitespace or a control character. The script reads the value with its NUL characters and trailing newlines removed |
 | T1.8 | Trust proof has all required fields (`did`, `trustLevel`, `trustScore`, `verdict`, `issuedAt`, `expiresAt`, `issuerDid`), each matching `trust-proof-v1.schema.json` |
 | T1.9 | Trust proof has at least one signature (`signatures` matches `trust-proof-v1.schema.json`) |
 | T1.10 | Trust proof is not expired: `expiresAt` is an RFC 3339 time later than now |
@@ -79,7 +85,7 @@ Tests T1.4 to T1.14 fail when there is nothing to check: no `authorityDid` in th
 python3 scripts/test_checks.py
 ```
 
-Runs both scripts against `scripts/fixture_authority.py`, a local authority that serves the specification's own examples, and expects all 17 tests to pass. It then removes or corrupts one member at a time (an HTML discovery body, a proof without `verdict`, an `expiresAt` of `"never"`, a log entry that is a string, a revocation `reason` in free text, and others) and expects exactly the tests that check that member to fail, and that a missing `jq` or schema file exits 69. It reads the requests the fixture authority received to check which path T1.7 requested for an `endpoints.trustProof` that is a number, ends in a newline or holds a NUL character, and that a bracketed `endpoints.trustProof` or `authorityDid` and braces in the authority URL each arrive as written, in one request. It also checks that `checks.jq` agrees with a JSON Schema validator on the specification's examples and on edits of them: each member removed, each member replaced by one of a fixed set of values (`null`, `true`, `-1`, `1.5`, `"x"`, `[]`, `{}` and a few malformed timestamps), and one extra top-level member added. Needs `bash`, `curl`, `jq` and the Python `jsonschema` package.
+Runs both scripts against `scripts/fixture_authority.py`, a local authority that serves the specification's own examples, and expects all 17 tests to pass. It then removes or corrupts one member at a time (an HTML discovery body, a proof without `verdict`, an `expiresAt` of `"never"`, a log entry that is a string, a revocation `reason` in free text, and others) and expects exactly the tests that check that member to fail, and that a missing `jq` or schema file, or a time limit that is not a number, exits 69. It reads the requests the fixture authority received to check which path T1.7 requested for an `endpoints.trustProof` that is a number, ends in a newline, holds a NUL character (with nothing printed on stderr) or has a query; that a bracketed `endpoints.trustProof` or `authorityDid` and braces in the authority URL each arrive as written, in one request; that `.` and `..` segments arrive as written; that an `authorityDid` holding `#`, `?`, `/`, `%` or a space arrives percent-encoded; and that no request is sent for an `endpoints.trustProof` holding `#`, whitespace or a control character, or for an authority URL with a pattern in its host or port. A local server that accepts connections and never answers checks that each request stops at `ATP_MAX_TIME`. It also checks that `checks.jq` agrees with a JSON Schema validator on the specification's examples and on edits of them: each member removed, each member replaced by one of a fixed set of values (`null`, `true`, `-1`, `1.5`, `"x"`, `[]`, `{}` and a few malformed timestamps), and one extra top-level member added. Needs `bash`, `curl`, `jq` and the Python `jsonschema` package.
 
 ## Adding Tests
 
@@ -91,6 +97,14 @@ test_case "Description of what is being tested" "$?"
 ```
 
 `check BODY FILTER` passes when `BODY` is one JSON value and every condition in the object `FILTER` returns is true; it sets the detail `test_case` prints on failure. Filters can use the definitions in `checks.jq` (`members_ok`, `schema_ok`, `rfc3339`, `is_time`, `type_ok`) and the schemas as `$discovery_schema`, `$proof_schema` and `$revocation_schema`. The second argument to `test_case` is the exit code of the check (0 = pass, non-zero = fail).
+
+A test that sends a request does so with `fetch NAME URL [curl options]` from `lib.sh`, which passes the `curl` options every request needs, sets `NAME` to the body, and fails with a named reason when the URL is not valid or the request reaches a time limit:
+
+```bash
+fetch LOG "$BASE_URL/api/v1/transparency/trust-proofs?limit=5" &&
+  check "$LOG" '{"body is a JSON array or object": (type == "array" or type == "object")}'
+test_case "Transparency log endpoint returns data" "$?"
+```
 
 ## CI Integration
 
