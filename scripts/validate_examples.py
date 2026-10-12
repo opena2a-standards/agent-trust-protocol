@@ -361,11 +361,14 @@ SIGSTORE_HEADING = "#### 4.3.1 Sigstore co-signature"
 
 def sigstore_example() -> dict:
     """The Section 4.3.1 example: the Section 4.2 proof with a Sigstore
-    co-signature added to its signatures. A block that is not JSON, or not an
-    object with a signatures list, raises SourceUnusable: the examples map
-    validates the block against the trust-proof schema, which reports it."""
+    co-signature added to its signatures. A specification without the heading
+    or its ```json block, and a block that is not JSON or not an object with a
+    signatures list, raises SourceUnusable: the examples map reads the block
+    and validates it against the trust-proof schema, which reports each."""
     try:
         proof = json.loads(extract_block(ROOT / "ATP-SPEC.md", SIGSTORE_HEADING))
+    except NoExample as exc:
+        raise SourceUnusable(f"ATP-SPEC.md: {exc}") from None
     except json.JSONDecodeError:
         raise SourceUnusable(f"the {SIGSTORE_HEADING!r} example is not JSON") from None
     if not isinstance(proof, dict) or not isinstance(proof.get("signatures"), list):
@@ -494,9 +497,9 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     hashedrekord entry with an inclusion proof) or with a value as well. A
     bundle may hold log entries of other kinds beside that hashedrekord entry.
     Section 4.4 step 4: it refuses a proof with no Ed25519 entry, one whose
-    only signatures are co-signatures or an ML-DSA-65 entry. A specification
-    without the Section 4.3.1 heading or its ```json block is one error.
-    Raises SourceUnusable when sigstore_example() does, and when the example's
+    only signatures are co-signatures or an ML-DSA-65 entry. Raises
+    SourceUnusable when sigstore_example() does, as for a specification
+    without the Section 4.3.1 heading or its ```json block, and when the example's
     Sigstore entry lacks a member the probes edit and the schema refuses the
     example: the examples map reports that example. An entry the schema admits
     that lacks one is an error here, as nothing else reports it."""
@@ -505,10 +508,7 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
             (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
         )
     validator = Draft202012Validator(schema)
-    try:
-        proof = sigstore_example()
-    except NoExample as exc:
-        return [f"ATP-SPEC.md: {exc}"]
+    proof = sigstore_example()
     signatures = proof["signatures"]
     position = next(
         (
@@ -857,18 +857,19 @@ def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
 # Repositories an anonymous reader cannot open: GitHub answers 404 for them.
 NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
 # The name follows an address of the repository: `github.com/`, `github.com:`
-# in the SSH form, a port allowed after the host; `api.github.com/repos/`;
-# `raw.githubusercontent.com/`, with `wiki/` for the wiki's files;
-# `github.dev/`, the web editor; or a `gh repo` command. The host starts the
-# line or follows a character that is neither a word character nor `-`, so
-# `notgithub.com` is another host. The name may carry `.wiki` (the
-# repository's wiki) and `.git` and may end a sentence; any other dot followed
-# by a word character continues it into another repository's name.
+# in the SSH form; `api.github.com/repos/`; `raw.githubusercontent.com/`, with
+# `wiki/` for the wiki's files; `github.dev/` or `vscode.dev/github/`, the web
+# editors; or a `gh repo` command. A port may follow each of these hosts.
+# The host starts the line or follows a character that is neither a word
+# character nor `-`, so `notgithub.com` is another host. The name may carry
+# `.wiki` (the repository's wiki) and `.git` and may end a sentence; any other
+# dot followed by a word character continues it into another repository's name.
 REPOSITORY_ADDRESS = (
     r"api\.github\.com(?::\d+)?/repos/",
     r"raw\.githubusercontent\.com(?::\d+)?/(?:wiki/)?",
     r"github\.com(?::\d+)?[/:]",
-    r"github\.dev/",
+    r"github\.dev(?::\d+)?/",
+    r"vscode\.dev(?::\d+)?/github/",
     r"gh\s+repo\s+[a-z-]+\s+",
 )
 NOT_PUBLIC_NAME = (
@@ -1214,16 +1215,21 @@ def local_registry() -> Registry:
 
 
 class NoExample(Exception):
-    """The heading is not in the file, or no closed ```json block follows it
-    before the next heading. The message names the heading and not the file;
-    the check that reads the heading reports it as one failure and names the
-    file as the examples map does, not by its path on disk."""
+    """The file is not UTF-8, the heading is not in it, or no closed ```json
+    block follows the heading before the next heading. The message names the
+    heading, or the decoding error, and not the file; the check that reads the
+    heading reports it as one failure and names the file as the examples map
+    does, not by its path on disk."""
 
 
 def extract_block(md_path: pathlib.Path, heading: str) -> str:
     """The text of the first ```json block between the heading and the next
-    heading. Raises NoExample when there is no such heading or block."""
-    lines = md_path.read_text(encoding="utf-8").splitlines()
+    heading. Raises NoExample when the file is not UTF-8 or there is no such
+    heading or block."""
+    try:
+        lines = md_path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise NoExample(f"not UTF-8: {exc}") from None
     try:
         start = next(i for i, line in enumerate(lines) if line.strip() == heading)
     except StopIteration:
@@ -1365,7 +1371,7 @@ def main() -> int:
             entry["file"] == "ATP-SPEC.md" and entry.get("heading") == SIGSTORE_HEADING
             for entry in entries
         ):
-            # The examples map validates the block, so it fails there, once.
+            # The examples map reads and validates the block, so it fails there, once.
             print(
                 "cosign SKIP    schemas/trust-proof-v1.schema.json vs Section 4.3.1: "
                 f"not compared, {exc}"
@@ -1526,7 +1532,12 @@ def main() -> int:
                 print(f"    {label}: missing; schemas/examples-map.json maps it to {entry['schema']}")
                 failures += 1
                 continue
-            raw = source.read_text(encoding="utf-8")
+            try:
+                raw = source.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                print(f"example FAIL   {label}: not UTF-8: {exc}")
+                failures += 1
+                continue
         else:
             label = f"{entry['file']} @ {heading!r}"
             try:

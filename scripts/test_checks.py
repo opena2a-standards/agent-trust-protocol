@@ -4,7 +4,8 @@ specification claim, revocation schema, Sigstore co-signature, threat model,
 signed timestamp, ATX status, fixture coverage, A2A agent card path and
 Verifiable Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
-jq), the registry generation and --check mode of gen_registries.py, and the
+jq), the error fixture_authority.py stops with when it cannot read an example
+it serves, the registry generation and --check mode of gen_registries.py, and the
 test-suite sentences of the .pre-push-review-not-required marker. Run:
 python3 scripts/test_checks.py
 """
@@ -324,6 +325,28 @@ class ReferenceImplementationTest(unittest.TestCase):
             "See https://github.dev/opena2a-org/opena2a-registry-web.\n",
             "See https://notgithub.dev/opena2a-org/opena2a-registry.\n",
             "See https://my-github.dev/opena2a-org/opena2a-registry.\n",
+        ):
+            with self.subTest(other=other):
+                self.assertEqual(validate_examples.unpublished_link_errors(other, "README.md"), [])
+
+    def test_vscode_dev_and_web_editor_port_forms_of_the_link_fail(self):
+        for text in (
+            "See https://vscode.dev/github/opena2a-org/opena2a-registry.\n",
+            "Open vscode.dev/github/opena2a-org/opena2a-registry/blob/main/README.md\n",
+            "See https://vscode.dev:443/github/opena2a-org/opena2a-registry\n",
+            "See https://github.dev:443/opena2a-org/opena2a-registry\n",
+            "See HTTPS://VSCode.dev/GitHub/OpenA2A-org/OpenA2A-Registry\n",
+        ):
+            with self.subTest(text=text):
+                errors = validate_examples.unpublished_link_errors(text, "README.md")
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("links to github.com/opena2a-org/opena2a-registry, which", errors[0].lower())
+        for other in (
+            "See https://vscode.dev/github/opena2a-org/opena2a-registry-web.\n",
+            "See https://github.dev:443/opena2a-org/opena2a-registry-web\n",
+            "See https://notvscode.dev/github/opena2a-org/opena2a-registry.\n",
+            "See https://my-vscode.dev/github/opena2a-org/opena2a-registry.\n",
+            "See https://vscode.dev/opena2a-org/opena2a-registry.\n",
         ):
             with self.subTest(other=other):
                 self.assertEqual(validate_examples.unpublished_link_errors(other, "README.md"), [])
@@ -1903,6 +1926,46 @@ class SetupErrorTest(unittest.TestCase):
                 self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
 
 
+class FixtureAuthorityTest(unittest.TestCase):
+    """fixture_authority.py serves examples it reads from ATP-SPEC.md. A
+    specification without one of their headings, or that is not UTF-8, stops
+    it with one error line that names the file and the heading or the decoding
+    error, not a traceback."""
+
+    def run_authority(self, spec: bytes):
+        """Run fixture_authority.py on a free port, in a copy of the scripts
+        beside an ATP-SPEC.md that holds spec."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(SCRIPTS, root / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+            (root / "ATP-SPEC.md").write_bytes(spec)
+            return subprocess.run(
+                [sys.executable, "-B", str(root / "scripts" / "fixture_authority.py"), "0"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+    def test_heading_that_is_not_in_the_spec_is_one_error_line(self):
+        spec = (ROOT / "ATP-SPEC.md").read_bytes()
+        for heading in fixture_authority.EXAMPLES.values():
+            line = f"\n{heading}\n".encode("utf-8")
+            self.assertEqual(spec.count(line), 1, heading)
+            with self.subTest(heading=heading):
+                run = self.run_authority(spec.replace(line, f"\n{heading}s\n".encode("utf-8")))
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(run.stderr, f"error: ATP-SPEC.md: heading {heading!r} not found\n")
+                self.assertEqual(run.stdout, "")
+
+    def test_spec_that_is_not_utf8_is_one_error_line(self):
+        run = self.run_authority(b"\xe9" + (ROOT / "ATP-SPEC.md").read_bytes())
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertEqual(len(run.stderr.splitlines()), 1, run.stderr)
+        self.assertTrue(run.stderr.startswith("error: ATP-SPEC.md: not UTF-8: "), run.stderr)
+        self.assertIn("can't decode byte 0xe9", run.stderr)
+        self.assertEqual(run.stdout, "")
+
+
 # Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
 # offset bounded by number), so the agreement tests can catch a mistake in either.
 RFC3339 = re.compile(
@@ -2795,28 +2858,63 @@ class InputFileTest(unittest.TestCase):
                 self.assertIn("example OK     examples/atx-vc-example.json", lines)
                 self.assertEqual(lines[-1], "1 failure(s)")
 
-    def test_section_4_3_1_heading_that_is_not_in_the_spec_fails_both_checks_that_read_it(self):
-        heading = validate_examples.SIGSTORE_HEADING
+    def test_mapped_file_that_is_not_utf8_is_one_failure(self):
+        """A mapped file that is not UTF-8, with or without a heading, is one
+        counted failure line, as a heading that is not in its file is."""
+        def json_file(root):
+            path = root / "examples" / "atx-vc-example.json"
+            path.write_bytes(b"\xe9" + path.read_bytes())
 
-        def damage(root):
+        def markdown_file(root, entries):
+            # The heading and its block are there; the byte after them is not UTF-8.
+            (root / "NOTES.md").write_bytes(b"## A\n\n```json\n{}\n```\n\xe9\n")
+            entries.insert(0, {"file": "NOTES.md", "heading": "## A",
+                               "schema": "schemas/discovery-v1.schema.json"})
+
+        for name, damage in (
+            ("examples/atx-vc-example.json", json_file),
+            ("NOTES.md", self.edit_map(markdown_file)),
+        ):
+            with self.subTest(name=name):
+                code, lines, failed = self.run_main(damage)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(f"example FAIL   {name}: not UTF-8: "), failed[0])
+                self.assertIn("can't decode byte 0xe9", failed[0])
+                self.assertIn("example OK     ATP-SPEC.md @ '### 4.2 Trust Proof Format'", lines)
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_section_4_3_1_heading_that_is_not_in_the_spec_is_one_failure(self):
+        """The examples map reports the heading, so the co-signature check is not
+        compared; when the map does not list it, the co-signature check fails on it."""
+        heading = validate_examples.SIGSTORE_HEADING
+        not_found = f"ATP-SPEC.md: heading {heading!r} not found"
+
+        def renamed(root, entries):
             spec = (root / "ATP-SPEC.md").read_text(encoding="utf-8")
             self.assertEqual(spec.count(f"\n{heading}\n"), 1)
             (root / "ATP-SPEC.md").write_text(
                 spec.replace(f"\n{heading}\n", f"\n{heading} entry\n"), encoding="utf-8"
             )
 
-        code, lines, failed = self.run_main(damage)
-        self.assertEqual(code, 1)
-        self.assertEqual(
-            failed,
-            [
-                "cosign FAIL    schemas/trust-proof-v1.schema.json vs Section 4.3.1",
-                f"example FAIL   ATP-SPEC.md: heading {heading!r} not found",
-            ],
-            lines,
-        )
-        self.assertIn(f"    ATP-SPEC.md: heading {heading!r} not found", lines)
-        self.assertEqual(lines[-1], "2 failure(s)")
+        def renamed_and_unmapped(root, entries):
+            renamed(root, entries)
+            kept = [entry for entry in entries if entry.get("heading") != heading]
+            self.assertEqual(len(kept), len(entries) - 1)
+            entries[:] = kept
+
+        cosign = "schemas/trust-proof-v1.schema.json vs Section 4.3.1"
+        for edit, failure, reported in (
+            (renamed, f"example FAIL   {not_found}", f"cosign SKIP    {cosign}: not compared, {not_found}"),
+            (renamed_and_unmapped, f"cosign FAIL    {cosign}", f"    {not_found}"),
+        ):
+            with self.subTest(edit=edit.__name__):
+                code, lines, failed = self.run_main(self.edit_map(edit))
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [failure], lines)
+                self.assertIn(reported, lines)
+                self.assertEqual([line for line in lines if line.startswith("cosign OK")], [])
+                self.assertEqual(lines[-1], "1 failure(s)")
 
     def test_map_entry_naming_a_file_that_is_not_there_is_one_failure(self):
         for member, value in (("schema", "schemas/absent-v1.schema.json"), ("file", "ABSENT.md")):

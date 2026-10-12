@@ -483,6 +483,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   setup error is one line, that a co-signature check it does not compare prints no
   `cosign OK` line, and that the schema's `ed25519Signature` is `keySignature` with
   `algorithm` fixed to Ed25519.
+- `scripts/fixture_authority.py` printed a traceback when `ATP-SPEC.md` lacked a heading of
+  an example it serves; it now exits 1 with one `error:` line that names the heading, and
+  with one line that names the decoding error when `ATP-SPEC.md` is not UTF-8. A file named
+  in `schemas/examples-map.json` that is not UTF-8, with or without a heading, ended
+  `scripts/validate_examples.py` with a traceback; it is now one counted `example FAIL`
+  line, and the other entries are still validated. A Section 4.3.1 heading missing from the
+  specification counted as two failures, one from the examples map and one from the
+  co-signature check; when the map lists the heading, the co-signature check now reports it
+  as not compared, and when the map does not, the co-signature check fails on it, so the
+  run counts it once. The link check also reports the `vscode.dev/github/` address of a
+  repository that is not public, and a `github.dev` address with a port.
+  `scripts/test_checks.py` covers each case.
 
 ## [1.0.0-rc1] - 2026-04-28
 
