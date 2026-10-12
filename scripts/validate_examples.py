@@ -39,6 +39,10 @@ link to no repository an anonymous reader cannot open, and every Appendix A row
 maps its component to a public endpoint of the reference authority (an `/api/` or
 `/.well-known/` path) instead of a source file.
 
+A sentence of ATP-SPEC.md saying "Section N shows `field` in its example" names
+only members of that section's JSON example, and every media type Section 11
+names is the Content-Type of a request or response elsewhere in the spec.
+
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
@@ -292,6 +296,17 @@ def unit_sentences(unit):
         yield unit[bisect_right(starts, begin) - 1][0], sentence
 
 
+def join_unit(unit: list[tuple[int, str]]) -> tuple[str, list[int]]:
+    """A unit's lines joined by single spaces, and the offset of each line in
+    the joined text, so a match maps back to the line it starts on."""
+    starts, parts, offset = [], [], 0
+    for _, line in unit:
+        starts.append(offset)
+        parts.append(line.strip())
+        offset += len(parts[-1]) + 1
+    return " ".join(parts), starts
+
+
 def readme_signing_errors(text: str) -> list[str]:
     """Section 4.3: Ed25519 MUST, hybrid Ed25519 + ML-DSA-65 SHOULD. A README
     sentence naming ML-DSA-65 without hybrid mode reads as a mandatory second
@@ -478,6 +493,85 @@ def reference_endpoint_errors(text: str) -> list[str]:
     return errors
 
 
+SHOWN_IN_EXAMPLE = re.compile(r"Section (\d+(?:\.\d+)+) shows (.+?) in its example")
+CODE_SPAN = re.compile(r"`([^`]+)`")
+
+
+def section_example(text: str, section: str):
+    """The first ```json block between the heading numbered `section` and the
+    next heading, parsed; None when there is no such block or it is not JSON."""
+    heading = re.compile(r"#{2,6} " + re.escape(section) + r"\s")
+    found, block = False, None
+    for _, line, kind in markdown_lines(text):
+        if kind == "prose" and line.startswith("#"):
+            if found:
+                return None
+            found = bool(heading.match(line))
+        elif found and kind == "fence":
+            if block is not None:
+                try:
+                    return json.loads("\n".join(block))
+                except json.JSONDecodeError:
+                    return None
+            if line.strip() == "```json":
+                block = []
+        elif found and kind == "code" and block is not None:
+            block.append(line)
+    return None
+
+
+def example_claim_errors(text: str) -> list[str]:
+    """A sentence saying "Section N shows `field` in its example" names only
+    top-level members of that section's JSON example (the Section 4.6 note
+    once said Section 4.2 shows `scanSummary`, which its example omits)."""
+    errors = []
+    for unit in readme_units(text):
+        joined, starts = join_unit(unit)
+        for match in SHOWN_IN_EXAMPLE.finditer(joined):
+            lineno = unit[bisect_right(starts, match.start()) - 1][0]
+            section = match.group(1)
+            example = section_example(text, section)
+            if not isinstance(example, dict):
+                errors.append(f"ATP-SPEC.md:{lineno}: Section {section} has no JSON object example")
+                continue
+            errors.extend(
+                f"ATP-SPEC.md:{lineno}: says Section {section} shows `{field}` in its "
+                "example, which has no such member"
+                for field in CODE_SPAN.findall(match.group(2))
+                if field not in example
+            )
+    return errors
+
+
+IANA = "## 11. IANA Considerations"
+MEDIA_TYPE = re.compile(r"`(application/[A-Za-z0-9.+-]+)`")
+CONTENT_TYPE = re.compile(r"Content-Type:\s*(application/[A-Za-z0-9.+-]+)", re.IGNORECASE)
+
+
+def media_type_errors(text: str) -> list[str]:
+    """Section 11 names only media types the spec uses: each one is the
+    `Content-Type` of a request or response in another section (it once
+    defined `application/atp+json`, which nothing served or sent)."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == IANA)
+    except StopIteration:
+        return [f"ATP-SPEC.md: heading {IANA!r} not found"]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    used = {
+        media.lower()
+        for line in lines[:start] + lines[end:]
+        for media in CONTENT_TYPE.findall(line)
+    }
+    return [
+        f"ATP-SPEC.md:{number} Section 11 names media type {media!r}, which no "
+        "Content-Type in the specification carries"
+        for number in range(start + 1, end + 1)
+        for media in MEDIA_TYPE.findall(lines[number - 1])
+        if media.lower() not in used
+    ]
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -606,6 +700,15 @@ def main() -> int:
         failures += 1
     else:
         print("reference OK   README.md and ATP-SPEC.md vs Appendix A")
+
+    claim_errors = example_claim_errors(spec) + media_type_errors(spec)
+    if claim_errors:
+        print("claims FAIL    ATP-SPEC.md example claims and Section 11 vs the specification")
+        for err in claim_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("claims OK      ATP-SPEC.md example claims and Section 11 vs the specification")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []

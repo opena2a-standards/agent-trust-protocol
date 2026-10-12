@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-revocation schema, ATX status and fixture coverage checks in
-validate_examples.py, the conformance scripts (run against fixture_authority.py;
-needs bash, curl and jq), the registry generation and --check mode of
-gen_registries.py, and the test-suite sentences of the
+specification claim, revocation schema, ATX status and fixture coverage checks
+in validate_examples.py, the conformance scripts (run against
+fixture_authority.py; needs bash, curl and jq), the registry generation and
+--check mode of gen_registries.py, and the test-suite sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
@@ -192,6 +192,92 @@ class ReferenceImplementationTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("reference FAIL", out.getvalue())
         self.assertIn("row names a file", out.getvalue())
+
+
+class SpecClaimsTest(unittest.TestCase):
+    SPEC = (
+        "### 4.2 Trust Proof Format\n"
+        "\n"
+        "```json\n"
+        '{"did": "did:opena2a:agent:x", "transparencyLogIndex": 42}\n'
+        "```\n"
+        "\n"
+        "### 4.6 Agent Trust eXtension (ATX)\n"
+        "\n"
+        "{note}\n"
+        "\n"
+        "### 4.5 Proof Retrieval\n"
+        "\n"
+        "```\n"
+        "POST /api/v1/trust/verify\n"
+        "Content-Type: application/json\n"
+        "```\n"
+        "\n"
+        "## 11. IANA Considerations\n"
+        "\n"
+        "{iana}\n"
+        "\n"
+        "## 12. References\n"
+    )
+    NOTE = "Note: Section 4.2 shows `transparencyLogIndex` in its example payload."
+    IANA = "- **Media Type:** none. A trust proof is `application/json`."
+
+    def spec(self, note=NOTE, iana=IANA):
+        return self.SPEC.replace("{note}", note).replace("{iana}", iana)
+
+    def test_repository_spec_passes(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.example_claim_errors(spec), [])
+        self.assertEqual(validate_examples.media_type_errors(spec), [])
+
+    def test_repository_section_4_2_example_omits_scan_summary(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        example = validate_examples.section_example(spec, "4.2")
+        self.assertIn("transparencyLogIndex", example)
+        self.assertNotIn("scanSummary", example)
+
+    def test_member_the_example_shows_passes(self):
+        self.assertEqual(validate_examples.example_claim_errors(self.spec()), [])
+
+    def test_member_the_example_omits_fails(self):
+        note = (
+            "Note: Section 4.2 shows `scanSummary` and\n"
+            "`transparencyLogIndex` in its example payload."
+        )
+        errors = validate_examples.example_claim_errors(self.spec(note=note))
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:9: "), errors[0])
+        self.assertIn("`scanSummary`", errors[0])
+
+    def test_section_without_json_example_fails(self):
+        note = "Note: Section 4.5 shows `trustLevel` in its example."
+        errors = validate_examples.example_claim_errors(self.spec(note=note))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Section 4.5 has no JSON object example", errors[0])
+
+    def test_media_type_the_spec_carries_passes(self):
+        self.assertEqual(validate_examples.media_type_errors(self.spec()), [])
+
+    def test_media_type_nothing_carries_fails(self):
+        iana = "- **Media Type:** `application/atp+json` — ATP trust proof format"
+        errors = validate_examples.media_type_errors(self.spec(iana=iana))
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:20 "), errors[0])
+        self.assertIn("application/atp+json", errors[0])
+
+    def test_missing_iana_section_fails(self):
+        errors = validate_examples.media_type_errors("## 12. References\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("not found", errors[0])
+
+    def test_main_fails_on_claim_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "media_type_errors", return_value=["type unused"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("claims FAIL", out.getvalue())
+        self.assertIn("type unused", out.getvalue())
 
 
 class RevocationIndexTest(unittest.TestCase):

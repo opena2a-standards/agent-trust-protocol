@@ -387,7 +387,7 @@ The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the c
 | scanSummary | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | HackMyAgent and equivalent scanner results at issuance time. |
 | declaredPurpose | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Optional structured declaration of what the agent is *for* (category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). Identity/attestation claim and an offline detection signal only — never an authorization input. When present it is covered by the v1.1 signed payload. See [`atx-spec` core.md §1.5](https://github.com/opena2a-org/atx-spec). |
 
-Note: Section 4.2 shows `scanSummary` and `transparencyLogIndex` in its example payload. These are illustrative fields, not enumerated as part of the canonical form. ATX signs `scanSummary` inside its v1.1 TBS so that its shape and semantics can be standardized.
+Note: Section 4.2 shows `transparencyLogIndex` in its example payload; it is not one of the seven fields the Section 4.3 canonical form covers. `scanSummary` is not in that example: it is an ATX v1.1 claim, and ATX signs it inside its v1.1 TBS so that its shape and semantics can be standardized.
 
 #### Reference Example
 
@@ -791,8 +791,11 @@ reference verifiers require, ratified here as normative: endpoint key
 `transparencySth` (not `transparencySTH`), key material as `publicKeyHex`
 (raw lowercase hex) with per-key `status` and `validFrom`, fragment-qualified
 full-DID `keyId` values, and `supportedMethods` naming the `did:opena2a`
-method. The suite's `discovery-valid` fixture additionally carries an
-ML-DSA-65 key entry (~2.6 KB hex), omitted here for readability. The
+method. The example above is illustrative, not the suite's `discovery-valid`
+fixture bytes: the fixture declares `conformanceLevel` 2 and four
+`capabilities`, has no `federation` endpoint and no `federationPeers`, and
+carries a second key, an ML-DSA-65 entry whose `publicKeyHex` is 3,904 hex
+characters (the 1,952-byte FIPS 204 public key). The
 machine-readable shape is
 [`schemas/discovery-v1.schema.json`](./schemas/discovery-v1.schema.json);
 required members are `authorityDid`, `version`, `endpoints`, `publicKeys`.
@@ -918,9 +921,13 @@ reason.
 | `manual` | An operator of the issuing authority revoked outside the automated triggers | 1.1.0 |
 | `expiry_reissuance_failed` | The proof or credential expired and its reissuance failed | 1.1.0 |
 
-The codes other than `unspecified` are the revocation triggers of atx-spec core.md Section
-3.3, so a trust-proof revocation and an ATX revocation for the same trigger carry the same
-bytes.
+Each code other than `unspecified` names one revocation trigger of atx-spec core.md Section
+3.3: `content_hash_violation` for CONTENT_HASH_VIOLATION, `manual` for manual revocation,
+`security_incident` for a security incident, and `expiry_reissuance_failed` for ATX expiry
+with failed reissuance. That section names the triggers and spells no codes; this table is
+where the codes are spelled. The `reason` of an `atx_revoked` entry is a code from this
+table (Section 5.1.1), so a trust-proof revocation and an ATX revocation for the same
+trigger carry the same bytes.
 
 ### 8.2 Key Revocation
 
@@ -1002,7 +1009,9 @@ This specification defines:
 
 - **DID Method:** `did:opena2a` — Decentralized Identifier method for catalogued agent-ecosystem resources (registered in the did-method-opena2a specification; `did:atp` was the pre-rc1 name)
 - **Well-Known URI:** `/.well-known/atp` — Trust authority discovery
-- **Media Type:** `application/atp+json` — ATP trust proof format
+- **Media Type:** none. A trust proof is served and posted as `application/json` (Section
+  4.5), the type the reference authority uses; this revision registers no ATP-specific
+  media type.
 
 ---
 

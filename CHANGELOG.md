@@ -67,7 +67,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `schemas/discovery-v1.schema.json`: machine-readable JSON Schemas
   (draft 2020-12) for the three fixture-backed ATP wire structures, derived
   from §4.2/§5.6/§7.1 with the atp-conformance fixtures as ground truth (all
-  seven fixture payloads validate).
+  eight fixture payloads validate: six trust proofs, `discovery-valid` and
+  `transparency-log-sth`).
 - `scripts/validate_examples.py` + `schemas/examples-map.json` + CI workflow:
   schemas metaschema-checked and the §4.2/§5.6/§7.1 examples validated on
   every push/PR.
@@ -131,10 +132,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   private-use grammar; `registries/revocation-reasons.json` is generated from the table, and
   `scripts/validate_examples.py` fails when the schema's codes and the table differ or the
   schema accepts free text. Section 2.1 lists reason codes as not yet fixture-covered.
-- §4.2/§5.6/§7.1 example blocks now carry conformance-fixture bytes (artifacts
+- §4.2/§5.6 example blocks now carry conformance-fixture bytes (artifacts
   that verify against the reference verifiers) instead of placeholders; the
   Proposed v1.1 fields (`slsaLevel`, `scanSummary`) moved out of the §4.2
-  example, which now shows exactly the rc1 canonical-form-covered shape.
+  example, which now shows the seven rc1 canonical-form fields, `signatures`
+  and `transparencyLogIndex`. The §7.1 example is illustrative: it differs
+  from the `discovery-valid` fixture in `conformanceLevel` (3 against 2),
+  `capabilities` (6 against 4), the `federation` endpoint and `federationPeers`
+  (the fixture has neither) and its keys (1 against 2), and §7.1 says so.
 - §3.1/§3.4 examples and §11: `a2a_agent` example tokens replaced with the
   registered `agent` type (`a2a_agent` documented as a deprecated legacy
   alias); the type list now defers to the did-method-opena2a registry; the two
@@ -225,6 +230,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   request received on 2026-10-11 (the transparency-log endpoints answer 404 and federation
   sync 401). `scripts/validate_examples.py` fails on a link to a repository listed as not
   public and on an Appendix A row that names no `/api/` or `/.well-known/` endpoint.
+- Statements that did not match the files they describe. The Section 4.6 note said the
+  Section 4.2 example shows `scanSummary`; it shows `transparencyLogIndex` only. Section 7.1
+  gave the `discovery-valid` fixture's ML-DSA-65 key as "~2.6 KB hex" and implied it was the
+  example's only difference; the key is 3,904 hex characters (1,952 bytes) and Section 7.1
+  now lists every difference. Section 8.1.1 said its codes are the atx-spec Section 3.3
+  triggers; that section names the triggers in prose, so Section 8.1.1 now maps each code to
+  its trigger and says the shared bytes come from the `atx_revoked` entry's `reason` being a
+  Section 8.1.1 code. Section 11 defined `application/atp+json`, which nothing serves or
+  sends; it now registers no media type and names `application/json`. Two entries above
+  are corrected: the §7.1 example is not fixture bytes, and eight fixture payloads validate,
+  not seven. `scripts/validate_examples.py` fails when a sentence says a section's example
+  shows a member it lacks, or Section 11 names a media type no `Content-Type` carries.
 
 ## [1.0.0-rc1] - 2026-04-28
 
