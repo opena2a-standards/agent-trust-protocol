@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://specs.opena2a.org/schemas/atp/revocation-list-v1.schema.json",
   "title": "ATP trust-proof revocation response (section 8.1)",
-  "description": "Structural schema for the section 8.1 revocation response, derived from that section's pinned body with the atp-conformance revocation-list-valid fixture as ground truth. The body is not signed: authenticity rides on the transport and each entry's transparencyLogIndex anchoring the revocation in the section 5 log. Timestamp formats are annotations here; the reference verifiers enforce RFC 3339 parsing and reject the whole response on a malformed timestamp. `reason` is a section 8.1.1 code, never free text: a registered code or a private-use `x-` code. The constraint binds the authority; a client applies an entry whatever its reason and processes a code it does not recognise as `unspecified`.",
+  "description": "Structural schema for the section 8.1 revocation response, derived from that section's pinned body with the atp-conformance revocation-list-valid fixture as ground truth. The body is not signed: authenticity rides on the transport and, for an entry that carries one, its transparencyLogIndex anchoring the revocation in the section 5 log. `transparencyLogIndex` is OPTIONAL: it is the log index of the revocation's own trust_proof_revoked or atx_revoked entry, an authority that logged a trust proof or credential for the agent carries it, and an entry without it revokes an agent the authority logged nothing for. A client applies an entry with or without it and never requires an inclusion proof for an entry without it. Timestamp formats are annotations here; the reference verifiers enforce RFC 3339 parsing and reject the whole response on a malformed timestamp. `reason` is a section 8.1.1 code, never free text: a registered code or a private-use `x-` code. The constraint binds the authority; a client applies an entry whatever its reason and processes a code it does not recognise as `unspecified`.",
   "type": "object",
   "required": ["revocations", "nextSince"],
   "properties": {
@@ -10,7 +10,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["agentDid", "revokedAt", "reason", "transparencyLogIndex", "revokedByKeyId"],
+        "required": ["agentDid", "revokedAt", "reason", "revokedByKeyId"],
         "properties": {
           "agentDid": {
             "type": "string",

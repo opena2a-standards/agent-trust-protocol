@@ -21,6 +21,10 @@ step 5, the Section 10.2 24-hour maximum).
 The revocation schema's `reason` is checked against the Section 8.1.1 registry:
 its codes are the table's, and free text is refused.
 
+The revocation schema admits an entry without `transparencyLogIndex` (Section
+8.1: an identity revoked before the authority logged anything for it), refuses
+an index that is not an integer >= 0, and requires every other entry member.
+
 Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
@@ -122,6 +126,45 @@ def revocation_reason_errors() -> list[str]:
         errors.append(
             f"schema codes {sorted(codes)} differ from the Section 8.1.1 table {sorted(registered)}"
         )
+    return errors
+
+
+# Section 8.1: an entry for an agent the authority logged nothing for. It has
+# no transparencyLogIndex and is still a revocation every client applies.
+UNLOGGED_REVOCATION = {
+    "agentDid": "did:opena2a:agent:revoked_before_first_proof",
+    "revokedAt": "2026-03-22T15:00:00Z",
+    "reason": "security_incident",
+    "revokedByKeyId": "did:opena2a:authority:opena2a.org#key-v3",
+}
+
+
+def revocation_index_errors(schema: dict | None = None) -> list[str]:
+    """Section 8.1: `transparencyLogIndex` is OPTIONAL per entry. A schema that
+    refused an entry without it would have a client drop the revocation and
+    keep the agent trusted. When present it is a log index, and the other
+    entry members stay required."""
+    if schema is None:
+        schema = json.loads(
+            (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8")
+        )
+    validator = Draft202012Validator(schema)
+
+    def accepts(entry: dict) -> bool:
+        return validator.is_valid({"revocations": [entry], "nextSince": "2026-03-22T15:00:00Z"})
+
+    errors = []
+    if not accepts(UNLOGGED_REVOCATION):
+        errors.append("an entry without transparencyLogIndex is refused; Section 8.1 makes it OPTIONAL")
+    for index in (0, 1847300):
+        if not accepts({**UNLOGGED_REVOCATION, "transparencyLogIndex": index}):
+            errors.append(f"an entry with transparencyLogIndex {index} is refused")
+    for index in (-1, 1.5, "1847300", None):
+        if accepts({**UNLOGGED_REVOCATION, "transparencyLogIndex": index}):
+            errors.append(f"transparencyLogIndex {index!r} is accepted; it is an integer >= 0")
+    for member in UNLOGGED_REVOCATION:
+        if accepts({k: v for k, v in UNLOGGED_REVOCATION.items() if k != member}):
+            errors.append(f"an entry without {member} is accepted; Section 8.1 requires it")
     return errors
 
 
@@ -285,6 +328,15 @@ def main() -> int:
         failures += 1
     else:
         print("reasons OK     schemas/revocation-list-v1.schema.json vs Section 8.1.1")
+
+    index_errors = revocation_index_errors()
+    if index_errors:
+        print("index FAIL     schemas/revocation-list-v1.schema.json vs Section 8.1")
+        for err in index_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     discovery_errors = discovery_path_errors(readme)

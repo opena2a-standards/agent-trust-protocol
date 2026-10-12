@@ -44,6 +44,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 8.1: `transparencyLogIndex` is OPTIONAL per revocation entry; it was REQUIRED, so
+  an authority revoking an agent it had logged nothing for (registered and revoked before
+  its first proof) had to fabricate an index or omit the revocation, and omitting it kept
+  the agent trusted at every verifier. The index is the log index of the revocation's own
+  `trust_proof_revoked` or `atx_revoked` entry; an authority that logged a trust proof or
+  credential for the agent MUST log the revocation and carry the index, so an entry without
+  it revokes an agent with nothing logged. A client applies such an entry like any other,
+  requires no inclusion proof for it, and never rejects the entry or the response for the
+  missing index. Section 4.4 tells a verifier that step 3 is key revocation (Section 8.2)
+  and that a Section 8.1 entry applies with or without the index. Section 6.4.2 pushes
+  index-less revocations too and keys their idempotent apply on `agentDid` and `revokedAt`.
+  `schemas/revocation-list-v1.schema.json` no longer requires the member, and
+  `scripts/validate_examples.py` fails when the schema refuses an entry without it, accepts
+  an index that is not an integer >= 0, or stops requiring another entry member. Section
+  2.1 lists index-less entries as not yet fixture-covered.
 - Section 4.6: the five agent-specific claims (`capabilities`, `buildAttestation`,
   `behavioralProfile`, `scanSummary`, `declaredPurpose`) are no longer "Proposed (v1.1)";
   their status is "ATX v1.1 (signed in the ATX TBS)", which is what the reference issuer

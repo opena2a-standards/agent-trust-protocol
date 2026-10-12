@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Regression tests for check_license.py and the README checks in
-validate_examples.py. Run: python3 scripts/test_checks.py
+"""Regression tests for check_license.py and the README and revocation schema
+checks in validate_examples.py. Run: python3 scripts/test_checks.py
 """
+import json
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,31 @@ class ReadmeDiscoveryTest(unittest.TestCase):
     def test_comment_line_may_name_legacy_alias(self):
         text = "```bash\n# /.well-known/opena2a is a legacy alias\ncurl https://x/.well-known/atp\n```\n"
         self.assertEqual(validate_examples.discovery_path_errors(text), [])
+
+
+class RevocationIndexTest(unittest.TestCase):
+    def schema(self):
+        path = ROOT / "schemas" / "revocation-list-v1.schema.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_repository_schema_passes(self):
+        self.assertEqual(validate_examples.revocation_index_errors(), [])
+
+    def test_schema_requiring_the_index_fails(self):
+        schema = self.schema()
+        required = schema["properties"]["revocations"]["items"]["required"]
+        required.append("transparencyLogIndex")
+        errors = validate_examples.revocation_index_errors(schema)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("without transparencyLogIndex is refused", errors[0])
+
+    def test_schema_dropping_another_member_fails(self):
+        schema = self.schema()
+        required = schema["properties"]["revocations"]["items"]["required"]
+        required.remove("revokedByKeyId")
+        errors = validate_examples.revocation_index_errors(schema)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("without revokedByKeyId is accepted", errors[0])
 
 
 if __name__ == "__main__":
