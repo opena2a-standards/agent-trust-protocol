@@ -42,7 +42,7 @@ FAIL: Trust proof has all required fields (not met: verdict, issuedAt)
 
 A test that names several members checks each one on its own. "Matches the schema" means the member's value is valid against its property in the named file under `schemas/`; timestamps must be RFC 3339 (a UTC offset from 00:00 to 23:59, and nothing after the timestamp, not even a newline) and are compared as times, whatever their UTC offset.
 
-The scripts send every URL as written: `curl` runs with URL globbing off (`-g`), so `{a,b}` or `[x-y]` in the authority URL, in `authorityDid` or in `endpoints.trustProof` is one request to that literal URL, not one request per expansion.
+`curl` runs with URL globbing off (`-g`): it does not expand `{a,b}` or `[x-y]` in the authority URL, in `authorityDid` or in `endpoints.trustProof`, so a URL that holds one stays one URL and is not requested once per expansion.
 
 ### Level 1: Basic Trust (14 tests)
 
