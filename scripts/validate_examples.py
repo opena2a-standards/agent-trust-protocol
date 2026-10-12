@@ -34,6 +34,11 @@ is the second signature of the optional hybrid mode, so a README sentence that
 names ML-DSA-65 also names hybrid mode. A prose sentence may wrap across lines;
 the lines of a paragraph are joined before it is split into sentences.
 
+The reference implementation's source is not public, so README.md and ATP-SPEC.md
+link to no repository an anonymous reader cannot open, and every Appendix A row
+maps its component to a public endpoint of the reference authority (an `/api/` or
+`/.well-known/` path) instead of a source file.
+
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
@@ -422,6 +427,57 @@ def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
     return errors
 
 
+# Repositories an anonymous reader cannot open: GitHub answers 404 for them.
+NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
+NOT_PUBLIC_LINK = re.compile(
+    r"github\.com/(" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES) + r")(?![\w.-])",
+    re.IGNORECASE,
+)
+APPENDIX_A = "## Appendix A: Reference Implementation"
+
+
+def unpublished_link_errors(text: str, name: str) -> list[str]:
+    """A link into a repository that is not public is a dead end for a reader;
+    the reference implementation is shown through its public endpoints
+    (Appendix A) instead."""
+    return [
+        f"{name}:{number} links to github.com/{match.group(1)}, which is not public; "
+        "cite the reference authority's public endpoints (ATP-SPEC Appendix A)"
+        for number, line in enumerate(text.splitlines(), start=1)
+        for match in NOT_PUBLIC_LINK.finditer(line)
+    ]
+
+
+def reference_endpoint_errors(text: str) -> list[str]:
+    """Appendix A maps each reference-implementation component to the public
+    endpoint that demonstrates it: every table row's second cell names an
+    `/api/` or `/.well-known/` path, never a file in the unpublished source."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == APPENDIX_A)
+    except StopIteration:
+        return [f"ATP-SPEC.md: heading {APPENDIX_A!r} not found"]
+    rows = []
+    for number, line in enumerate(lines[start + 1:], start=start + 2):
+        if line.startswith("## "):
+            break
+        if line.lstrip().startswith("|"):
+            rows.append((number, [cell.strip() for cell in line.strip().strip("|").split("|")]))
+    # The first table line is the header and the second its delimiter row.
+    body = rows[2:]
+    if not body:
+        return ["ATP-SPEC.md: Appendix A has no component table"]
+    errors = []
+    for number, cells in body:
+        target = cells[1] if len(cells) > 1 else ""
+        if "/api/" not in target and "/.well-known/" not in target:
+            errors.append(
+                f"ATP-SPEC.md:{number} Appendix A maps {cells[0]!r} to {target!r}, "
+                "which names no public /api/ or /.well-known/ endpoint"
+            )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -537,6 +593,19 @@ def main() -> int:
         failures += 1
     else:
         print("fixtures OK    Section 2.1, README.md and revocation schema vs Section 8.1.1")
+
+    reference_errors = (
+        unpublished_link_errors(readme, "README.md")
+        + unpublished_link_errors(spec, "ATP-SPEC.md")
+        + reference_endpoint_errors(spec)
+    )
+    if reference_errors:
+        print("reference FAIL README.md and ATP-SPEC.md vs Appendix A")
+        for err in reference_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("reference OK   README.md and ATP-SPEC.md vs Appendix A")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Regression tests for check_license.py, the README, revocation schema, ATX
-status and fixture coverage checks in validate_examples.py, the conformance
-scripts (run against fixture_authority.py; needs bash, curl and jq), and the
-test-suite sentence of the .pre-push-review-not-required marker. Run:
-python3 scripts/test_checks.py
+"""Regression tests for check_license.py, the README, reference implementation,
+revocation schema, ATX status and fixture coverage checks in
+validate_examples.py, the conformance scripts (run against fixture_authority.py;
+needs bash, curl and jq), and the test-suite sentence of the
+.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -122,6 +122,74 @@ class ReadmeDiscoveryTest(unittest.TestCase):
     def test_comment_line_may_name_legacy_alias(self):
         text = "```bash\n# /.well-known/opena2a is a legacy alias\ncurl https://x/.well-known/atp\n```\n"
         self.assertEqual(validate_examples.discovery_path_errors(text), [])
+
+
+class ReferenceImplementationTest(unittest.TestCase):
+    APPENDIX = (
+        "## Appendix A: Reference Implementation\n"
+        "\n"
+        "| Component | Public endpoint | Status |\n"
+        "|-----------|-----------------|--------|\n"
+        "{rows}"
+        "\n"
+        "## Appendix B: Integration Examples\n"
+        "\n"
+        "| Not | Appendix A |\n"
+    )
+
+    def test_repository_readme_and_spec_pass(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.unpublished_link_errors(readme, "README.md"), [])
+        self.assertEqual(validate_examples.unpublished_link_errors(spec, "ATP-SPEC.md"), [])
+        self.assertEqual(validate_examples.reference_endpoint_errors(spec), [])
+
+    def test_link_to_unpublished_repository_fails(self):
+        text = "Intro.\n\nThe [Registry](https://github.com/opena2a-org/opena2a-registry) implements ATP.\n"
+        errors = validate_examples.unpublished_link_errors(text, "README.md")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:3 "), errors[0])
+
+    def test_link_match_ignores_case_and_stops_at_the_repository_name(self):
+        upper = "See `GitHub.com/OpenA2A-org/OpenA2A-Registry`.\n"
+        self.assertEqual(len(validate_examples.unpublished_link_errors(upper, "ATP-SPEC.md")), 1)
+        longer = "See https://github.com/opena2a-org/opena2a-registry-web.\n"
+        self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
+
+    def test_endpoint_rows_pass(self):
+        rows = (
+            "| DID resolution | `GET /api/v1/did/{did}` | 200 |\n"
+            "| Discovery endpoint | `GET /.well-known/atp` | 200 |\n"
+        )
+        text = self.APPENDIX.format(rows=rows)
+        self.assertEqual(validate_examples.reference_endpoint_errors(text), [])
+
+    def test_source_file_row_fails(self):
+        rows = (
+            "| DID resolution | `GET /api/v1/did/{did}` | 200 |\n"
+            "| Trust proof signing | `internal/application/trust_proof_service.go` | |\n"
+        )
+        errors = validate_examples.reference_endpoint_errors(self.APPENDIX.format(rows=rows))
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:6 "), errors[0])
+        self.assertIn("Trust proof signing", errors[0])
+
+    def test_missing_appendix_or_table_fails(self):
+        missing = validate_examples.reference_endpoint_errors("## 12. References\n")
+        self.assertEqual(len(missing), 1)
+        self.assertIn("not found", missing[0])
+        empty = validate_examples.reference_endpoint_errors(self.APPENDIX.format(rows=""))
+        self.assertEqual(len(empty), 1)
+        self.assertIn("no component table", empty[0])
+
+    def test_main_fails_on_reference_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "reference_endpoint_errors", return_value=["row names a file"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("reference FAIL", out.getvalue())
+        self.assertIn("row names a file", out.getvalue())
 
 
 class RevocationIndexTest(unittest.TestCase):

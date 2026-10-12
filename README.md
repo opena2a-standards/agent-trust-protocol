@@ -116,7 +116,7 @@ ATP is designed to complement:
 
 ## Reference Implementation
 
-The [OpenA2A Registry](https://github.com/opena2a-org/opena2a-registry) implements ATP at Level 2 conformance. The reference trust authority is live at `api.oa2a.org`.
+The OpenA2A Registry implements ATP at Level 2 conformance. Its source code is not public; the reference trust authority it runs is live at `api.oa2a.org`, and [ATP-SPEC Appendix A](ATP-SPEC.md#appendix-a-reference-implementation) maps each component to the public endpoint that demonstrates it.
 
 Verified working request and response (April 2026):
 

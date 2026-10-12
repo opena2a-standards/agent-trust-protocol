@@ -218,6 +218,13 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   Section 2.1 list does not say it is authoritative, or when a prose sentence in the
   specification or README, or a sentence of the schema description, cites the fixture
   without Section 8.1.1; `scripts/test_checks.py` covers each case.
+- Appendix A and the README linked the reference implementation's repository, which is not
+  public (an anonymous request gets HTTP 404), and Appendix A mapped six components to source
+  files in it. Both now say the source is not public, and Appendix A maps each component to
+  the public endpoint at `api.oa2a.org` that demonstrates it, with the status an anonymous
+  request received on 2026-10-11 (the transparency-log endpoints answer 404 and federation
+  sync 401). `scripts/validate_examples.py` fails on a link to a repository listed as not
+  public and on an Appendix A row that names no `/api/` or `/.well-known/` endpoint.
 
 ## [1.0.0-rc1] - 2026-04-28
 
