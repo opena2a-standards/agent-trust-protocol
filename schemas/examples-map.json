@@ -6,6 +6,11 @@
   },
   {
     "file": "ATP-SPEC.md",
+    "heading": "#### 4.3.1 Sigstore co-signature",
+    "schema": "schemas/trust-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
     "heading": "### 5.4 Inclusion Proof",
     "schema": "schemas/inclusion-proof-v1.schema.json"
   },

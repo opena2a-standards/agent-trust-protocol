@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-specification claim, revocation schema, threat model, signed timestamp, ATX
-status, fixture coverage and A2A agent card path checks in validate_examples.py,
-check_guides.py, the conformance scripts (run against fixture_authority.py;
-needs bash, curl and jq), the registry generation and --check mode of
-gen_registries.py, and the test-suite sentences of the
+specification claim, revocation schema, Sigstore co-signature, threat model,
+signed timestamp, ATX status, fixture coverage and A2A agent card path checks
+in validate_examples.py, check_guides.py, the conformance scripts (run against
+fixture_authority.py; needs bash, curl and jq), the registry generation and
+--check mode of gen_registries.py, and the test-suite sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
@@ -712,6 +712,90 @@ class SignedTimestampTest(unittest.TestCase):
         self.assertIn("row signs the served bytes", out.getvalue())
 
 
+class SigstoreCoSignatureTest(unittest.TestCase):
+    def schema(self):
+        path = ROOT / "schemas" / "trust-proof-v1.schema.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def errors(self, definition, edit):
+        schema = self.schema()
+        edit(schema["$defs"][definition])
+        return validate_examples.sigstore_cosignature_errors(schema)
+
+    @staticmethod
+    def log_entry(bundle):
+        return bundle["properties"]["verificationMaterial"]["properties"]["tlogEntries"]
+
+    def test_repository_schema_passes(self):
+        self.assertEqual(validate_examples.sigstore_cosignature_errors(), [])
+
+    def test_example_adds_a_bundle_to_the_authority_signature(self):
+        signatures = validate_examples.sigstore_example()["signatures"]
+        self.assertEqual([entry["algorithm"] for entry in signatures], ["Ed25519", "Sigstore"])
+        self.assertIn("bundle", signatures[1])
+        self.assertNotIn("value", signatures[1])
+
+    def test_schema_with_key_signatures_only_fails(self):
+        schema = self.schema()
+        schema["properties"]["signatures"]["items"] = schema["$defs"]["keySignature"]
+        errors = validate_examples.sigstore_cosignature_errors(schema)
+        self.assertIn("the Section 4.3.1 co-signature entry is refused", errors)
+
+    def test_open_entry_fails(self):
+        errors = self.errors("sigstoreCoSignature", lambda entry: entry.pop("additionalProperties"))
+        self.assertEqual(errors, ["a co-signature with a value beside its bundle is accepted"])
+
+    def test_key_signature_admitting_a_bundle_fails(self):
+        def edit(entry):
+            entry["required"].remove("value")
+            entry["properties"]["bundle"] = {"type": "object"}
+
+        errors = self.errors("keySignature", edit)
+        self.assertEqual(errors, ["a co-signature with algorithm Ed25519 is accepted"])
+
+    def test_any_bundle_media_type_fails(self):
+        errors = self.errors(
+            "sigstoreBundle", lambda bundle: bundle["properties"].update(mediaType={"type": "string"})
+        )
+        self.assertEqual(errors, ["a co-signature in a version 0.1 bundle is accepted"])
+
+    def test_empty_log_fails(self):
+        errors = self.errors("sigstoreBundle", lambda bundle: self.log_entry(bundle).pop("minItems"))
+        self.assertEqual(errors, ["a co-signature with no log entry is accepted"])
+
+    def test_log_entry_without_inclusion_proof_fails(self):
+        errors = self.errors(
+            "sigstoreBundle",
+            lambda bundle: self.log_entry(bundle)["items"]["required"].remove("inclusionProof"),
+        )
+        self.assertEqual(errors, ["a co-signature whose log entry has no inclusionProof is accepted"])
+
+    def test_schema_requiring_integrated_time_fails(self):
+        errors = self.errors(
+            "sigstoreBundle",
+            lambda bundle: self.log_entry(bundle)["items"]["required"].append("integratedTime"),
+        )
+        self.assertEqual(
+            errors, ["a co-signature from a Rekor v2 log, timed by an RFC 3161 timestamp is refused"]
+        )
+
+    def test_schema_requiring_log_index_fails(self):
+        errors = self.errors(
+            "sigstoreBundle",
+            lambda bundle: self.log_entry(bundle)["items"]["required"].append("logIndex"),
+        )
+        self.assertEqual(errors, ["a co-signature whose log entry has no logIndex is refused"])
+
+    def test_main_fails_on_cosignature_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "sigstore_cosignature_errors", return_value=["probe accepted"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("cosign FAIL", out.getvalue())
+        self.assertIn("probe accepted", out.getvalue())
+
+
 CONFORMANCE = ROOT / "conformance"
 HAS_JQ = shutil.which("jq") is not None
 HAS_SCRIPT_TOOLS = HAS_JQ and all(shutil.which(tool) for tool in ("bash", "curl"))
@@ -738,6 +822,7 @@ LEVEL2 = [
 ]
 T1 = dict(zip(range(1, 15), LEVEL1))
 T2 = dict(zip(range(1, 4), LEVEL2))
+COSIGNED = validate_examples.sigstore_example()["signatures"]
 
 
 def pop(*names):
@@ -939,6 +1024,9 @@ class ConformanceScriptTest(unittest.TestCase):
             ("unexpired, written at -05:00", [], {"proof": put(expiresAt=at_offset(1, -5))}),
             ("string signatures", [T1[9]], {"proof": put(signatures="FAKE")}),
             ("no signatures", [T1[9]], {"proof": put(signatures=[])}),
+            ("Sigstore co-signature", [], {"proof": put(signatures=COSIGNED)}),
+            ("Sigstore entry without a bundle", [T1[9]],
+             {"proof": put(signatures=[COSIGNED[0], {**COSIGNED[1], "bundle": "FAKE"}])}),
             ("no proof served", LEVEL1[6:], {"proof": 404}),
         ])
 
@@ -1057,6 +1145,7 @@ class SchemaCheckTest(unittest.TestCase):
     EXAMPLES = {
         "### 7.1 Well-Known Endpoint": "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
+        "#### 4.3.1 Sigstore co-signature": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
     REPLACEMENTS = (

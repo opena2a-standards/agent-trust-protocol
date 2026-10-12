@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json",
   "title": "ATP trust proof (section 4.2, v1.0.0-rc1 wire form)",
-  "description": "Structural schema for the ATP trust proof, derived from section 4.2 with the atp-conformance fixtures as ground truth. Shape only: the signature covers the pipe-delimited seven-field canonical form of section 4.3, a byte rule the verifier enforces. scanSummary is an ATX v1.1 field (section 4.6), signed only inside the ATX credential's JCS(TBS); slsaLevel is illustrative and signed nowhere (section 4.2). Neither is part of the rc1 canonical form.",
+  "description": "Structural schema for the ATP trust proof, derived from section 4.2 with the atp-conformance fixtures as ground truth. Shape only: every signature, a section 4.3.1 Sigstore co-signature included, covers the pipe-delimited seven-field canonical form of section 4.3, a byte rule the verifier enforces. scanSummary is an ATX v1.1 field (section 4.6), signed only inside the ATX credential's JCS(TBS); slsaLevel is illustrative and signed nowhere (section 4.2). Neither is part of the rc1 canonical form.",
   "type": "object",
   "required": [
     "did",
@@ -35,15 +35,12 @@
     "signatures": {
       "type": "array",
       "minItems": 1,
+      "description": "Authority signatures (section 4.3) and Sigstore co-signatures (section 4.3.1).",
       "items": {
-        "type": "object",
-        "required": ["keyId", "algorithm", "value"],
-        "properties": {
-          "keyId": { "type": "string", "minLength": 1 },
-          "algorithm": { "enum": ["Ed25519", "ML-DSA-65"] },
-          "value": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$" }
-        },
-        "additionalProperties": false
+        "anyOf": [
+          { "$ref": "#/$defs/keySignature" },
+          { "$ref": "#/$defs/sigstoreCoSignature" }
+        ]
       }
     },
     "transparencyLogIndex": { "type": "integer", "minimum": 0 },
@@ -70,6 +67,106 @@
     "did": {
       "type": "string",
       "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:@/-]+(#[A-Za-z0-9._-]+)?$"
+    },
+    "base64": { "type": "string", "pattern": "^[A-Za-z0-9+/]+={0,2}$" },
+    "keySignature": {
+      "type": "object",
+      "description": "Section 4.3: an authority signature over the canonical string, verified under the key keyId resolves to.",
+      "required": ["keyId", "algorithm", "value"],
+      "properties": {
+        "keyId": { "type": "string", "minLength": 1 },
+        "algorithm": { "enum": ["Ed25519", "ML-DSA-65"] },
+        "value": { "$ref": "#/$defs/base64" }
+      },
+      "additionalProperties": false
+    },
+    "sigstoreCoSignature": {
+      "type": "object",
+      "description": "Section 4.3.1: a Sigstore keyless co-signature. keyId is the signing certificate's Subject Alternative Name; the signature, the certificate and the Rekor entry are inside the bundle, so the entry has no value.",
+      "required": ["keyId", "algorithm", "bundle"],
+      "properties": {
+        "keyId": { "type": "string", "minLength": 1 },
+        "algorithm": { "const": "Sigstore" },
+        "bundle": { "$ref": "#/$defs/sigstoreBundle" }
+      },
+      "additionalProperties": false
+    },
+    "sigstoreBundle": {
+      "type": "object",
+      "description": "Sigstore bundle v0.3 in its protobuf JSON form, restricted to a message signature with a signing certificate and at least one Rekor entry that carries an inclusion proof. Shape only: section 4.3.1 rules 1-4 are the verifier's.",
+      "required": ["mediaType", "verificationMaterial", "messageSignature"],
+      "properties": {
+        "mediaType": { "const": "application/vnd.dev.sigstore.bundle.v0.3+json" },
+        "verificationMaterial": {
+          "type": "object",
+          "required": ["certificate", "tlogEntries"],
+          "properties": {
+            "certificate": {
+              "type": "object",
+              "required": ["rawBytes"],
+              "properties": { "rawBytes": { "$ref": "#/$defs/base64" } },
+              "additionalProperties": false
+            },
+            "tlogEntries": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["logId", "kindVersion", "inclusionProof", "canonicalizedBody"],
+                "properties": {
+                  "logId": {
+                    "type": "object",
+                    "required": ["keyId"],
+                    "properties": { "keyId": { "$ref": "#/$defs/base64" } }
+                  },
+                  "kindVersion": {
+                    "type": "object",
+                    "required": ["kind", "version"],
+                    "properties": {
+                      "kind": { "const": "hashedrekord" },
+                      "version": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "inclusionProof": {
+                    "type": "object",
+                    "required": ["rootHash", "treeSize", "checkpoint"],
+                    "properties": {
+                      "rootHash": { "$ref": "#/$defs/base64" },
+                      "hashes": { "type": "array", "items": { "$ref": "#/$defs/base64" } },
+                      "checkpoint": {
+                        "type": "object",
+                        "required": ["envelope"],
+                        "properties": { "envelope": { "type": "string", "minLength": 1 } }
+                      }
+                    }
+                  },
+                  "canonicalizedBody": { "$ref": "#/$defs/base64" }
+                }
+              }
+            },
+            "timestampVerificationData": { "type": "object" }
+          },
+          "additionalProperties": false
+        },
+        "messageSignature": {
+          "type": "object",
+          "required": ["messageDigest", "signature"],
+          "properties": {
+            "messageDigest": {
+              "type": "object",
+              "required": ["algorithm", "digest"],
+              "properties": {
+                "algorithm": { "enum": ["SHA2_256", "SHA2_384", "SHA2_512"] },
+                "digest": { "$ref": "#/$defs/base64" }
+              },
+              "additionalProperties": false
+            },
+            "signature": { "$ref": "#/$defs/base64" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

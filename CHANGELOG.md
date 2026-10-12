@@ -9,6 +9,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 ### Added
 
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
+- Section 4.3.1: the Sigstore co-signature the abstract and README listed, which the
+  trust-proof schema refused. It is a `signatures[]` entry with `algorithm: "Sigstore"`,
+  `keyId` set to the certificate identity, and a Sigstore v0.3 `bundle` (message signature
+  over the Section 4.3 canonical string, signing certificate, at least one `hashedrekord`
+  Rekor entry with an inclusion proof) in place of `value`. A verifier checks the message
+  digest and signature, Rekor inclusion and signing time, the Fulcio chain, and the
+  certificate identity against identities it configures itself for the issuer, never ones
+  the proof supplies; any failure is `SIGNATURE_INVALID`. The co-signature does not replace
+  the Ed25519 signature and does not count toward step 7 or Section 6 co-signing. Section
+  4.4 steps 3, 4 and 7 point to it. `schemas/trust-proof-v1.schema.json` gains the entry
+  as a second `signatures[]` branch, the 4.3.1 example is validated in CI, and
+  `validate_examples.py` checks that the schema refuses an entry without a bundle, with a
+  `value` beside it, in another bundle version, with a DSSE envelope, a public key or a
+  certificate chain, or without a Rekor entry carrying an inclusion proof. Section 2.1 lists
+  co-signature verification as not yet covered by byte-stable fixtures.
 - Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
   for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
   `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,

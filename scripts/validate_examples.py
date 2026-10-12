@@ -25,6 +25,10 @@ The revocation schema admits an entry without `transparencyLogIndex` (Section
 8.1: an identity revoked before the authority logged anything for it), refuses
 an index that is not an integer >= 0, and requires every other entry member.
 
+The trust-proof schema admits the Section 4.3.1 Sigstore co-signature beside
+the authority's Ed25519 entry, and refuses a co-signature entry whose bundle
+the Section 4.3.1 rules cannot check or that carries a `value` as well.
+
 Every defense in the Section 10.1 threat model table cites the section that
 defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
 cannot list a defense the specification never defines.
@@ -92,6 +96,7 @@ until all of them can be read.
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
+import copy
 import json
 import pathlib
 import re
@@ -217,6 +222,122 @@ def revocation_index_errors(schema: dict | None = None) -> list[str]:
     for member in UNLOGGED_REVOCATION:
         if accepts({k: v for k, v in UNLOGGED_REVOCATION.items() if k != member}):
             errors.append(f"an entry without {member} is accepted; Section 8.1 requires it")
+    return errors
+
+
+SIGSTORE_HEADING = "#### 4.3.1 Sigstore co-signature"
+
+
+def sigstore_example() -> dict:
+    """The Section 4.3.1 example: the Section 4.2 proof with a Sigstore
+    co-signature added to its signatures."""
+    return json.loads(extract_block(ROOT / "ATP-SPEC.md", SIGSTORE_HEADING))
+
+
+def member(path, value=...):
+    """An edit of a co-signature entry that sets the member at path (keys and
+    list indexes) to value, or removes it when no value is given."""
+
+    def edit(entry):
+        parent = entry
+        for step in path[:-1]:
+            parent = parent[step]
+        if value is ...:
+            del parent[path[-1]]
+        else:
+            parent[path[-1]] = copy.deepcopy(value)
+
+    return edit
+
+
+BUNDLE = ("bundle",)
+MATERIAL = BUNDLE + ("verificationMaterial",)
+LOG_ENTRY = MATERIAL + ("tlogEntries", 0)
+DIGEST = BUNDLE + ("messageSignature", "messageDigest")
+
+# Section 4.3.1: co-signatures the schema must also admit. A Rekor v2 entry
+# carries no integratedTime or inclusion promise and takes its signing time
+# from an RFC 3161 timestamp; protobuf JSON omits a zero logIndex.
+ALSO_A_COSIGNATURE = [
+    ("from a Rekor v2 log, timed by an RFC 3161 timestamp", [
+        member(LOG_ENTRY + ("integratedTime",)),
+        member(LOG_ENTRY + ("inclusionPromise",)),
+        member(LOG_ENTRY + ("kindVersion", "version"), "0.0.2"),
+        member(MATERIAL + ("timestampVerificationData",),
+               {"rfc3161Timestamps": [{"signedTimestamp": "dGltZXN0YW1w"}]}),
+    ]),
+    ("whose log entry has no logIndex", [member(LOG_ENTRY + ("logIndex",))]),
+    ("with a SHA2_384 message digest", [member(DIGEST + ("algorithm",), "SHA2_384")]),
+]
+
+# Section 4.3.1: co-signatures the schema must refuse. Each is the example
+# entry with members removed or replaced.
+NOT_A_COSIGNATURE = [
+    ("without a bundle", [member(BUNDLE)]),
+    ("with a value in place of its bundle", [member(BUNDLE), member(("value",), "c2lnbmF0dXJl")]),
+    ("with a value beside its bundle", [member(("value",), "c2lnbmF0dXJl")]),
+    ("with an empty keyId", [member(("keyId",), "")]),
+    ("with algorithm Ed25519", [member(("algorithm",), "Ed25519")]),
+    ("in a version 0.1 bundle", [
+        member(BUNDLE + ("mediaType",), "application/vnd.dev.sigstore.bundle+json;version=0.1"),
+    ]),
+    ("with a DSSE envelope in place of a message signature", [
+        member(BUNDLE + ("messageSignature",)),
+        member(BUNDLE + ("dsseEnvelope",), {"payload": "Ym9keQ==", "payloadType": "x", "signatures": []}),
+    ]),
+    ("without a certificate", [member(MATERIAL + ("certificate",))]),
+    ("with a public key in place of a certificate", [
+        member(MATERIAL + ("certificate",)),
+        member(MATERIAL + ("publicKey",), {"hint": "a2V5"}),
+    ]),
+    ("with a certificate chain in place of a certificate", [
+        member(MATERIAL + ("certificate",)),
+        member(MATERIAL + ("x509CertificateChain",), {"certificates": [{"rawBytes": "Y2VydGlmaWNhdGU="}]}),
+    ]),
+    ("without tlogEntries", [member(MATERIAL + ("tlogEntries",))]),
+    ("with no log entry", [member(MATERIAL + ("tlogEntries",), [])]),
+    ("whose log entry has no inclusionProof", [member(LOG_ENTRY + ("inclusionProof",))]),
+    ("whose log entry is not hashedrekord", [member(LOG_ENTRY + ("kindVersion", "kind"), "dsse")]),
+    ("without a message digest", [member(DIGEST)]),
+    ("with an unspecified digest algorithm", [member(DIGEST + ("algorithm",), "HASH_ALGORITHM_UNSPECIFIED")]),
+]
+
+
+def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
+    """Section 4.3.1: the trust-proof schema admits the example's Sigstore
+    co-signature beside the authority's Ed25519 entry, and refuses an entry
+    with no bundle, with a bundle the rules cannot check (another bundle
+    version, a DSSE envelope, a key or chain in place of the certificate, no
+    hashedrekord entry with an inclusion proof) or with a value as well."""
+    if schema is None:
+        schema = json.loads(
+            (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
+        )
+    validator = Draft202012Validator(schema)
+    proof = sigstore_example()
+    signatures = proof.get("signatures", [])
+    position = next(
+        (i for i, entry in enumerate(signatures) if entry.get("algorithm") == "Sigstore"), None
+    )
+    if position is None:
+        return [f"the {SIGSTORE_HEADING!r} example carries no Sigstore entry"]
+
+    def accepts(edits) -> bool:
+        cosignature = copy.deepcopy(signatures[position])
+        for edit in edits:
+            edit(cosignature)
+        edited = signatures[:position] + [cosignature] + signatures[position + 1:]
+        return validator.is_valid({**proof, "signatures": edited})
+
+    errors = []
+    if not accepts([]):
+        errors.append("the Section 4.3.1 co-signature entry is refused")
+    for label, edits in ALSO_A_COSIGNATURE:
+        if not accepts(edits):
+            errors.append(f"a co-signature {label} is refused")
+    for label, edits in NOT_A_COSIGNATURE:
+        if accepts(edits):
+            errors.append(f"a co-signature {label} is accepted")
     return errors
 
 
@@ -897,6 +1018,15 @@ def main() -> int:
         failures += 1
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
+
+    cosignature_errors = sigstore_cosignature_errors()
+    if cosignature_errors:
+        print("cosign FAIL    schemas/trust-proof-v1.schema.json vs Section 4.3.1")
+        for err in cosignature_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("cosign OK      schemas/trust-proof-v1.schema.json vs Section 4.3.1")
 
     timestamp_errors = signed_timestamp_errors(spec)
     if timestamp_errors:
