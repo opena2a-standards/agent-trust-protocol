@@ -286,7 +286,7 @@ def local_registry() -> Registry:
 def extract_block(md_path: pathlib.Path, heading: str) -> str:
     lines = md_path.read_text(encoding="utf-8").splitlines()
     try:
-        start = next(i for i, l in enumerate(lines) if l.strip() == heading)
+        start = next(i for i, line in enumerate(lines) if line.strip() == heading)
     except StopIteration:
         raise SystemExit(f"error: heading {heading!r} not found in {md_path}")
     in_block = False

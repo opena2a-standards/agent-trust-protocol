@@ -159,8 +159,19 @@ class RevocationIndexTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("transparencyLogIndex 0 is refused", errors[0])
 
+    def test_schema_with_maximum_below_a_large_index_fails(self):
+        errors = self.index_errors(lambda index: index.update(maximum=1847299))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("transparencyLogIndex 1847300 is refused", errors[0])
+
     def test_schema_widening_the_index_type_fails(self):
-        for extra, probe in (("boolean", "True"), ("array", "[]"), ("object", "{}")):
+        for extra, probe in (
+            ("string", "'1847300'"),
+            ("null", "None"),
+            ("boolean", "True"),
+            ("array", "[]"),
+            ("object", "{}"),
+        ):
             with self.subTest(extra=extra):
                 errors = self.index_errors(lambda index: index.update(type=["integer", extra]))
                 self.assertEqual(len(errors), 1)

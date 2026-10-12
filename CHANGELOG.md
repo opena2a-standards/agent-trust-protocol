@@ -42,49 +42,6 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `registries/trust-levels.json` is generated from the Section 4.1 table by
   `scripts/gen_registries.py`, checked in CI.
 
-### Changed
-
-- Section 8.1: `transparencyLogIndex` is OPTIONAL per revocation entry; it was REQUIRED, so
-  an authority revoking an agent it had logged nothing for (registered and revoked before
-  its first proof) had to fabricate an index or omit the revocation, and omitting it kept
-  the agent trusted at every verifier. The index is the log index of the revocation's own
-  `trust_proof_revoked` or `atx_revoked` entry; an authority that logged a trust proof or
-  credential for the agent MUST log the revocation and carry the index, so an entry without
-  it revokes an agent with nothing logged. A client applies such an entry like any other,
-  requires no inclusion proof for it, and never rejects the entry or the response for the
-  missing index. Section 4.4 tells a verifier that step 3 is key revocation (Section 8.2)
-  and that a Section 8.1 entry applies with or without the index. Section 6.4.2 pushes
-  index-less revocations too and keys their idempotent apply on `agentDid` and `revokedAt`.
-  `schemas/revocation-list-v1.schema.json` no longer requires the member, and
-  `scripts/validate_examples.py` fails when the schema refuses an entry without it, accepts
-  an index that is not an integer >= 0, or stops requiring another entry member. Section
-  2.1 lists index-less entries as not yet fixture-covered.
-- Section 4.6: the five agent-specific claims (`capabilities`, `buildAttestation`,
-  `behavioralProfile`, `scanSummary`, `declaredPurpose`) are no longer "Proposed (v1.1)";
-  their status is "ATX v1.1 (signed in the ATX TBS)", which is what the reference issuer
-  signs (atx-spec core.md Section 1.3a.2, field for field). The Section 4.2 note and the
-  trust-proof schema description say the same; `slsaLevel` is illustrative and signed nowhere.
-  A trust proof and an ATX credential are two signed artifacts with two canonical forms.
-- Section 4.4 step 4: every declared signature entry verifies, and an ML-DSA-65 entry
-  requires a verifying Ed25519 entry (the family signature gate, AAP Section 9.4);
-  previously "at least one signature". Step 5 cites the Section 4.1 scale.
-- Section 3.1: the DID form for signed artifacts cites the did:opena2a method
-  specification (unescaped form, compare after normalization) instead of restating it.
-- Examples: `did:opena2a:a2a_agent:` literals use the `agent` resource type (digits are
-  not legal in a resource type; `a2a_agent` is the deprecated alias).
-- Section 8.1: `reason` is a registered code, no longer free text. The new Section 8.1.1
-  registry holds `unspecified`, `content_hash_violation`, `security_incident`, `manual` and
-  `expiry_reissuance_failed`, plus a private-use `x-` grammar (1 to 32 of `a-z`, `0-9`,
-  `_`); no other value is a reason, so operator prose never reaches the unauthenticated,
-  cross-organization response. A client applies a revocation whatever its `reason` and
-  processes a code it does not recognise, or pre-1.1 free text, as `unspecified`. The
-  `reason` of a `trust_proof_revoked` or `atx_revoked` log entry is the same code (Section
-  5.1.1). The Section 8.1 example now reads `security_incident`;
-  `schemas/revocation-list-v1.schema.json` admits only the registered codes and the
-  private-use grammar; `registries/revocation-reasons.json` is generated from the table, and
-  `scripts/validate_examples.py` fails when the schema's codes and the table differ or the
-  schema accepts free text. Section 2.1 lists reason codes as not yet fixture-covered.
-
 - §5.4 Inclusion Proof and §5.5 Consistency Proof: normative JSON response
   bodies pinned (previously endpoint-plus-prose only). The §5.4 body embeds
   the §5.6 signed tree head and is verified in two ordered rules (STH
@@ -134,6 +91,46 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 8.1: `transparencyLogIndex` is OPTIONAL per revocation entry; it was REQUIRED, so
+  an authority revoking an agent it had logged nothing for (registered and revoked before
+  its first proof) had to fabricate an index or omit the revocation, and omitting it kept
+  the agent trusted at every verifier. The index is the log index of the revocation's own
+  `trust_proof_revoked` or `atx_revoked` entry; an authority that logged a trust proof or
+  credential for the agent MUST log the revocation and carry the index, so an entry without
+  it revokes an agent with nothing logged. A client applies such an entry like any other,
+  requires no inclusion proof for it, and never rejects the entry or the response for the
+  missing index. Section 4.4 tells a verifier that step 3 is key revocation (Section 8.2)
+  and that a Section 8.1 entry applies with or without the index. Section 6.4.2 pushes
+  index-less revocations too and keys their idempotent apply on `agentDid` and `revokedAt`.
+  `schemas/revocation-list-v1.schema.json` no longer requires the member, and
+  `scripts/validate_examples.py` fails when the schema refuses an entry without it, accepts
+  an index that is not an integer >= 0, or stops requiring another entry member. Section
+  2.1 lists index-less entries as not yet fixture-covered.
+- Section 4.6: the five agent-specific claims (`capabilities`, `buildAttestation`,
+  `behavioralProfile`, `scanSummary`, `declaredPurpose`) are no longer "Proposed (v1.1)";
+  their status is "ATX v1.1 (signed in the ATX TBS)", which is what the reference issuer
+  signs (atx-spec core.md Section 1.3a.2, field for field). The Section 4.2 note and the
+  trust-proof schema description say the same; `slsaLevel` is illustrative and signed nowhere.
+  A trust proof and an ATX credential are two signed artifacts with two canonical forms.
+- Section 4.4 step 4: every declared signature entry verifies, and an ML-DSA-65 entry
+  requires a verifying Ed25519 entry (the family signature gate, AAP Section 9.4);
+  previously "at least one signature". Step 5 cites the Section 4.1 scale.
+- Section 3.1: the DID form for signed artifacts cites the did:opena2a method
+  specification (unescaped form, compare after normalization) instead of restating it.
+- Examples: `did:opena2a:a2a_agent:` literals use the `agent` resource type (digits are
+  not legal in a resource type; `a2a_agent` is the deprecated alias).
+- Section 8.1: `reason` is a registered code, no longer free text. The new Section 8.1.1
+  registry holds `unspecified`, `content_hash_violation`, `security_incident`, `manual` and
+  `expiry_reissuance_failed`, plus a private-use `x-` grammar (1 to 32 of `a-z`, `0-9`,
+  `_`); no other value is a reason, so operator prose never reaches the unauthenticated,
+  cross-organization response. A client applies a revocation whatever its `reason` and
+  processes a code it does not recognise, or pre-1.1 free text, as `unspecified`. The
+  `reason` of a `trust_proof_revoked` or `atx_revoked` log entry is the same code (Section
+  5.1.1). The Section 8.1 example now reads `security_incident`;
+  `schemas/revocation-list-v1.schema.json` admits only the registered codes and the
+  private-use grammar; `registries/revocation-reasons.json` is generated from the table, and
+  `scripts/validate_examples.py` fails when the schema's codes and the table differ or the
+  schema accepts free text. Section 2.1 lists reason codes as not yet fixture-covered.
 - §4.2/§5.6/§7.1 example blocks now carry conformance-fixture bytes (artifacts
   that verify against the reference verifiers) instead of placeholders; the
   Proposed v1.1 fields (`slsaLevel`, `scanSummary`) moved out of the §4.2
@@ -178,6 +175,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   type is widened to any of them fails. `scripts/test_checks.py` covers the valid-index and
   invalid-index probes (`minimum` removed, `type` set to `number`, `minimum` set to 1, the type
   widened) and the `index FAIL` result of the script.
+- `scripts/test_checks.py` also covers the string and null `transparencyLogIndex` probes and
+  the valid index 1847300 (a schema with `maximum` below it fails), so removing any of those
+  probes from `scripts/validate_examples.py` fails a test.
 - Section 1 and the README: the transparency log was described as recording every revocation,
   but Section 8.1 allows a revocation entry with no log record. Both now say the log records
   the revocation of a logged trust proof or credential, and Section 1 names the exception.
