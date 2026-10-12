@@ -2,7 +2,8 @@
 """Regression tests for check_license.py, the README, reference implementation,
 revocation schema, ATX status and fixture coverage checks in
 validate_examples.py, the conformance scripts (run against fixture_authority.py;
-needs bash, curl and jq), and the test-suite sentence of the
+needs bash, curl and jq), the registry generation and --check mode of
+gen_registries.py, and the test-suite sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
@@ -25,6 +26,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import check_license  # noqa: E402
 import fixture_authority  # noqa: E402
+import gen_registries  # noqa: E402
 import validate_examples  # noqa: E402
 from jsonschema import Draft202012Validator, FormatChecker  # noqa: E402
 
@@ -550,13 +552,116 @@ class SchemaCheckTest(unittest.TestCase):
         self.assertTrue(any(expected) and not all(expected))
 
 
+class GenRegistriesTest(unittest.TestCase):
+    TABLE = (
+        "<!-- opena2a-definition: revocation-reasons -->\n"
+        "| Reason | Since |\n"
+        "|--------|-------|\n"
+        "| `manual` | 1.1.0 |\n"
+        "| **unspecified** | 1.1.0 |\n"
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["gen_registries.py", *args]), contextlib.redirect_stdout(
+            out
+        ), contextlib.redirect_stderr(err):
+            code = gen_registries.main()
+        return code, out.getvalue(), err.getvalue()
+
+    def generate_from(self, spec_text):
+        spec = self.dir / "ATP-SPEC.md"
+        spec.write_text(spec_text, encoding="utf-8")
+        tables = {"revocation-reasons": gen_registries.TABLES["revocation-reasons"]}
+        with mock.patch.object(gen_registries, "SPEC", spec), mock.patch.object(
+            gen_registries, "TABLES", tables
+        ):
+            return gen_registries.generate()
+
+    def test_repository_registries_match_the_spec(self):
+        code, out, err = self.run_main("--check")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("registries match the specification tables", out)
+
+    def test_table_cells_lose_backticks_and_bold(self):
+        data = self.generate_from("# Spec\n\n" + self.TABLE)["revocation-reasons"]
+        self.assertEqual(data["columns"], ["Reason", "Since"])
+        self.assertEqual(
+            data["rows"],
+            [{"Reason": "manual", "Since": "1.1.0"}, {"Reason": "unspecified", "Since": "1.1.0"}],
+        )
+
+    def test_duplicate_unique_value_fails(self):
+        with self.assertRaisesRegex(SystemExit, r"duplicate Reason values \['manual'\]"):
+            self.generate_from(self.TABLE + "| manual | 1.2.0 |\n")
+
+    def test_missing_marker_fails(self):
+        with self.assertRaisesRegex(SystemExit, "marker not found"):
+            self.generate_from("# Spec\n\n| Reason | Since |\n")
+
+    def test_heading_before_table_fails(self):
+        text = self.TABLE.replace("\n", "\n## Next section\n\n", 1)
+        with self.assertRaisesRegex(SystemExit, "no table before the next heading"):
+            self.generate_from(text)
+
+    def test_check_fails_on_stale_and_missing_files(self):
+        registries = self.dir / "registries"
+        with mock.patch.object(gen_registries, "ROOT", self.dir), mock.patch.object(
+            gen_registries, "REGISTRIES", registries
+        ):
+            code, out, _ = self.run_main()
+            self.assertEqual(code, 0)
+            self.assertEqual(len(out.splitlines()), len(gen_registries.TABLES))
+            self.assertEqual(self.run_main("--check")[0], 0)
+            (registries / "trust-levels.json").write_text("{}\n", encoding="utf-8")
+            (registries / "revocation-reasons.json").unlink()
+            code, _, err = self.run_main("--check")
+        self.assertEqual(code, 1)
+        self.assertIn("registries/trust-levels.json", err)
+        self.assertIn("registries/revocation-reasons.json", err)
+        self.assertNotIn("transparency-entry-types", err)
+
+
 class TestSuiteMarkerTest(unittest.TestCase):
+    def setUp(self):
+        self.marker = (ROOT / ".pre-push-review-not-required").read_text(encoding="utf-8")
+
     def test_marker_names_the_only_unit_test_suite(self):
-        marker = (ROOT / ".pre-push-review-not-required").read_text(encoding="utf-8")
         title = (ROOT / "conformance" / "README.md").read_text(encoding="utf-8").splitlines()[0]
         self.assertIn("Test Suite", title)
-        self.assertNotIn("The only test suite", marker)
-        self.assertIn("The only unit test suite is scripts/test_checks.py", marker)
+        self.assertNotIn("The only test suite", self.marker)
+        self.assertIn("The only unit test suite is scripts/test_checks.py", self.marker)
+
+    def test_marker_run_command_runs_this_file(self):
+        this = Path(__file__).resolve().relative_to(ROOT).as_posix()
+        self.assertIn(f"(run: python3 {this})", self.marker)
+
+    def test_marker_names_the_conformance_test_suite(self):
+        scripts = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "conformance").glob("level*.sh"))
+        self.assertTrue(scripts)
+        self.assertEqual(sorted(re.findall(r"conformance/[\w.-]+\.sh", self.marker)), scripts)
+        clause = f"the conformance test suite ({', '.join(scripts)}) tests a running authority"
+        self.assertIn(clause, self.marker)
+
+    def test_every_check_script_has_unit_tests(self):
+        source = Path(__file__).read_text(encoding="utf-8")
+        for script in sorted(SCRIPTS.glob("*.py")):
+            if script.name == Path(__file__).name:
+                continue
+            with self.subTest(script=script.name):
+                imported = re.search(rf"(?m)^import {script.stem}\b", source)
+                called = re.search(rf"\b{script.stem}\.\w+\(", source)
+                self.assertTrue(imported and called, f"no unit test calls {script.name}")
+
+    def test_marker_names_no_undescribed_gate(self):
+        self.assertNotRegex(self.marker, r"\d+-phase")
 
 
 class AtxStatusTest(unittest.TestCase):
