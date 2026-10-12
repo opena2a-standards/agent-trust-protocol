@@ -104,6 +104,18 @@ DIDs answer who an agent is. ATX answers what the agent is authorized to do, wha
 
 ATX is the credential primitive the agent internet needs. ATP is the protocol that defines it.
 
+### Verifiable Credential form
+
+An ATX credential is not a Verifiable Credentials Data Model 2.0 document as issued: it has no `@context`, `type`, `issuer` or `credentialSubject`. [ATP-SPEC.md Section 4.6](./ATP-SPEC.md#verifiable-credential-form) maps each ATX member to that structure: `issuerDid` to `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and `validUntil`, and each claim under `credentialSubject`.
+
+[`examples/atx-vc-example.json`](./examples/atx-vc-example.json) is [`examples/atx-example.json`](./examples/atx-example.json) in that form. CI validates it against [`schemas/atx-vc-v1.schema.json`](./schemas/atx-vc-v1.schema.json) and against the mapping table. To run the same check (needs the Python `jsonschema` package):
+
+```bash
+python3 scripts/validate_examples.py
+```
+
+The mapped form is not secured by a Verifiable Credentials securing mechanism. Its ATX signatures are verified on the ATX credential the mapping recovers.
+
 ## Interoperability
 
 ATP is designed to complement:
@@ -112,7 +124,7 @@ ATP is designed to complement:
 - [Sigstore](https://sigstore.dev): keyless co-signing of trust proofs ([Sigstore co-signature rules](./ATP-SPEC.md#431-sigstore-co-signature))
 - [Certificate Transparency (RFC 6962)](https://datatracker.ietf.org/doc/html/rfc6962): compatible log structure
 - [W3C DID Core](https://www.w3.org/TR/did-core/): agent identifiers
-- [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/): ATX is structurally compatible
+- [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/): ATX maps member for member onto the credential structure ([mapping, example and schema](#verifiable-credential-form))
 
 ## Reference Implementation
 

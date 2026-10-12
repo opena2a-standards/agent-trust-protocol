@@ -511,6 +511,41 @@ Note: Section 4.2 shows `transparencyLogIndex` in its example payload; it is not
 
 See `examples/atx-example.json` for an illustrative v1.1-draft proof showing all ATX v1.1 fields. The example is informational and is not a verifiable proof.
 
+#### Verifiable Credential Form
+
+An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/) document as issued: it carries none of the four properties that data model requires (`@context`, `type`, `issuer`, `credentialSubject`). It does carry an issuer, a subject and claims, under other names. The table below is the mapping from an ATX credential to that data model's structure. Each row places one member; a member the table does not name has no place in the mapped form.
+
+| ATX member | Verifiable Credential property | Value |
+|------------|--------------------------------|-------|
+| (none) | `@context` | `["https://www.w3.org/ns/credentials/v2", {"@vocab": "https://specs.opena2a.org/ns/atx#"}]` |
+| (none) | `type` | `["VerifiableCredential", "AtxCredential"]` |
+| `issuerDid` | `issuer` | unchanged |
+| `did` | `credentialSubject.id` | unchanged |
+| `issuedAt` | `validFrom` | unchanged |
+| `expiresAt` | `validUntil` | unchanged |
+| `trustLevel` | `credentialSubject.trustLevel` | unchanged |
+| `trustScore` | `credentialSubject.trustScore` | unchanged |
+| `verdict` | `credentialSubject.verdict` | unchanged |
+| `capabilities` | `credentialSubject.capabilities` | unchanged |
+| `buildAttestation` | `credentialSubject.buildAttestation` | unchanged |
+| `behavioralProfile` | `credentialSubject.behavioralProfile` | unchanged |
+| `scanSummary` | `credentialSubject.scanSummary` | unchanged |
+| `declaredPurpose` | `credentialSubject.declaredPurpose` | unchanged |
+| `version` | `version` | unchanged |
+| `signatures` | `signatures` | unchanged |
+
+The first `@context` item is the base context the data model requires. The second expands `AtxCredential` and the ATX member names in the table to IRIs under `https://specs.opena2a.org/ns/atx#`, so the mapped form needs no context document beyond the base one. `version` and `signatures` describe the credential, not its subject, and stay at the top level.
+
+`validFrom` and `validUntil` take XML Schema `dateTimeStamp` values. An ATX timestamp is one when it is written with an uppercase `T` and either `Z` or a numeric offset, as in `examples/atx-example.json`.
+
+No row changes a value, so reading the table right to left recovers the ATX credential. The mapped form has these limits:
+
+- The mapped form has the structure of a credential in that data model. It is not a conforming verifiable credential, which is secured by a securing mechanism the data model recognizes, such as a Data Integrity proof or a JOSE or COSE envelope. ATP defines no such mechanism for ATX in this revision, and `signatures` is not a `proof`.
+- The ATX signatures cover the ATX credential's own canonical form, not the mapped form. A verifier recovers the ATX credential and verifies that; the structure of the mapped form is not evidence of validity.
+- The signatures cover nothing the table does not carry. A property the table does not produce (an added claim under `credentialSubject`, a `credentialStatus`) is unsigned unless a Verifiable Credentials securing mechanism covers it.
+
+[`examples/atx-vc-example.json`](./examples/atx-vc-example.json) is `examples/atx-example.json` in this form, and [`schemas/atx-vc-v1.schema.json`](./schemas/atx-vc-v1.schema.json) is the machine-readable shape. `scripts/validate_examples.py` validates the example against the schema and fails when it differs from this table applied to `examples/atx-example.json`; it does not run a JSON-LD processor. Like its source, the example is illustrative: its signature values are placeholders and it does not verify.
+
 #### Why ATX
 
 DIDs answer who an agent is. ATX answers what the agent is authorized to do (`capabilities`), what its provenance is (`buildAttestation`), what its observed behavior looks like (`behavioralProfile`), and what scanners have verified it (`scanSummary`). The W3C Verifiable Credentials Data Model 2.0 supports the issuer, subject, and claims pattern. ATX uses that pattern with agent-specific claims tuned for short TTLs, behavioral attestation, and continuous re-verification.
@@ -1141,6 +1176,7 @@ This specification defines:
 - RFC 8032 — Edwards-Curve Digital Signature Algorithm (Ed25519)
 - RFC 3161 — Internet X.509 PKI Time-Stamp Protocol
 - W3C DID Core — Decentralized Identifiers v1.0
+- W3C Verifiable Credentials Data Model v2.0
 - SLSA — Supply-chain Levels for Software Artifacts
 - FIPS 204 — Module-Lattice-Based Digital Signature Standard (ML-DSA)
 - Google A2A Protocol — Agent-to-Agent communication specification

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, Sigstore co-signature, threat model,
-signed timestamp, ATX status, fixture coverage and A2A agent card path checks
-in validate_examples.py, check_guides.py, the conformance scripts (run against
-fixture_authority.py; needs bash, curl and jq), the registry generation and
---check mode of gen_registries.py, and the test-suite sentences of the
-.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+signed timestamp, ATX status, fixture coverage, A2A agent card path and
+Verifiable Credential form checks in validate_examples.py, check_guides.py, the
+conformance scripts (run against fixture_authority.py; needs bash, curl and
+jq), the registry generation and --check mode of gen_registries.py, and the
+test-suite sentences of the .pre-push-review-not-required marker. Run:
+python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -794,6 +795,260 @@ class SigstoreCoSignatureTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("cosign FAIL", out.getvalue())
         self.assertIn("probe accepted", out.getvalue())
+
+
+class VerifiableCredentialFormTest(unittest.TestCase):
+    """Section 4.6: examples/atx-vc-example.json is the mapping table applied
+    to examples/atx-example.json, and the schema refuses a form that leaves a
+    member where the table moves it from."""
+
+    REQUIRED = ["@context", "type", "issuer", "credentialSubject"]
+    VC_SCHEMA = "schemas/atx-vc-v1.schema.json"
+
+    def setUp(self):
+        self.atx = json.loads((ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"))
+        self.vc = json.loads((ROOT / "examples" / "atx-vc-example.json").read_text(encoding="utf-8"))
+        self.rows = validate_examples.vc_form_rows()
+        self.schema = json.loads((ROOT / self.VC_SCHEMA).read_text(encoding="utf-8"))
+        self.validator = Draft202012Validator(
+            self.schema, registry=validate_examples.local_registry()
+        )
+
+    def moved(self):
+        """(ATX member, property) for each row that moves a member."""
+        for row in self.rows:
+            member, placed = row["ATX member"], row["Verifiable Credential property"]
+            if member not in (validate_examples.NO_ATX_MEMBER, placed):
+                yield member, placed
+
+    def test_repository_example_passes(self):
+        self.assertEqual(validate_examples.atx_vc_form_errors(self.vc), [])
+        self.assertEqual(list(self.validator.iter_errors(self.vc)), [])
+
+    def test_example_carries_the_properties_the_atx_example_lacks(self):
+        self.assertEqual([name for name in self.REQUIRED if name in self.atx], [])
+        self.assertEqual([name for name in self.REQUIRED if name not in self.vc], [])
+        messages = [err.message for err in self.validator.iter_errors(self.atx)]
+        for name in self.REQUIRED:
+            self.assertIn(f"{name!r} is a required property", messages)
+
+    @staticmethod
+    def parent_of(vc, placed):
+        """The object of `vc` that holds the property `placed`, and its name there."""
+        *parents, name = placed.split(".")
+        for parent in parents:
+            vc = vc[parent]
+        return vc, name
+
+    def test_dropping_or_changing_what_a_row_places_fails(self):
+        for row in self.rows:
+            placed = row["Verifiable Credential property"]
+            with self.subTest(placed):
+                dropped = copy.deepcopy(self.vc)
+                parent, name = self.parent_of(dropped, placed)
+                del parent[name]
+                self.assertEqual(
+                    validate_examples.atx_vc_form_errors(dropped), [f"{placed} is missing"]
+                )
+                changed = copy.deepcopy(self.vc)
+                parent, name = self.parent_of(changed, placed)
+                parent[name] = "changed"
+                errors = validate_examples.atx_vc_form_errors(changed)
+                self.assertEqual(len(errors), 1)
+                self.assertTrue(errors[0].startswith(f'{placed} is "changed"; '), errors[0])
+
+    def test_member_left_at_its_atx_name_fails(self):
+        for member, _ in self.moved():
+            with self.subTest(member):
+                left = dict(self.vc, **{member: self.atx[member]})
+                self.assertEqual(
+                    validate_examples.atx_vc_form_errors(left),
+                    [f"{member} is not produced by the Section 4.6 table"],
+                )
+                self.assertFalse(self.validator.is_valid(left))
+
+    def test_claim_the_table_does_not_name_fails(self):
+        added = copy.deepcopy(self.vc)
+        added["credentialSubject"]["admin"] = True
+        self.assertEqual(
+            validate_examples.atx_vc_form_errors(added),
+            ["credentialSubject.admin is not produced by the Section 4.6 table"],
+        )
+        self.assertFalse(self.validator.is_valid(added))
+
+    def test_schema_subject_claims_are_the_table_rows(self):
+        placed = {
+            row["Verifiable Credential property"].split(".", 1)[1]
+            for row in self.rows
+            if row["Verifiable Credential property"].startswith("credentialSubject.")
+        }
+        subject = self.schema["properties"]["credentialSubject"]
+        self.assertEqual(set(subject["properties"]), placed)
+        self.assertIs(subject["additionalProperties"], False)
+
+    def test_atx_member_without_a_row_fails(self):
+        rows = [row for row in self.rows if row["ATX member"] != "capabilities"]
+        self.assertEqual(
+            validate_examples.atx_vc_form_errors(self.vc, rows=rows),
+            [
+                "ATX member 'capabilities' of examples/atx-example.json has no row in the "
+                "Section 4.6 table",
+                "credentialSubject.capabilities is not produced by the Section 4.6 table",
+            ],
+        )
+
+    def test_row_that_changes_a_value_fails(self):
+        rows = [
+            dict(row, Value="uppercased") if row["ATX member"] == "verdict" else row
+            for row in self.rows
+        ]
+        errors = validate_examples.atx_vc_form_errors(self.vc, rows=rows)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'verdict' has Value 'uppercased'", errors[0])
+
+    def test_every_section_4_6_schema_member_has_a_row(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8").split("\n")
+        _, fields = validate_examples.table_after_marker(spec, "#### Schema")
+        listed = {name.strip() for row in fields for name in row["Field"].split(",")}
+        self.assertIn("declaredPurpose", listed)
+        self.assertEqual(listed - {row["ATX member"] for row in self.rows}, set())
+
+    def test_schema_requires_the_base_context_and_both_types(self):
+        context = self.vc["@context"]
+        for edit in (
+            {"@context": ["https://www.w3.org/2018/credentials/v1", context[1]]},
+            {"@context": context[:1]},
+            {"@context": context[::-1]},
+            {"@context": context[0]},
+            {"type": ["AtxCredential"]},
+            {"type": ["VerifiableCredential"]},
+            {"type": "VerifiableCredential"},
+        ):
+            with self.subTest(edit=edit):
+                self.assertFalse(self.validator.is_valid(dict(self.vc, **edit)))
+
+    def test_schema_holds_base_members_to_the_trust_proof_shapes(self):
+        for placed, value in (
+            ("issuer", "not-a-did"),
+            ("credentialSubject.id", "not-a-did"),
+            ("credentialSubject.trustLevel", 5),
+            ("credentialSubject.trustScore", 1.5),
+            ("credentialSubject.verdict", "trusted"),
+        ):
+            with self.subTest(placed):
+                edited = copy.deepcopy(self.vc)
+                parent, name = self.parent_of(edited, placed)
+                parent[name] = value
+                self.assertFalse(self.validator.is_valid(edited))
+
+    def test_schema_admits_a_property_the_mapping_does_not_produce(self):
+        secured = dict(self.vc, proof={"type": "DataIntegrityProof"})
+        self.assertTrue(self.validator.is_valid(secured))
+
+    def test_schema_refuses_a_timestamp_that_is_not_a_date_time_stamp(self):
+        for value in (
+            "2026-05-19t14:00:00Z",
+            "2026-05-19T14:00:00z",
+            "2026-05-19 14:00:00Z",
+            "2026-05-19T14:00:00",
+            20260519,
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(self.validator.is_valid(dict(self.vc, validFrom=value)))
+                self.assertFalse(self.validator.is_valid(dict(self.vc, validUntil=value)))
+        offset = dict(self.vc, validFrom="2026-05-19T16:00:00+02:00")
+        self.assertTrue(self.validator.is_valid(offset))
+
+    def test_main_validates_the_example_file(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 0)
+        self.assertIn("example OK     examples/atx-vc-example.json\n", out.getvalue())
+        out = io.StringIO()
+        with mock.patch.dict(
+            validate_examples.SEMANTIC_CHECKS, {self.VC_SCHEMA: lambda vc: ["row broken"]}
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn(
+            f"example FAIL   examples/atx-vc-example.json vs {self.VC_SCHEMA}\n", out.getvalue()
+        )
+        self.assertIn("row broken", out.getvalue())
+
+    ATX_FAIL = "atx FAIL       README.md, example and schema vs Section 4.6"
+    FORM_FAIL = f"example FAIL   examples/atx-vc-example.json vs {VC_SCHEMA}"
+
+    def main_in_tree(self, examples):
+        """Run main() in a copy of the repository whose examples directory
+        holds only `examples` (file name to text). Returns the exit code, the
+        output lines and those of them that report a failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("README.md", "ATP-SPEC.md"):
+                shutil.copy(ROOT / name, root / name)
+            for directory in ("schemas", "registries"):
+                shutil.copytree(ROOT / directory, root / directory)
+            (root / "examples").mkdir()
+            for name, text in examples.items():
+                (root / "examples" / name).write_text(text, encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_a_missing_form_example_as_one_failure(self):
+        atx = (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8")
+        code, lines, failed = self.main_in_tree({"atx-example.json": atx})
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [self.FORM_FAIL])
+        at = lines.index(self.FORM_FAIL)
+        self.assertEqual(
+            lines[at + 1],
+            "    examples/atx-vc-example.json: missing; schemas/examples-map.json maps it to "
+            f"{self.VC_SCHEMA}",
+        )
+        self.assertFalse(lines[at + 2].startswith("    "), lines)
+
+    def test_main_does_not_fail_the_form_for_an_atx_example_it_cannot_read(self):
+        atx = (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8")
+        vc = (ROOT / "examples" / "atx-vc-example.json").read_text(encoding="utf-8")
+        for state, text in (
+            ("is missing", None),
+            ("is not JSON", atx.rstrip().rstrip("}")),
+            ("is not a JSON object", "[]"),
+        ):
+            with self.subTest(state):
+                examples = {"atx-vc-example.json": vc}
+                if text is not None:
+                    examples["atx-example.json"] = text
+                code, lines, failed = self.main_in_tree(examples)
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [self.ATX_FAIL])
+                self.assertIn(
+                    "example SKIP   examples/atx-vc-example.json: not compared, "
+                    f"examples/atx-example.json {state}",
+                    lines,
+                )
+
+    def test_main_reports_two_missing_example_files_as_two_failures(self):
+        code, lines, failed = self.main_in_tree({})
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [self.ATX_FAIL, self.FORM_FAIL])
+        self.assertEqual(lines[-1], "2 failure(s)")
+
+    def test_readme_claim_points_at_the_mapping(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        claims = [line for line in readme.splitlines() if "vc-data-model-2.0" in line]
+        self.assertEqual(len(claims), 1)
+        self.assertNotIn("structurally compatible", claims[0])
+        self.assertIn("(#verifiable-credential-form)", claims[0])
+        self.assertIn("\n### Verifiable Credential form\n", readme)
+        self.assertIn("(./ATP-SPEC.md#verifiable-credential-form)", readme)
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertIn(f"\n{validate_examples.VC_FORM_HEADING}\n", spec)
+        for path in ("examples/atx-vc-example.json", self.VC_SCHEMA):
+            self.assertIn(f"(./{path})", readme)
+            self.assertIn(f"(./{path})", spec)
 
 
 CONFORMANCE = ROOT / "conformance"
@@ -1636,6 +1891,9 @@ class AtxStatusTest(unittest.TestCase):
                 shutil.copy(ROOT / name, root / name)
             for directory in ("schemas", "registries"):
                 shutil.copytree(ROOT / directory, root / directory)
+            # The ATX example is the one mapped example file the tree lacks.
+            (root / "examples").mkdir()
+            shutil.copy(ROOT / "examples" / "atx-vc-example.json", root / "examples")
             out = io.StringIO()
             with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
                 self.assertEqual(validate_examples.main(), 1)

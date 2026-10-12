@@ -7,7 +7,9 @@ Reads schemas/examples-map.json, a list of entries:
       "schema": "schemas/atx-credential-v1.1.schema.json" }
 
 For each entry: find the heading line in the file, take the first fenced
-```json block after it, parse it, and validate it against the schema.
+```json block after it, parse it, and validate it against the schema. An entry
+without a heading maps a whole JSON file; a mapped file that is missing is one
+failure.
 Also metaschema-checks every schemas/*.schema.json.
 
 Formats (date-time, uuid) are treated as annotations, not assertions, matching
@@ -16,7 +18,12 @@ pattern, required) carry the contract.
 
 A rule JSON Schema cannot express runs after a schema-valid example: a trust
 proof example must declare a validity window a verifier accepts (Section 4.4
-step 5, the Section 10.2 24-hour maximum).
+step 5, the Section 10.2 24-hour maximum), and the Verifiable Credential form
+of the ATX example must be the Section 4.6 mapping table applied to
+examples/atx-example.json, member for member. The table is read from the
+specification, so the table, the example and the schema cannot drift apart. An
+ATX example that is missing or not a JSON object is the ATX check's failure
+(below); the form is then reported as not compared, not as a second failure.
 
 The revocation schema's `reason` is checked against the Section 8.1.1 registry:
 its codes are the table's, and free text is refused.
@@ -111,6 +118,8 @@ except ImportError:
     print("error: the 'jsonschema' package is required (pip install jsonschema)")
     sys.exit(2)
 
+from gen_registries import table_after_marker
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Section 10.2: a trust proof is valid for at most 24 hours, which a verifier
@@ -137,9 +146,111 @@ def trust_proof_window_errors(proof: dict) -> list[str]:
     return []
 
 
+# Section 4.6: the heading whose table maps an ATX credential to the Verifiable
+# Credential form, the ATX example the mapped example is derived from, and the
+# table's cell for a row that sets a constant instead of moving a member.
+VC_FORM_HEADING = "#### Verifiable Credential Form"
+ATX_EXAMPLE = "examples/atx-example.json"
+NO_ATX_MEMBER = "(none)"
+
+
+class SourceUnusable(Exception):
+    """The file an example is compared with is missing or not a JSON object.
+    The check that owns that file fails on it, so the comparison is skipped
+    instead of failing a second time for the same cause."""
+
+
+def atx_example() -> dict:
+    """examples/atx-example.json as an object. A file that is missing, not
+    JSON or not an object raises SourceUnusable; atx_status_errors reports
+    each of those."""
+    path = ROOT / ATX_EXAMPLE
+    if not path.is_file():
+        raise SourceUnusable(f"{ATX_EXAMPLE} is missing")
+    try:
+        atx = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise SourceUnusable(f"{ATX_EXAMPLE} is not JSON") from None
+    if not isinstance(atx, dict):
+        raise SourceUnusable(f"{ATX_EXAMPLE} is not a JSON object")
+    return atx
+
+
+def vc_form_rows(spec_text: str | None = None) -> list[dict]:
+    """The Section 4.6 mapping table, one dict per row, keyed by column."""
+    if spec_text is None:
+        spec_text = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+    return table_after_marker(spec_text.split("\n"), VC_FORM_HEADING)[1]
+
+
+def atx_to_vc(atx: dict, rows: list[dict]) -> dict:
+    """Section 4.6: place each ATX member at the property its row names. A row
+    with no ATX member sets the constant in its Value cell."""
+    vc: dict = {}
+    for row in rows:
+        member = row["ATX member"]
+        if member == NO_ATX_MEMBER:
+            value = json.loads(row["Value"])
+        elif member in atx:
+            value = atx[member]
+        else:
+            continue
+        *parents, name = row["Verifiable Credential property"].split(".")
+        target = vc
+        for parent in parents:
+            target = target.setdefault(parent, {})
+        target[name] = value
+    return vc
+
+
+def member_differences(expected, actual, path: str = ""):
+    """Yield one message per member of `actual` that is missing, added or
+    changed against `expected`, descending through objects."""
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        for key in sorted(expected.keys() | actual.keys()):
+            where = f"{path}.{key}" if path else key
+            if key not in actual:
+                yield f"{where} is missing"
+            elif key not in expected:
+                yield f"{where} is not produced by the Section 4.6 table"
+            else:
+                yield from member_differences(expected[key], actual[key], where)
+    elif json.dumps(expected, sort_keys=True) != json.dumps(actual, sort_keys=True):
+        yield f"{path} is {json.dumps(actual)}; the Section 4.6 table gives {json.dumps(expected)}"
+
+
+def atx_vc_form_errors(
+    vc: dict, atx: dict | None = None, rows: list[dict] | None = None
+) -> list[str]:
+    """Section 4.6: the Verifiable Credential form is the mapping table applied
+    to the ATX credential. Every ATX member has a row, no row changes a value,
+    and the form carries nothing the table does not produce. Members whose
+    name starts with `$` annotate the example file and are not ATX members.
+    Raises SourceUnusable when the ATX example cannot be read as an object."""
+    if atx is None:
+        atx = atx_example()
+    if rows is None:
+        rows = vc_form_rows()
+    members = {name: value for name, value in atx.items() if not name.startswith("$")}
+    mapped = {row["ATX member"] for row in rows}
+    errors = [
+        f"ATX member {name!r} of {ATX_EXAMPLE} has no row in the Section 4.6 table"
+        for name in members
+        if name not in mapped
+    ]
+    errors += [
+        f"the Section 4.6 row for {row['ATX member']!r} has Value {row['Value']!r}; "
+        "a member is carried unchanged"
+        for row in rows
+        if row["ATX member"] != NO_ATX_MEMBER and row["Value"] != "unchanged"
+    ]
+    return errors + list(member_differences(atx_to_vc(members, rows), vc))
+
+
 # Checks a schema cannot express, keyed by the schema an example is mapped to.
 SEMANTIC_CHECKS = {
     "schemas/trust-proof-v1.schema.json": trust_proof_window_errors,
+    "schemas/atx-vc-v1.schema.json": atx_vc_form_errors,
 }
 
 # Section 8.1.1: values the revocation schema must refuse as a `reason`: the
@@ -1151,13 +1262,24 @@ def main() -> int:
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
     for entry in entries:
-        md = ROOT / entry["file"]
+        source = ROOT / entry["file"]
         schema_path = ROOT / entry["schema"]
-        raw = extract_block(md, entry["heading"])
+        heading = entry.get("heading")
+        if heading is None:
+            label = entry["file"]
+            if not source.is_file():
+                print(f"example FAIL   {label} vs {entry['schema']}")
+                print(f"    {label}: missing; schemas/examples-map.json maps it to {entry['schema']}")
+                failures += 1
+                continue
+            raw = source.read_text(encoding="utf-8")
+        else:
+            label = f"{entry['file']} @ {heading!r}"
+            raw = extract_block(source, heading)
         try:
             instance = json.loads(raw)
         except json.JSONDecodeError as exc:
-            print(f"example INVALID JSON  {entry['file']} @ {entry['heading']!r}: {exc}")
+            print(f"example INVALID JSON  {label}: {exc}")
             failures += 1
             continue
         validator = Draft202012Validator(
@@ -1168,14 +1290,18 @@ def main() -> int:
             for err in sorted(validator.iter_errors(instance), key=lambda e: e.json_path)
         ]
         if not errors and entry["schema"] in SEMANTIC_CHECKS:
-            errors = [f"$: {msg}" for msg in SEMANTIC_CHECKS[entry["schema"]](instance)]
+            try:
+                errors = [f"$: {msg}" for msg in SEMANTIC_CHECKS[entry["schema"]](instance)]
+            except SourceUnusable as exc:
+                print(f"example SKIP   {label}: not compared, {exc}")
+                continue
         if errors:
-            print(f"example FAIL   {entry['file']} @ {entry['heading']!r} vs {entry['schema']}")
+            print(f"example FAIL   {label} vs {entry['schema']}")
             for err in errors:
                 print(f"    {err}")
             failures += 1
         else:
-            print(f"example OK     {entry['file']} @ {entry['heading']!r}")
+            print(f"example OK     {label}")
 
     if failures:
         print(f"\n{failures} failure(s)")

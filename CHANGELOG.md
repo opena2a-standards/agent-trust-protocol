@@ -48,6 +48,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   tolerance (the Section 10.2 skew bound never extends the window). Section 10.2 names the
   step that enforces it. The Section 2.1 fixture table gains
   `trust-proof-window-exceeds-max.json` (REJECT[SEMANTIC_INVALID]).
+- Section 4.6 "Verifiable Credential Form": the mapping from an ATX credential to the W3C
+  Verifiable Credentials Data Model 2.0 structure, one table row per member (`issuerDid` to
+  `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and
+  `validUntil`, each claim under `credentialSubject`, `version` and `signatures` unchanged at
+  the top level, constant `@context` and `type`). The section says what the mapped form is
+  not: no Verifiable Credentials securing mechanism secures it, and its ATX signatures are
+  verified on the ATX credential the mapping recovers. `examples/atx-vc-example.json` is
+  `examples/atx-example.json` in that form and `schemas/atx-vc-v1.schema.json` is its shape.
+  `scripts/validate_examples.py` reads the table from the specification and fails when the
+  example differs from the table applied to the ATX example; an `examples-map.json` entry
+  without a heading maps a whole JSON file, and a mapped file that is missing is one failure.
+  An ATX example that is missing or not a JSON object stays one failure of the ATX check: the
+  form is reported as not compared. The README called ATX "structurally compatible"
+  with that data model and gave no mapping and no example; it now links the table, the
+  example and the schema.
 
 - One home per shared definition, marked for the family drift gate: Section 4.1
   is the home of the trust level numbers and names and of the 0.0-1.0 score scale

@@ -33,5 +33,9 @@
     "file": "ATP-SPEC.md",
     "heading": "### 7.1 Well-Known Endpoint",
     "schema": "schemas/discovery-v1.schema.json"
+  },
+  {
+    "file": "examples/atx-vc-example.json",
+    "schema": "schemas/atx-vc-v1.schema.json"
   }
 ]
