@@ -1,0 +1,69 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    { "@vocab": "https://specs.opena2a.org/ns/atx#" }
+  ],
+  "type": ["VerifiableCredential", "AtxCredential"],
+  "issuer": "did:opena2a:registry:opena2a.org",
+  "validFrom": "2026-05-19T14:00:00Z",
+  "validUntil": "2026-05-20T14:00:00Z",
+  "credentialSubject": {
+    "id": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+    "trustLevel": 3,
+    "trustScore": 0.82,
+    "verdict": "passed",
+    "capabilities": [
+      "filesystem:read",
+      "filesystem:write",
+      "filesystem:list"
+    ],
+    "buildAttestation": {
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "slsaLevel": 2,
+      "subjectDigest": "sha256:PLACEHOLDER_BUILD_ARTIFACT_DIGEST",
+      "builderId": "https://github.com/actions/runner"
+    },
+    "behavioralProfile": {
+      "checksum": "sha256:PLACEHOLDER_BEHAVIORAL_BASELINE_DIGEST",
+      "observationWindow": {
+        "from": "2026-04-19T00:00:00Z",
+        "to": "2026-05-19T00:00:00Z"
+      },
+      "sampleCount": 14823
+    },
+    "scanSummary": {
+      "checksRun": 199,
+      "criticalFindings": 0,
+      "highFindings": 1,
+      "mediumFindings": 4,
+      "lastScanned": "2026-05-19T12:00:00Z"
+    },
+    "declaredPurpose": {
+      "vocabVersion": "1",
+      "statement": "Reads, lists, and writes files in a sandboxed workspace on behalf of a coding assistant.",
+      "category": "software-development",
+      "taskScopes": ["dev:read_files", "dev:write_files"],
+      "capabilityJustification": {
+        "filesystem:read": ["dev:read_files"],
+        "filesystem:list": ["dev:read_files"],
+        "filesystem:write": ["dev:write_files"]
+      },
+      "autonomy": "supervised",
+      "dataScopes": ["workspace.source"],
+      "egressScopes": []
+    }
+  },
+  "version": "1.1-draft",
+  "signatures": [
+    {
+      "keyId": "did:opena2a:registry:opena2a.org#key-v1",
+      "algorithm": "Ed25519",
+      "value": "PLACEHOLDER_BASE64_ED25519_SIGNATURE"
+    },
+    {
+      "keyId": "did:opena2a:registry:opena2a.org#pqc-v1",
+      "algorithm": "ML-DSA-65",
+      "value": "PLACEHOLDER_BASE64_MLDSA65_SIGNATURE"
+    }
+  ]
+}

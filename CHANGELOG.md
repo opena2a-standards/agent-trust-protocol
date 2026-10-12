@@ -9,6 +9,26 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 ### Added
 
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
+- Section 4.3.1: the Sigstore co-signature the abstract and README listed, which the
+  trust-proof schema refused. It is a `signatures[]` entry with `algorithm: "Sigstore"`,
+  `keyId` set to the certificate identity, and a Sigstore v0.3 `bundle` (message signature
+  over the Section 4.3 canonical string, signing certificate, at least one `hashedrekord`
+  Rekor entry with an inclusion proof) in place of `value`. A verifier checks the message
+  digest and signature, Rekor inclusion and signing time, the Fulcio chain, and the
+  certificate identity against identities it configures itself for the issuer, never ones
+  the proof supplies; any failure is `SIGNATURE_INVALID`. The co-signature does not replace
+  the Ed25519 signature and does not count toward step 7 or Section 6 co-signing. Section
+  4.4 steps 3, 4 and 7 point to it, and step 4 requires every proof to carry a verifying
+  Ed25519 entry whose `keyId` resolves to a key of `issuerDid`, which a Sigstore entry never
+  satisfies. `schemas/trust-proof-v1.schema.json` gains the entry as a second
+  `signatures[]` branch and requires every proof to carry at least one authority signature
+  (`contains`, which `conformance/checks.jq` now implements, so T1.9 fails a proof whose only
+  signatures are Sigstore entries). The 4.3.1 example is validated in CI, and
+  `validate_examples.py` checks that the schema refuses an entry without a bundle, with a
+  `value` beside it, in another bundle version, with a DSSE envelope, a public key or a
+  certificate chain, or without a Rekor entry carrying an inclusion proof, and a proof whose
+  only signatures are Sigstore entries. Section 2.1 lists co-signature verification as not
+  yet covered by byte-stable fixtures.
 - Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
   for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
   `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,
@@ -33,6 +53,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   tolerance (the Section 10.2 skew bound never extends the window). Section 10.2 names the
   step that enforces it. The Section 2.1 fixture table gains
   `trust-proof-window-exceeds-max.json` (REJECT[SEMANTIC_INVALID]).
+- Section 4.6 "Verifiable Credential Form": the mapping from an ATX credential to the W3C
+  Verifiable Credentials Data Model 2.0 structure, one table row per member (`issuerDid` to
+  `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and
+  `validUntil`, each claim under `credentialSubject`, `version` and `signatures` unchanged at
+  the top level, constant `@context` and `type`). The section says what the mapped form is
+  not: no Verifiable Credentials securing mechanism secures it, and its ATX signatures are
+  verified on the ATX credential the mapping recovers. `examples/atx-vc-example.json` is
+  `examples/atx-example.json` in that form and `schemas/atx-vc-v1.schema.json` is its shape.
+  `scripts/validate_examples.py` reads the table from the specification and fails when the
+  example differs from the table applied to the ATX example; an `examples-map.json` entry
+  without a heading maps a whole JSON file, and a mapped file that is missing is one failure.
+  An ATX example that is missing or not a JSON object stays one failure of the ATX check: the
+  form is reported as not compared. The README called ATX "structurally compatible"
+  with that data model and gave no mapping and no example; it now links the table, the
+  example and the schema.
 
 - One home per shared definition, marked for the family drift gate: Section 4.1
   is the home of the trust level numbers and names and of the 0.0-1.0 score scale
@@ -206,6 +241,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   mandatory second signature; it now states Section 4.3: Ed25519 is required and ML-DSA-65 is
   the second signature of the optional hybrid mode. `scripts/validate_examples.py` fails on a
   README sentence that names ML-DSA-65 without hybrid mode.
+- Section 3.4 and the A2A integration guide placed the A2A agent card at
+  `/.well-known/agent.json`, a path the A2A specification no longer names. Both now name
+  `/.well-known/agent-card.json`, in the Section 3.4 sentence and in the guide's overview and
+  its Python, TypeScript and cURL examples, and `scripts/check_guides.py` serves the recorded
+  card at that path. `scripts/validate_examples.py` fails when ATP-SPEC.md, README.md or a
+  guide under `examples/` names the retired path.
 - `scripts/check_license.py` reads LICENSE byte for byte, so a copy with CRLF line endings
   fails, and reports a path it cannot read in one line with exit 1 instead of a traceback.
 - `scripts/validate_examples.py` README checks: a sentence wrapped across lines is checked
@@ -354,6 +395,24 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   header is on. One entry above is corrected: it said the legacy path must gain the
   normative alias before v1.0.0-final, where Section 7.1 says the reference implementation
   serves it as an optional alias.
+- Conformance scripts, follow-up: every request now goes through one `fetch` helper in
+  `conformance/lib.sh`. An authority URL with a brace list or bracket range in its host or
+  port, which `curl` rejects with globbing off, failed every test with "no JSON body"; the
+  tests that send a request now say "the authority URL is not a valid URL", and the
+  conformance README says such a URL is rejected. `curl` removed `.` and `..` segments, so an
+  `endpoints.trustProof` of `/x/../api/v1/trust/proof` passed T1.7 without a request to the
+  declared path; every request now passes `--path-as-is`. `authorityDid` went into the T1.4
+  path and the T1.7 query as written, so a `#` dropped the rest of the request; it is now
+  percent-encoded (as jq's `@uri` encodes it, except for `:` and `@`), and T1.7 fails without a
+  request, naming the reason, when `endpoints.trustProof` holds `#`, whitespace or a control
+  character. T1.7 adds the `did` parameter after `&` when the endpoint has a query. Reading an
+  `endpoints.trustProof` with a NUL character printed a shell warning on stderr; the NUL is
+  now removed in `jq`. No request had a time limit, so an address that does not answer held
+  each one for the system connect timeout; each request now stops after 10 seconds to connect
+  and 30 seconds in all, set by `ATP_CONNECT_TIMEOUT` and `ATP_MAX_TIME` (a value that is not a
+  number exits 69), and the failure names the limits. `scripts/test_checks.py` covers each
+  of these, and checks that every `curl` call passes `-g`, `--path-as-is`, `--connect-timeout`
+  and `--max-time`.
 
 ## [1.0.0-rc1] - 2026-04-28
 

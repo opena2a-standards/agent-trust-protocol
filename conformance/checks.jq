@@ -42,7 +42,8 @@ def schema_ok($s; $root):
         and ($s.maximum == null or $v <= $s.maximum)))
       and ($t != "array" or (
         ($s.minItems == null or length >= $s.minItems)
-        and ($s.items == null or all(.[]; schema_ok($s.items; $root)))))
+        and ($s.items == null or all(.[]; schema_ok($s.items; $root)))
+        and ($s.contains == null or any(.[]; schema_ok($s.contains; $root)))))
       and ($t != "object" or (
         ($s.minProperties == null or length >= $s.minProperties)
         and all(($s.required // [])[]; . as $k | $v | has($k))

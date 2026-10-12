@@ -53,7 +53,7 @@ FS = "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
 GH = "did:opena2a:mcp_server:@modelcontextprotocol/server-github"
 WEATHER = "did:opena2a:agent:weather-agent"
 REQUESTER = "did:opena2a:agent:requester-agent"
-CARD_URL = "https://weather.example.com/.well-known/agent.json"
+CARD_URL = "https://weather.example.com/.well-known/agent-card.json"
 RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 

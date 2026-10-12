@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specs.opena2a.org/schemas/atp/atx-vc-v1.schema.json",
+  "title": "ATX credential in Verifiable Credential form (section 4.6)",
+  "description": "Structural schema for an ATX credential rearranged into the W3C Verifiable Credentials Data Model 2.0 structure by the section 4.6 mapping table. Shape only: the ATX signatures cover the ATX credential's own canonical form, so a verifier recovers the ATX credential and verifies that. The base claims take their shapes from trust-proof-v1; the ATX v1.1 claims are carried unchanged and their shapes are the ATX specification's. The top level is open to properties the data model defines and the mapping does not produce (id, proof, credentialStatus); an ATX member the table moves is refused where the table moves it from.",
+  "type": "object",
+  "required": [
+    "@context",
+    "type",
+    "issuer",
+    "validFrom",
+    "validUntil",
+    "credentialSubject",
+    "signatures"
+  ],
+  "properties": {
+    "@context": {
+      "type": "array",
+      "minItems": 2,
+      "prefixItems": [
+        { "const": "https://www.w3.org/ns/credentials/v2" },
+        { "const": { "@vocab": "https://specs.opena2a.org/ns/atx#" } }
+      ]
+    },
+    "type": {
+      "type": "array",
+      "items": { "type": "string" },
+      "allOf": [
+        { "contains": { "const": "VerifiableCredential" } },
+        { "contains": { "const": "AtxCredential" } }
+      ]
+    },
+    "issuer": {
+      "$ref": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json#/$defs/did"
+    },
+    "validFrom": { "$ref": "#/$defs/dateTimeStamp" },
+    "validUntil": { "$ref": "#/$defs/dateTimeStamp" },
+    "credentialSubject": {
+      "type": "object",
+      "required": ["id", "trustLevel", "trustScore", "verdict"],
+      "properties": {
+        "id": {
+          "$ref": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json#/$defs/did"
+        },
+        "trustLevel": {
+          "$ref": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json#/properties/trustLevel"
+        },
+        "trustScore": {
+          "$ref": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json#/properties/trustScore"
+        },
+        "verdict": {
+          "$ref": "https://specs.opena2a.org/schemas/atp/trust-proof-v1.schema.json#/properties/verdict"
+        },
+        "capabilities": {},
+        "buildAttestation": {},
+        "behavioralProfile": {},
+        "scanSummary": {},
+        "declaredPurpose": {}
+      },
+      "additionalProperties": false
+    },
+    "version": { "type": "string", "minLength": 1 },
+    "signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "object" },
+      "description": "The ATX signatures, carried unchanged. Not a Verifiable Credentials proof."
+    }
+  },
+  "propertyNames": {
+    "not": {
+      "enum": [
+        "issuerDid",
+        "did",
+        "issuedAt",
+        "expiresAt",
+        "trustLevel",
+        "trustScore",
+        "verdict",
+        "capabilities",
+        "buildAttestation",
+        "behavioralProfile",
+        "scanSummary",
+        "declaredPurpose"
+      ]
+    }
+  },
+  "$defs": {
+    "dateTimeStamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "XML Schema dateTimeStamp: an uppercase T and either Z or a numeric offset."
+    }
+  }
+}

@@ -29,7 +29,7 @@ ATP is designed to complement, not replace, existing standards:
 
 - **Google A2A Protocol** — ATP provides the trust layer that A2A lacks. An A2A agent can include its ATP trust proof in the agent card so that other agents can verify trust before delegating tasks.
 - **SLSA (Supply Chain Levels for Software Artifacts)** — ATP trust scoring incorporates SLSA provenance levels. An agent built with SLSA Level 3 provenance receives higher ATP trust.
-- **Sigstore** — ATP trust proofs can be co-signed using Sigstore keyless signing. Agents signed via Sigstore receive an attestation that factors into their ATP trust score.
+- **Sigstore** — ATP trust proofs can be co-signed using Sigstore keyless signing (Section 4.3.1). Agents signed via Sigstore receive an attestation that factors into their ATP trust score.
 - **Certificate Transparency (RFC 6962)** — ATP's transparency log is structurally compatible with CT. Monitors that verify CT logs can be adapted to verify ATP logs with minimal changes.
 - **W3C DID Core** — ATP agent identifiers are valid DIDs resolvable to DID Documents.
 
@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -203,7 +203,7 @@ Response: the DID Document as JSON with `Content-Type: application/did+json`.
 
 ### 3.4 Integration with A2A Agent Cards
 
-A2A agents that participate in ATP SHOULD include their DID and a current trust proof in their agent card (`/.well-known/agent.json`):
+A2A agents that participate in ATP SHOULD include their DID and a current trust proof in their agent card (`/.well-known/agent-card.json`):
 
 ```json
 {
@@ -342,14 +342,118 @@ Implementations SHOULD also support hybrid Ed25519 + ML-DSA-65 (FIPS 204) dual s
 ]
 ```
 
+#### 4.3.1 Sigstore co-signature
+
+A trust proof MAY carry a co-signature made with Sigstore keyless signing in addition to
+the authority's signatures: the co-signer authenticates to an OpenID Connect provider,
+receives a short-lived signing certificate from a Fulcio certificate authority, signs the
+Section 4.3 canonical string, and records the signature in a Rekor transparency log. The
+co-signature binds the proof to that identity in a public log the authority does not
+operate. It never replaces an authority signature: the proof still carries the Ed25519
+entry Section 4.3 requires, and a Sigstore entry does not count toward Section 4.4 step 7
+or the Section 6 co-signing of trust levels 3-4.
+
+A co-signature is one entry of `signatures[]`, with no `value` member:
+
+| Member | Value |
+|---|---|
+| `algorithm` | `Sigstore` |
+| `keyId` | The certificate identity: the Subject Alternative Name (a URI or an email address) of the bundle's signing certificate. |
+| `bundle` | A Sigstore bundle with media type `application/vnd.dev.sigstore.bundle.v0.3+json` in its protobuf JSON form. Its `messageSignature` is over the UTF-8 bytes of the Section 4.3 canonical string, `verificationMaterial.certificate` is the signing certificate, and `verificationMaterial.tlogEntries` holds at least one `hashedrekord` entry with its `inclusionProof`. A bundle with a DSSE envelope, a bare public key or a certificate chain in place of these is refused. |
+
+The example below is the Section 4.2 proof with a co-signature added. It shows the shape
+only: its signature and bundle values are placeholders, so it does not verify.
+
+```json
+{
+  "did": "did:opena2a:mcp_server:agent_conformance_test_001",
+  "trustLevel": 3,
+  "trustScore": 0.825,
+  "verdict": "passed",
+  "issuedAt": "2026-05-23T12:00:00Z",
+  "expiresAt": "2026-05-24T06:00:00Z",
+  "issuerDid": "did:opena2a:authority:opena2a.org",
+  "signatures": [
+    {
+      "keyId": "did:opena2a:authority:opena2a.org#key-1",
+      "algorithm": "Ed25519",
+      "value": "ZWQyNTUxOQ=="
+    },
+    {
+      "keyId": "https://github.com/example-org/authority/.github/workflows/cosign.yml@refs/heads/main",
+      "algorithm": "Sigstore",
+      "bundle": {
+        "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+        "verificationMaterial": {
+          "certificate": { "rawBytes": "Y2VydGlmaWNhdGU=" },
+          "tlogEntries": [
+            {
+              "logIndex": "1847300",
+              "logId": { "keyId": "bG9nLWlk" },
+              "kindVersion": { "kind": "hashedrekord", "version": "0.0.1" },
+              "integratedTime": "1779537660",
+              "inclusionPromise": { "signedEntryTimestamp": "c2V0" },
+              "inclusionProof": {
+                "logIndex": "1847300",
+                "rootHash": "cm9vdA==",
+                "treeSize": "1847301",
+                "hashes": ["aGFzaA=="],
+                "checkpoint": { "envelope": "checkpoint placeholder" }
+              },
+              "canonicalizedBody": "Ym9keQ=="
+            }
+          ]
+        },
+        "messageSignature": {
+          "messageDigest": { "algorithm": "SHA2_256", "digest": "ZGlnZXN0" },
+          "signature": "c2lnbmF0dXJl"
+        }
+      }
+    }
+  ],
+  "transparencyLogIndex": 42
+}
+```
+
+A verifier checks a Sigstore entry as part of Section 4.4 step 4, against a Sigstore
+trusted root (the Fulcio certificate authorities, the Rekor log keys and any timestamp
+authorities) that it obtained out of band, normally from the Sigstore TUF repository.
+Every rule below MUST pass; a failure rejects the proof with category `SIGNATURE_INVALID`.
+
+1. **Message.** `messageSignature.messageDigest.digest` equals the digest, under
+   `messageDigest.algorithm`, of the canonical string the verifier builds from the proof
+   (Section 4.3), and `messageSignature.signature` verifies over those bytes under the
+   public key of the signing certificate.
+2. **Transparency-log inclusion.** At least one entry of `tlogEntries` is a `hashedrekord`
+   entry whose `canonicalizedBody` records the same signature, certificate and digest,
+   whose `logId` names a Rekor log in the trusted root, and whose `inclusionProof` verifies
+   against a checkpoint signed by that log's key. The signing time is either a verified
+   RFC 3161 timestamp in `timestampVerificationData` or the entry's `integratedTime` as
+   covered by its `inclusionPromise`.
+3. **Certificate.** The signing certificate chains to a Fulcio certificate authority in the
+   trusted root, and the signing time falls inside the certificate's validity period.
+4. **Identity.** The certificate's Subject Alternative Name equals `keyId`, and that name,
+   together with the OpenID Connect issuer the certificate records (Fulcio extension OID
+   1.3.6.1.4.1.57264.1.8, or 1.3.6.1.4.1.57264.1.1 in older certificates), matches an
+   identity the verifier accepts as a co-signer for `issuerDid`. The verifier takes the
+   accepted identities from its own configuration, never from the proof or the bundle: any
+   party can obtain a Fulcio certificate, so a valid one proves who signed, not that the
+   signer may co-sign.
+
+Section 4.4 step 3 does not apply to a Sigstore entry: the key is the certificate's, and
+rules 3 and 4 take the place of the key lookup. A verifier that does not implement this
+subsection cannot verify a Sigstore entry, so step 4 rejects a proof that carries one. The
+Rekor log is not the Section 5 transparency log: rule 2 proves that the co-signature was
+published, and step 6 still governs `transparencyLogIndex`.
+
 ### 4.4 Verification
 
 A verifier MUST perform the following checks in order:
 
 1. **Expiry:** `expiresAt` MUST be in the future. Expired proofs MUST be rejected.
 2. **Issuer:** `issuerDid` MUST resolve to a known trust authority.
-3. **Key lookup:** `signatures[*].keyId` MUST resolve to a valid, non-revoked public key.
-4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload, and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4).
+3. **Key lookup:** `signatures[*].keyId` MUST resolve to a valid, non-revoked public key. A Sigstore entry is checked by Section 4.3.1 rules 3 and 4 instead.
+4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload (a Sigstore entry under the Section 4.3.1 rules), and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4). Every proof MUST carry a verifying Ed25519 entry whose `keyId` resolves to a key of `issuerDid` (Section 4.3). A Sigstore entry never satisfies this, so a proof whose only signatures are Sigstore entries is rejected.
 5. **Semantic validation:**
    - `trustLevel` MUST be 0-4
    - `trustScore` MUST be on the Section 4.1 scale (0.0-1.0)
@@ -357,7 +461,7 @@ A verifier MUST perform the following checks in order:
    - `issuedAt` MUST be before `expiresAt`
    - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
-7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present.
+7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present. A Sigstore co-signature (Section 4.3.1) is not an authority signature.
 
 Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation
 of the agent itself is Section 8.1: a verifier that reads the revocation list applies an
@@ -406,6 +510,41 @@ Note: Section 4.2 shows `transparencyLogIndex` in its example payload; it is not
 #### Reference Example
 
 See `examples/atx-example.json` for an illustrative v1.1-draft proof showing all ATX v1.1 fields. The example is informational and is not a verifiable proof.
+
+#### Verifiable Credential Form
+
+An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/) document as issued: it carries none of the four properties that data model requires (`@context`, `type`, `issuer`, `credentialSubject`). It does carry an issuer, a subject and claims, under other names. The table below is the mapping from an ATX credential to that data model's structure. Each row places one member; a member the table does not name has no place in the mapped form.
+
+| ATX member | Verifiable Credential property | Value |
+|------------|--------------------------------|-------|
+| (none) | `@context` | `["https://www.w3.org/ns/credentials/v2", {"@vocab": "https://specs.opena2a.org/ns/atx#"}]` |
+| (none) | `type` | `["VerifiableCredential", "AtxCredential"]` |
+| `issuerDid` | `issuer` | unchanged |
+| `did` | `credentialSubject.id` | unchanged |
+| `issuedAt` | `validFrom` | unchanged |
+| `expiresAt` | `validUntil` | unchanged |
+| `trustLevel` | `credentialSubject.trustLevel` | unchanged |
+| `trustScore` | `credentialSubject.trustScore` | unchanged |
+| `verdict` | `credentialSubject.verdict` | unchanged |
+| `capabilities` | `credentialSubject.capabilities` | unchanged |
+| `buildAttestation` | `credentialSubject.buildAttestation` | unchanged |
+| `behavioralProfile` | `credentialSubject.behavioralProfile` | unchanged |
+| `scanSummary` | `credentialSubject.scanSummary` | unchanged |
+| `declaredPurpose` | `credentialSubject.declaredPurpose` | unchanged |
+| `version` | `version` | unchanged |
+| `signatures` | `signatures` | unchanged |
+
+The first `@context` item is the base context the data model requires. The second expands `AtxCredential` and the ATX member names in the table to IRIs under `https://specs.opena2a.org/ns/atx#`, so the mapped form needs no context document beyond the base one. `version` and `signatures` describe the credential, not its subject, and stay at the top level.
+
+`validFrom` and `validUntil` take XML Schema `dateTimeStamp` values. An ATX timestamp is one when it is written with an uppercase `T` and either `Z` or a numeric offset, as in `examples/atx-example.json`.
+
+No row changes a value, so reading the table right to left recovers the ATX credential. The mapped form has these limits:
+
+- The mapped form has the structure of a credential in that data model. It is not a conforming verifiable credential, which is secured by a securing mechanism the data model recognizes, such as a Data Integrity proof or a JOSE or COSE envelope. ATP defines no such mechanism for ATX in this revision, and `signatures` is not a `proof`.
+- The ATX signatures cover the ATX credential's own canonical form, not the mapped form. A verifier recovers the ATX credential and verifies that; the structure of the mapped form is not evidence of validity.
+- The signatures cover nothing the table does not carry. A property the table does not produce (an added claim under `credentialSubject`, a `credentialStatus`) is unsigned unless a Verifiable Credentials securing mechanism covers it.
+
+[`examples/atx-vc-example.json`](./examples/atx-vc-example.json) is `examples/atx-example.json` in this form, and [`schemas/atx-vc-v1.schema.json`](./schemas/atx-vc-v1.schema.json) is the machine-readable shape. `scripts/validate_examples.py` validates the example against the schema and fails when it differs from this table applied to `examples/atx-example.json`; it does not run a JSON-LD processor. Like its source, the example is illustrative: its signature values are placeholders and it does not verify.
 
 #### Why ATX
 
@@ -1037,6 +1176,7 @@ This specification defines:
 - RFC 8032 — Edwards-Curve Digital Signature Algorithm (Ed25519)
 - RFC 3161 — Internet X.509 PKI Time-Stamp Protocol
 - W3C DID Core — Decentralized Identifiers v1.0
+- W3C Verifiable Credentials Data Model v2.0
 - SLSA — Supply-chain Levels for Software Artifacts
 - FIPS 204 — Module-Lattice-Based Digital Signature Standard (ML-DSA)
 - Google A2A Protocol — Agent-to-Agent communication specification

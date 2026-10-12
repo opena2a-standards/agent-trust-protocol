@@ -7,7 +7,9 @@ Reads schemas/examples-map.json, a list of entries:
       "schema": "schemas/atx-credential-v1.1.schema.json" }
 
 For each entry: find the heading line in the file, take the first fenced
-```json block after it, parse it, and validate it against the schema.
+```json block after it, parse it, and validate it against the schema. An entry
+without a heading maps a whole JSON file; a mapped file that is missing is one
+failure.
 Also metaschema-checks every schemas/*.schema.json.
 
 Formats (date-time, uuid) are treated as annotations, not assertions, matching
@@ -16,7 +18,12 @@ pattern, required) carry the contract.
 
 A rule JSON Schema cannot express runs after a schema-valid example: a trust
 proof example must declare a validity window a verifier accepts (Section 4.4
-step 5, the Section 10.2 24-hour maximum).
+step 5, the Section 10.2 24-hour maximum), and the Verifiable Credential form
+of the ATX example must be the Section 4.6 mapping table applied to
+examples/atx-example.json, member for member. The table is read from the
+specification, so the table, the example and the schema cannot drift apart. An
+ATX example that is missing or not a JSON object is the ATX check's failure
+(below); the form is then reported as not compared, not as a second failure.
 
 The revocation schema's `reason` is checked against the Section 8.1.1 registry:
 its codes are the table's, and free text is refused.
@@ -24,6 +31,11 @@ its codes are the table's, and free text is refused.
 The revocation schema admits an entry without `transparencyLogIndex` (Section
 8.1: an identity revoked before the authority logged anything for it), refuses
 an index that is not an integer >= 0, and requires every other entry member.
+
+The trust-proof schema admits the Section 4.3.1 Sigstore co-signature beside
+the authority's Ed25519 entry. It refuses a co-signature entry whose bundle the
+Section 4.3.1 rules cannot check or that carries a `value` as well, and a proof
+whose only signatures are co-signatures (Section 4.4 step 4).
 
 Every defense in the Section 10.1 threat model table cites the section that
 defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
@@ -37,6 +49,10 @@ string a verifier builds from a served proof is the one the authority signed.
 Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
+
+ATP-SPEC.md, README.md and every examples/*.md place the A2A agent card at
+`/.well-known/agent-card.json`, the path the A2A specification names; the
+retired `/.well-known/agent.json` fails in prose and in code alike.
 
 The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
 is the second signature of the optional hybrid mode, so a README sentence that
@@ -88,6 +104,7 @@ until all of them can be read.
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
+import copy
 import json
 import pathlib
 import re
@@ -101,6 +118,8 @@ try:
 except ImportError:
     print("error: the 'jsonschema' package is required (pip install jsonschema)")
     sys.exit(2)
+
+from gen_registries import table_after_marker
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -128,9 +147,111 @@ def trust_proof_window_errors(proof: dict) -> list[str]:
     return []
 
 
+# Section 4.6: the heading whose table maps an ATX credential to the Verifiable
+# Credential form, the ATX example the mapped example is derived from, and the
+# table's cell for a row that sets a constant instead of moving a member.
+VC_FORM_HEADING = "#### Verifiable Credential Form"
+ATX_EXAMPLE = "examples/atx-example.json"
+NO_ATX_MEMBER = "(none)"
+
+
+class SourceUnusable(Exception):
+    """The file an example is compared with is missing or not a JSON object.
+    The check that owns that file fails on it, so the comparison is skipped
+    instead of failing a second time for the same cause."""
+
+
+def atx_example() -> dict:
+    """examples/atx-example.json as an object. A file that is missing, not
+    JSON or not an object raises SourceUnusable; atx_status_errors reports
+    each of those."""
+    path = ROOT / ATX_EXAMPLE
+    if not path.is_file():
+        raise SourceUnusable(f"{ATX_EXAMPLE} is missing")
+    try:
+        atx = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise SourceUnusable(f"{ATX_EXAMPLE} is not JSON") from None
+    if not isinstance(atx, dict):
+        raise SourceUnusable(f"{ATX_EXAMPLE} is not a JSON object")
+    return atx
+
+
+def vc_form_rows(spec_text: str | None = None) -> list[dict]:
+    """The Section 4.6 mapping table, one dict per row, keyed by column."""
+    if spec_text is None:
+        spec_text = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+    return table_after_marker(spec_text.split("\n"), VC_FORM_HEADING)[1]
+
+
+def atx_to_vc(atx: dict, rows: list[dict]) -> dict:
+    """Section 4.6: place each ATX member at the property its row names. A row
+    with no ATX member sets the constant in its Value cell."""
+    vc: dict = {}
+    for row in rows:
+        member = row["ATX member"]
+        if member == NO_ATX_MEMBER:
+            value = json.loads(row["Value"])
+        elif member in atx:
+            value = atx[member]
+        else:
+            continue
+        *parents, name = row["Verifiable Credential property"].split(".")
+        target = vc
+        for parent in parents:
+            target = target.setdefault(parent, {})
+        target[name] = value
+    return vc
+
+
+def member_differences(expected, actual, path: str = ""):
+    """Yield one message per member of `actual` that is missing, added or
+    changed against `expected`, descending through objects."""
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        for key in sorted(expected.keys() | actual.keys()):
+            where = f"{path}.{key}" if path else key
+            if key not in actual:
+                yield f"{where} is missing"
+            elif key not in expected:
+                yield f"{where} is not produced by the Section 4.6 table"
+            else:
+                yield from member_differences(expected[key], actual[key], where)
+    elif json.dumps(expected, sort_keys=True) != json.dumps(actual, sort_keys=True):
+        yield f"{path} is {json.dumps(actual)}; the Section 4.6 table gives {json.dumps(expected)}"
+
+
+def atx_vc_form_errors(
+    vc: dict, atx: dict | None = None, rows: list[dict] | None = None
+) -> list[str]:
+    """Section 4.6: the Verifiable Credential form is the mapping table applied
+    to the ATX credential. Every ATX member has a row, no row changes a value,
+    and the form carries nothing the table does not produce. Members whose
+    name starts with `$` annotate the example file and are not ATX members.
+    Raises SourceUnusable when the ATX example cannot be read as an object."""
+    if atx is None:
+        atx = atx_example()
+    if rows is None:
+        rows = vc_form_rows()
+    members = {name: value for name, value in atx.items() if not name.startswith("$")}
+    mapped = {row["ATX member"] for row in rows}
+    errors = [
+        f"ATX member {name!r} of {ATX_EXAMPLE} has no row in the Section 4.6 table"
+        for name in members
+        if name not in mapped
+    ]
+    errors += [
+        f"the Section 4.6 row for {row['ATX member']!r} has Value {row['Value']!r}; "
+        "a member is carried unchanged"
+        for row in rows
+        if row["ATX member"] != NO_ATX_MEMBER and row["Value"] != "unchanged"
+    ]
+    return errors + list(member_differences(atx_to_vc(members, rows), vc))
+
+
 # Checks a schema cannot express, keyed by the schema an example is mapped to.
 SEMANTIC_CHECKS = {
     "schemas/trust-proof-v1.schema.json": trust_proof_window_errors,
+    "schemas/atx-vc-v1.schema.json": atx_vc_form_errors,
 }
 
 # Section 8.1.1: values the revocation schema must refuse as a `reason`: the
@@ -216,6 +337,135 @@ def revocation_index_errors(schema: dict | None = None) -> list[str]:
     return errors
 
 
+SIGSTORE_HEADING = "#### 4.3.1 Sigstore co-signature"
+
+
+def sigstore_example() -> dict:
+    """The Section 4.3.1 example: the Section 4.2 proof with a Sigstore
+    co-signature added to its signatures."""
+    return json.loads(extract_block(ROOT / "ATP-SPEC.md", SIGSTORE_HEADING))
+
+
+def member(path, value=...):
+    """An edit of a co-signature entry that sets the member at path (keys and
+    list indexes) to value, or removes it when no value is given."""
+
+    def edit(entry):
+        parent = entry
+        for step in path[:-1]:
+            parent = parent[step]
+        if value is ...:
+            del parent[path[-1]]
+        else:
+            parent[path[-1]] = copy.deepcopy(value)
+
+    return edit
+
+
+BUNDLE = ("bundle",)
+MATERIAL = BUNDLE + ("verificationMaterial",)
+LOG_ENTRY = MATERIAL + ("tlogEntries", 0)
+DIGEST = BUNDLE + ("messageSignature", "messageDigest")
+
+# Section 4.3.1: co-signatures the schema must also admit. A Rekor v2 entry
+# carries no integratedTime or inclusion promise and takes its signing time
+# from an RFC 3161 timestamp; protobuf JSON omits a zero logIndex.
+ALSO_A_COSIGNATURE = [
+    ("from a Rekor v2 log, timed by an RFC 3161 timestamp", [
+        member(LOG_ENTRY + ("integratedTime",)),
+        member(LOG_ENTRY + ("inclusionPromise",)),
+        member(LOG_ENTRY + ("kindVersion", "version"), "0.0.2"),
+        member(MATERIAL + ("timestampVerificationData",),
+               {"rfc3161Timestamps": [{"signedTimestamp": "dGltZXN0YW1w"}]}),
+    ]),
+    ("whose log entry has no logIndex", [member(LOG_ENTRY + ("logIndex",))]),
+    ("with a SHA2_384 message digest", [member(DIGEST + ("algorithm",), "SHA2_384")]),
+]
+
+# Section 4.3.1: co-signatures the schema must refuse. Each is the example
+# entry with members removed or replaced.
+NOT_A_COSIGNATURE = [
+    ("without a bundle", [member(BUNDLE)]),
+    ("with a value in place of its bundle", [member(BUNDLE), member(("value",), "c2lnbmF0dXJl")]),
+    ("with a value beside its bundle", [member(("value",), "c2lnbmF0dXJl")]),
+    ("with an empty keyId", [member(("keyId",), "")]),
+    ("with algorithm Ed25519", [member(("algorithm",), "Ed25519")]),
+    ("in a version 0.1 bundle", [
+        member(BUNDLE + ("mediaType",), "application/vnd.dev.sigstore.bundle+json;version=0.1"),
+    ]),
+    ("with a DSSE envelope in place of a message signature", [
+        member(BUNDLE + ("messageSignature",)),
+        member(BUNDLE + ("dsseEnvelope",), {"payload": "Ym9keQ==", "payloadType": "x", "signatures": []}),
+    ]),
+    ("without a certificate", [member(MATERIAL + ("certificate",))]),
+    ("with a public key in place of a certificate", [
+        member(MATERIAL + ("certificate",)),
+        member(MATERIAL + ("publicKey",), {"hint": "a2V5"}),
+    ]),
+    ("with a certificate chain in place of a certificate", [
+        member(MATERIAL + ("certificate",)),
+        member(MATERIAL + ("x509CertificateChain",), {"certificates": [{"rawBytes": "Y2VydGlmaWNhdGU="}]}),
+    ]),
+    ("without tlogEntries", [member(MATERIAL + ("tlogEntries",))]),
+    ("with no log entry", [member(MATERIAL + ("tlogEntries",), [])]),
+    ("whose log entry has no inclusionProof", [member(LOG_ENTRY + ("inclusionProof",))]),
+    ("whose log entry is not hashedrekord", [member(LOG_ENTRY + ("kindVersion", "kind"), "dsse")]),
+    ("without a message digest", [member(DIGEST)]),
+    ("with an unspecified digest algorithm", [member(DIGEST + ("algorithm",), "HASH_ALGORITHM_UNSPECIFIED")]),
+]
+
+# Section 4.4 step 4: a co-signature never stands in for the authority's
+# Ed25519 entry, so the schema must refuse a proof whose signatures are the
+# example's Sigstore entry alone, once or twice.
+ONLY_COSIGNATURES = [
+    ("signature is the Sigstore entry", 1),
+    ("signatures are two Sigstore entries", 2),
+]
+
+
+def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
+    """Section 4.3.1: the trust-proof schema admits the example's Sigstore
+    co-signature beside the authority's Ed25519 entry, and refuses an entry
+    with no bundle, with a bundle the rules cannot check (another bundle
+    version, a DSSE envelope, a key or chain in place of the certificate, no
+    hashedrekord entry with an inclusion proof) or with a value as well.
+    Section 4.4 step 4: it refuses a proof whose only signatures are
+    co-signatures."""
+    if schema is None:
+        schema = json.loads(
+            (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
+        )
+    validator = Draft202012Validator(schema)
+    proof = sigstore_example()
+    signatures = proof.get("signatures", [])
+    position = next(
+        (i for i, entry in enumerate(signatures) if entry.get("algorithm") == "Sigstore"), None
+    )
+    if position is None:
+        return [f"the {SIGSTORE_HEADING!r} example carries no Sigstore entry"]
+
+    def accepts(edits) -> bool:
+        cosignature = copy.deepcopy(signatures[position])
+        for edit in edits:
+            edit(cosignature)
+        edited = signatures[:position] + [cosignature] + signatures[position + 1:]
+        return validator.is_valid({**proof, "signatures": edited})
+
+    errors = []
+    if not accepts([]):
+        errors.append("the Section 4.3.1 co-signature entry is refused")
+    for label, edits in ALSO_A_COSIGNATURE:
+        if not accepts(edits):
+            errors.append(f"a co-signature {label} is refused")
+    for label, edits in NOT_A_COSIGNATURE:
+        if accepts(edits):
+            errors.append(f"a co-signature {label} is accepted")
+    for label, count in ONLY_COSIGNATURES:
+        if validator.is_valid({**proof, "signatures": [signatures[position]] * count}):
+            errors.append(f"a proof whose only {label} is accepted")
+    return errors
+
+
 WELL_KNOWN = re.compile(r"/\.well-known/([A-Za-z0-9._-]+)")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 SPEC_VERSION = re.compile(r"^\*\*Version:\*\*\s*(\S+)\s*$", re.MULTILINE)
@@ -284,6 +534,33 @@ def discovery_path_errors(text: str) -> list[str]:
                 errors.append(
                     f"README.md:{number} requests /.well-known/{name}; "
                     "Section 7.1 makes /.well-known/atp the discovery path"
+                )
+    return errors
+
+
+# The A2A specification places the agent card at /.well-known/agent-card.json
+# and no longer names /.well-known/agent.json.
+A2A_AGENT_CARD = "agent-card.json"
+RETIRED_A2A_AGENT_CARD = "agent.json"
+
+
+def agent_card_documents() -> list[pathlib.Path]:
+    """The documents a reader copies an A2A agent card path from."""
+    return [ROOT / "ATP-SPEC.md", ROOT / "README.md", *sorted((ROOT / "examples").glob("*.md"))]
+
+
+def agent_card_path_errors(name: str, text: str) -> list[str]:
+    """Section 3.4: an A2A agent card is at the path the A2A specification
+    names. The retired path fails wherever a document names it, in prose as in
+    a code block, since a reader copies either."""
+    errors = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        for found in WELL_KNOWN.findall(line):
+            # The name pattern takes the full stop of a sentence the path ends.
+            if found.rstrip(".") == RETIRED_A2A_AGENT_CARD:
+                errors.append(
+                    f"{name}:{number} names /.well-known/{RETIRED_A2A_AGENT_CARD}; the A2A "
+                    f"specification places the agent card at /.well-known/{A2A_AGENT_CARD}"
                 )
     return errors
 
@@ -867,6 +1144,15 @@ def main() -> int:
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
 
+    cosignature_errors = sigstore_cosignature_errors()
+    if cosignature_errors:
+        print("cosign FAIL    schemas/trust-proof-v1.schema.json vs Section 4.3.1")
+        for err in cosignature_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("cosign OK      schemas/trust-proof-v1.schema.json vs Section 4.3.1")
+
     timestamp_errors = signed_timestamp_errors(spec)
     if timestamp_errors:
         print("timestamp FAIL ATP-SPEC.md Section 4.3 served vs signed timestamps")
@@ -972,16 +1258,42 @@ def main() -> int:
         else:
             print(f"federation OK  {doc} vs Section 6")
 
+    card_errors = [
+        err
+        for doc in agent_card_documents()
+        for err in agent_card_path_errors(
+            doc.relative_to(ROOT).as_posix(), doc.read_text(encoding="utf-8")
+        )
+    ]
+    if card_errors:
+        print("card FAIL      ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
+        for err in card_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("card OK        ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
+
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
     for entry in entries:
-        md = ROOT / entry["file"]
+        source = ROOT / entry["file"]
         schema_path = ROOT / entry["schema"]
-        raw = extract_block(md, entry["heading"])
+        heading = entry.get("heading")
+        if heading is None:
+            label = entry["file"]
+            if not source.is_file():
+                print(f"example FAIL   {label} vs {entry['schema']}")
+                print(f"    {label}: missing; schemas/examples-map.json maps it to {entry['schema']}")
+                failures += 1
+                continue
+            raw = source.read_text(encoding="utf-8")
+        else:
+            label = f"{entry['file']} @ {heading!r}"
+            raw = extract_block(source, heading)
         try:
             instance = json.loads(raw)
         except json.JSONDecodeError as exc:
-            print(f"example INVALID JSON  {entry['file']} @ {entry['heading']!r}: {exc}")
+            print(f"example INVALID JSON  {label}: {exc}")
             failures += 1
             continue
         validator = Draft202012Validator(
@@ -992,14 +1304,18 @@ def main() -> int:
             for err in sorted(validator.iter_errors(instance), key=lambda e: e.json_path)
         ]
         if not errors and entry["schema"] in SEMANTIC_CHECKS:
-            errors = [f"$: {msg}" for msg in SEMANTIC_CHECKS[entry["schema"]](instance)]
+            try:
+                errors = [f"$: {msg}" for msg in SEMANTIC_CHECKS[entry["schema"]](instance)]
+            except SourceUnusable as exc:
+                print(f"example SKIP   {label}: not compared, {exc}")
+                continue
         if errors:
-            print(f"example FAIL   {entry['file']} @ {entry['heading']!r} vs {entry['schema']}")
+            print(f"example FAIL   {label} vs {entry['schema']}")
             for err in errors:
                 print(f"    {err}")
             failures += 1
         else:
-            print(f"example OK     {entry['file']} @ {entry['heading']!r}")
+            print(f"example OK     {label}")
 
     if failures:
         print(f"\n{failures} failure(s)")

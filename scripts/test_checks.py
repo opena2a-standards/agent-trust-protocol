@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-specification claim, revocation schema, threat model, signed timestamp, ATX
-status and fixture coverage checks in validate_examples.py, check_guides.py,
-the conformance scripts (run against fixture_authority.py; needs bash, curl and
+specification claim, revocation schema, Sigstore co-signature, threat model,
+signed timestamp, ATX status, fixture coverage, A2A agent card path and
+Verifiable Credential form checks in validate_examples.py, check_guides.py, the
+conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the registry generation and --check mode of gen_registries.py, and the
 test-suite sentences of the .pre-push-review-not-required marker. Run:
 python3 scripts/test_checks.py
@@ -14,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
@@ -429,6 +432,64 @@ class SpecClaimsTest(unittest.TestCase):
         self.assertIn("type unused", out.getvalue())
 
 
+class AgentCardPathTest(unittest.TestCase):
+    def errors(self, text):
+        return validate_examples.agent_card_path_errors("guide.md", text)
+
+    def test_repository_documents_name_the_a2a_path(self):
+        documents = validate_examples.agent_card_documents()
+        for name in ("ATP-SPEC.md", "examples/a2a-integration.md"):
+            with self.subTest(name):
+                self.assertIn(ROOT / name, documents)
+                text = (ROOT / name).read_text(encoding="utf-8")
+                self.assertTrue(
+                    "/.well-known/agent-card.json" in text,
+                    f"{name} does not name /.well-known/agent-card.json",
+                )
+        for doc in documents:
+            name = doc.relative_to(ROOT).as_posix()
+            with self.subTest(name):
+                text = doc.read_text(encoding="utf-8")
+                self.assertEqual(validate_examples.agent_card_path_errors(name, text), [])
+
+    def test_retired_path_fails_in_prose_and_in_code(self):
+        text = (
+            "Agent cards are served at `/.well-known/agent.json`.\n"
+            "\n"
+            "```bash\n"
+            "curl -s https://weather.example.com/.well-known/agent.json | jq '.atp'\n"
+            "```\n"
+        )
+        errors = self.errors(text)
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(errors[0].startswith("guide.md:1 "), errors[0])
+        self.assertTrue(errors[1].startswith("guide.md:4 "), errors[1])
+        self.assertIn("/.well-known/agent-card.json", errors[0])
+
+    def test_retired_path_ending_a_sentence_fails(self):
+        self.assertEqual(len(self.errors("The card is at /.well-known/agent.json.\n")), 1)
+
+    def test_a2a_path_and_other_well_known_names_pass(self):
+        text = (
+            "The card is at /.well-known/agent-card.json.\n"
+            "\n"
+            "```bash\n"
+            "curl -s https://weather.example.com/.well-known/agent-card.json | jq '.atp'\n"
+            "curl https://api.oa2a.org/.well-known/atp\n"
+            "```\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def test_main_fails_on_agent_card_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "agent_card_path_errors", return_value=["retired path named"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("card FAIL", out.getvalue())
+        self.assertIn("retired path named", out.getvalue())
+
+
 class RevocationIndexTest(unittest.TestCase):
     def schema(self):
         path = ROOT / "schemas" / "revocation-list-v1.schema.json"
@@ -654,6 +715,353 @@ class SignedTimestampTest(unittest.TestCase):
         self.assertIn("row signs the served bytes", out.getvalue())
 
 
+class SigstoreCoSignatureTest(unittest.TestCase):
+    def schema(self):
+        path = ROOT / "schemas" / "trust-proof-v1.schema.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def errors(self, definition, edit):
+        schema = self.schema()
+        edit(schema["$defs"][definition])
+        return validate_examples.sigstore_cosignature_errors(schema)
+
+    @staticmethod
+    def log_entry(bundle):
+        return bundle["properties"]["verificationMaterial"]["properties"]["tlogEntries"]
+
+    def test_repository_schema_passes(self):
+        self.assertEqual(validate_examples.sigstore_cosignature_errors(), [])
+
+    def test_example_adds_a_bundle_to_the_authority_signature(self):
+        signatures = validate_examples.sigstore_example()["signatures"]
+        self.assertEqual([entry["algorithm"] for entry in signatures], ["Ed25519", "Sigstore"])
+        self.assertIn("bundle", signatures[1])
+        self.assertNotIn("value", signatures[1])
+
+    def test_schema_with_key_signatures_only_fails(self):
+        schema = self.schema()
+        schema["properties"]["signatures"]["items"] = schema["$defs"]["keySignature"]
+        errors = validate_examples.sigstore_cosignature_errors(schema)
+        self.assertIn("the Section 4.3.1 co-signature entry is refused", errors)
+
+    def test_schema_without_a_required_key_signature_fails(self):
+        schema = self.schema()
+        del schema["properties"]["signatures"]["contains"]
+        errors = validate_examples.sigstore_cosignature_errors(schema)
+        self.assertEqual(errors, [
+            "a proof whose only signature is the Sigstore entry is accepted",
+            "a proof whose only signatures are two Sigstore entries is accepted",
+        ])
+
+    def test_open_entry_fails(self):
+        errors = self.errors("sigstoreCoSignature", lambda entry: entry.pop("additionalProperties"))
+        self.assertEqual(errors, ["a co-signature with a value beside its bundle is accepted"])
+
+    def test_key_signature_admitting_a_bundle_fails(self):
+        def edit(entry):
+            entry["required"].remove("value")
+            entry["properties"]["bundle"] = {"type": "object"}
+
+        errors = self.errors("keySignature", edit)
+        self.assertEqual(errors, ["a co-signature with algorithm Ed25519 is accepted"])
+
+    def test_any_bundle_media_type_fails(self):
+        errors = self.errors(
+            "sigstoreBundle", lambda bundle: bundle["properties"].update(mediaType={"type": "string"})
+        )
+        self.assertEqual(errors, ["a co-signature in a version 0.1 bundle is accepted"])
+
+    def test_empty_log_fails(self):
+        errors = self.errors("sigstoreBundle", lambda bundle: self.log_entry(bundle).pop("minItems"))
+        self.assertEqual(errors, ["a co-signature with no log entry is accepted"])
+
+    def test_log_entry_without_inclusion_proof_fails(self):
+        errors = self.errors(
+            "sigstoreBundle",
+            lambda bundle: self.log_entry(bundle)["items"]["required"].remove("inclusionProof"),
+        )
+        self.assertEqual(errors, ["a co-signature whose log entry has no inclusionProof is accepted"])
+
+    def test_schema_requiring_integrated_time_fails(self):
+        errors = self.errors(
+            "sigstoreBundle",
+            lambda bundle: self.log_entry(bundle)["items"]["required"].append("integratedTime"),
+        )
+        self.assertEqual(
+            errors, ["a co-signature from a Rekor v2 log, timed by an RFC 3161 timestamp is refused"]
+        )
+
+    def test_schema_requiring_log_index_fails(self):
+        errors = self.errors(
+            "sigstoreBundle",
+            lambda bundle: self.log_entry(bundle)["items"]["required"].append("logIndex"),
+        )
+        self.assertEqual(errors, ["a co-signature whose log entry has no logIndex is refused"])
+
+    def test_main_fails_on_cosignature_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "sigstore_cosignature_errors", return_value=["probe accepted"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("cosign FAIL", out.getvalue())
+        self.assertIn("probe accepted", out.getvalue())
+
+
+class VerifiableCredentialFormTest(unittest.TestCase):
+    """Section 4.6: examples/atx-vc-example.json is the mapping table applied
+    to examples/atx-example.json, and the schema refuses a form that leaves a
+    member where the table moves it from."""
+
+    REQUIRED = ["@context", "type", "issuer", "credentialSubject"]
+    VC_SCHEMA = "schemas/atx-vc-v1.schema.json"
+
+    def setUp(self):
+        self.atx = json.loads((ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"))
+        self.vc = json.loads((ROOT / "examples" / "atx-vc-example.json").read_text(encoding="utf-8"))
+        self.rows = validate_examples.vc_form_rows()
+        self.schema = json.loads((ROOT / self.VC_SCHEMA).read_text(encoding="utf-8"))
+        self.validator = Draft202012Validator(
+            self.schema, registry=validate_examples.local_registry()
+        )
+
+    def moved(self):
+        """(ATX member, property) for each row that moves a member."""
+        for row in self.rows:
+            member, placed = row["ATX member"], row["Verifiable Credential property"]
+            if member not in (validate_examples.NO_ATX_MEMBER, placed):
+                yield member, placed
+
+    def test_repository_example_passes(self):
+        self.assertEqual(validate_examples.atx_vc_form_errors(self.vc), [])
+        self.assertEqual(list(self.validator.iter_errors(self.vc)), [])
+
+    def test_example_carries_the_properties_the_atx_example_lacks(self):
+        self.assertEqual([name for name in self.REQUIRED if name in self.atx], [])
+        self.assertEqual([name for name in self.REQUIRED if name not in self.vc], [])
+        messages = [err.message for err in self.validator.iter_errors(self.atx)]
+        for name in self.REQUIRED:
+            self.assertIn(f"{name!r} is a required property", messages)
+
+    @staticmethod
+    def parent_of(vc, placed):
+        """The object of `vc` that holds the property `placed`, and its name there."""
+        *parents, name = placed.split(".")
+        for parent in parents:
+            vc = vc[parent]
+        return vc, name
+
+    def test_dropping_or_changing_what_a_row_places_fails(self):
+        for row in self.rows:
+            placed = row["Verifiable Credential property"]
+            with self.subTest(placed):
+                dropped = copy.deepcopy(self.vc)
+                parent, name = self.parent_of(dropped, placed)
+                del parent[name]
+                self.assertEqual(
+                    validate_examples.atx_vc_form_errors(dropped), [f"{placed} is missing"]
+                )
+                changed = copy.deepcopy(self.vc)
+                parent, name = self.parent_of(changed, placed)
+                parent[name] = "changed"
+                errors = validate_examples.atx_vc_form_errors(changed)
+                self.assertEqual(len(errors), 1)
+                self.assertTrue(errors[0].startswith(f'{placed} is "changed"; '), errors[0])
+
+    def test_member_left_at_its_atx_name_fails(self):
+        for member, _ in self.moved():
+            with self.subTest(member):
+                left = dict(self.vc, **{member: self.atx[member]})
+                self.assertEqual(
+                    validate_examples.atx_vc_form_errors(left),
+                    [f"{member} is not produced by the Section 4.6 table"],
+                )
+                self.assertFalse(self.validator.is_valid(left))
+
+    def test_claim_the_table_does_not_name_fails(self):
+        added = copy.deepcopy(self.vc)
+        added["credentialSubject"]["admin"] = True
+        self.assertEqual(
+            validate_examples.atx_vc_form_errors(added),
+            ["credentialSubject.admin is not produced by the Section 4.6 table"],
+        )
+        self.assertFalse(self.validator.is_valid(added))
+
+    def test_schema_subject_claims_are_the_table_rows(self):
+        placed = {
+            row["Verifiable Credential property"].split(".", 1)[1]
+            for row in self.rows
+            if row["Verifiable Credential property"].startswith("credentialSubject.")
+        }
+        subject = self.schema["properties"]["credentialSubject"]
+        self.assertEqual(set(subject["properties"]), placed)
+        self.assertIs(subject["additionalProperties"], False)
+
+    def test_atx_member_without_a_row_fails(self):
+        rows = [row for row in self.rows if row["ATX member"] != "capabilities"]
+        self.assertEqual(
+            validate_examples.atx_vc_form_errors(self.vc, rows=rows),
+            [
+                "ATX member 'capabilities' of examples/atx-example.json has no row in the "
+                "Section 4.6 table",
+                "credentialSubject.capabilities is not produced by the Section 4.6 table",
+            ],
+        )
+
+    def test_row_that_changes_a_value_fails(self):
+        rows = [
+            dict(row, Value="uppercased") if row["ATX member"] == "verdict" else row
+            for row in self.rows
+        ]
+        errors = validate_examples.atx_vc_form_errors(self.vc, rows=rows)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'verdict' has Value 'uppercased'", errors[0])
+
+    def test_every_section_4_6_schema_member_has_a_row(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8").split("\n")
+        _, fields = validate_examples.table_after_marker(spec, "#### Schema")
+        listed = {name.strip() for row in fields for name in row["Field"].split(",")}
+        self.assertIn("declaredPurpose", listed)
+        self.assertEqual(listed - {row["ATX member"] for row in self.rows}, set())
+
+    def test_schema_requires_the_base_context_and_both_types(self):
+        context = self.vc["@context"]
+        for edit in (
+            {"@context": ["https://www.w3.org/2018/credentials/v1", context[1]]},
+            {"@context": context[:1]},
+            {"@context": context[::-1]},
+            {"@context": context[0]},
+            {"type": ["AtxCredential"]},
+            {"type": ["VerifiableCredential"]},
+            {"type": "VerifiableCredential"},
+        ):
+            with self.subTest(edit=edit):
+                self.assertFalse(self.validator.is_valid(dict(self.vc, **edit)))
+
+    def test_schema_holds_base_members_to_the_trust_proof_shapes(self):
+        for placed, value in (
+            ("issuer", "not-a-did"),
+            ("credentialSubject.id", "not-a-did"),
+            ("credentialSubject.trustLevel", 5),
+            ("credentialSubject.trustScore", 1.5),
+            ("credentialSubject.verdict", "trusted"),
+        ):
+            with self.subTest(placed):
+                edited = copy.deepcopy(self.vc)
+                parent, name = self.parent_of(edited, placed)
+                parent[name] = value
+                self.assertFalse(self.validator.is_valid(edited))
+
+    def test_schema_admits_a_property_the_mapping_does_not_produce(self):
+        secured = dict(self.vc, proof={"type": "DataIntegrityProof"})
+        self.assertTrue(self.validator.is_valid(secured))
+
+    def test_schema_refuses_a_timestamp_that_is_not_a_date_time_stamp(self):
+        for value in (
+            "2026-05-19t14:00:00Z",
+            "2026-05-19T14:00:00z",
+            "2026-05-19 14:00:00Z",
+            "2026-05-19T14:00:00",
+            20260519,
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(self.validator.is_valid(dict(self.vc, validFrom=value)))
+                self.assertFalse(self.validator.is_valid(dict(self.vc, validUntil=value)))
+        offset = dict(self.vc, validFrom="2026-05-19T16:00:00+02:00")
+        self.assertTrue(self.validator.is_valid(offset))
+
+    def test_main_validates_the_example_file(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 0)
+        self.assertIn("example OK     examples/atx-vc-example.json\n", out.getvalue())
+        out = io.StringIO()
+        with mock.patch.dict(
+            validate_examples.SEMANTIC_CHECKS, {self.VC_SCHEMA: lambda vc: ["row broken"]}
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn(
+            f"example FAIL   examples/atx-vc-example.json vs {self.VC_SCHEMA}\n", out.getvalue()
+        )
+        self.assertIn("row broken", out.getvalue())
+
+    ATX_FAIL = "atx FAIL       README.md, example and schema vs Section 4.6"
+    FORM_FAIL = f"example FAIL   examples/atx-vc-example.json vs {VC_SCHEMA}"
+
+    def main_in_tree(self, examples):
+        """Run main() in a copy of the repository whose examples directory
+        holds only `examples` (file name to text). Returns the exit code, the
+        output lines and those of them that report a failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("README.md", "ATP-SPEC.md"):
+                shutil.copy(ROOT / name, root / name)
+            for directory in ("schemas", "registries"):
+                shutil.copytree(ROOT / directory, root / directory)
+            (root / "examples").mkdir()
+            for name, text in examples.items():
+                (root / "examples" / name).write_text(text, encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_a_missing_form_example_as_one_failure(self):
+        atx = (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8")
+        code, lines, failed = self.main_in_tree({"atx-example.json": atx})
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [self.FORM_FAIL])
+        at = lines.index(self.FORM_FAIL)
+        self.assertEqual(
+            lines[at + 1],
+            "    examples/atx-vc-example.json: missing; schemas/examples-map.json maps it to "
+            f"{self.VC_SCHEMA}",
+        )
+        self.assertFalse(lines[at + 2].startswith("    "), lines)
+
+    def test_main_does_not_fail_the_form_for_an_atx_example_it_cannot_read(self):
+        atx = (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8")
+        vc = (ROOT / "examples" / "atx-vc-example.json").read_text(encoding="utf-8")
+        for state, text in (
+            ("is missing", None),
+            ("is not JSON", atx.rstrip().rstrip("}")),
+            ("is not a JSON object", "[]"),
+        ):
+            with self.subTest(state):
+                examples = {"atx-vc-example.json": vc}
+                if text is not None:
+                    examples["atx-example.json"] = text
+                code, lines, failed = self.main_in_tree(examples)
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [self.ATX_FAIL])
+                self.assertIn(
+                    "example SKIP   examples/atx-vc-example.json: not compared, "
+                    f"examples/atx-example.json {state}",
+                    lines,
+                )
+
+    def test_main_reports_two_missing_example_files_as_two_failures(self):
+        code, lines, failed = self.main_in_tree({})
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [self.ATX_FAIL, self.FORM_FAIL])
+        self.assertEqual(lines[-1], "2 failure(s)")
+
+    def test_readme_claim_points_at_the_mapping(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        claims = [line for line in readme.splitlines() if "vc-data-model-2.0" in line]
+        self.assertEqual(len(claims), 1)
+        self.assertNotIn("structurally compatible", claims[0])
+        self.assertIn("(#verifiable-credential-form)", claims[0])
+        self.assertIn("\n### Verifiable Credential form\n", readme)
+        self.assertIn("(./ATP-SPEC.md#verifiable-credential-form)", readme)
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertIn(f"\n{validate_examples.VC_FORM_HEADING}\n", spec)
+        for path in ("examples/atx-vc-example.json", self.VC_SCHEMA):
+            self.assertIn(f"(./{path})", readme)
+            self.assertIn(f"(./{path})", spec)
+
+
 CONFORMANCE = ROOT / "conformance"
 HAS_JQ = shutil.which("jq") is not None
 HAS_SCRIPT_TOOLS = HAS_JQ and all(shutil.which(tool) for tool in ("bash", "curl"))
@@ -680,6 +1088,7 @@ LEVEL2 = [
 ]
 T1 = dict(zip(range(1, 15), LEVEL1))
 T2 = dict(zip(range(1, 4), LEVEL2))
+COSIGNED = validate_examples.sigstore_example()["signatures"]
 
 
 def pop(*names):
@@ -719,7 +1128,7 @@ class ConformanceScriptTest(unittest.TestCase):
         cls.authority.shutdown()
         cls.authority.server_close()
 
-    def run_scripts(self, url=None, **overrides):
+    def run_scripts(self, url=None, env=None, **overrides):
         self.authority.overrides = overrides
         self.authority.requests.clear()
         run = subprocess.run(
@@ -727,6 +1136,7 @@ class ConformanceScriptTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=120,
+            env={**os.environ, **(env or {})},
         )
         failed = [
             name
@@ -795,7 +1205,7 @@ class ConformanceScriptTest(unittest.TestCase):
     def test_trust_proof_endpoint_reading(self):
         """T1.7 requests /api/v1/trust/proof when endpoints.trustProof is not a
         string, and reads a string with its NUL characters and trailing
-        newlines removed."""
+        newlines removed, without a shell warning on stderr."""
         did = self.authority.examples["discovery"]["authorityDid"]
         for label, expected, value in (
             ("number", [T1[2]], 42),
@@ -804,8 +1214,97 @@ class ConformanceScriptTest(unittest.TestCase):
             ("NUL character inside the path", [], "/api/v1/trust\x00/proof"),
         ):
             with self.subTest(label):
-                self.probe(expected, discovery=inside("endpoints", put(trustProof=value)))
+                run = self.probe(expected, discovery=inside("endpoints", put(trustProof=value)))
                 self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={did}"])
+                self.assertEqual(run.stderr, "")
+
+    def test_trust_proof_endpoint_that_breaks_the_url_fails_without_a_request(self):
+        """A "#" would end the path and drop the did parameter, and curl sends
+        nothing for a URL that holds whitespace or a control character."""
+        for label, value in (
+            ("fragment", "/api/v1/trust/proof#frag"),
+            ("space", "/api/v1/trust/pro of"),
+            ("tab", "/api/v1/trust/proof\tx"),
+            ("newline inside the path", "/api/v1/trust\n/proof"),
+            ("control character", "/api/v1/trust/proof\x01"),
+            ("DEL character", "/api/v1/trust/proof\x7f"),
+        ):
+            with self.subTest(label):
+                run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=value)))
+                self.assertIn(
+                    "(endpoints.trustProof holds #, whitespace or a control character)", run.stdout
+                )
+                self.assertEqual(self.received("/trust/pro"), [])
+
+    def test_trust_proof_endpoint_with_a_query_gets_the_did_after_an_ampersand(self):
+        did = self.authority.examples["discovery"]["authorityDid"]
+        self.probe([], discovery=inside("endpoints", put(trustProof="/api/v1/trust/proof?v=1")))
+        self.assertEqual(self.received("did="), [f"GET /api/v1/trust/proof?v=1&did={did}"])
+
+    def test_dot_segments_are_sent_as_written(self):
+        """curl does not remove . and .. segments: the declared path gets the
+        request, and the tests fail when it is not served."""
+        did = self.authority.examples["discovery"]["authorityDid"]
+        self.probe(LEVEL1[6:],
+                   discovery=inside("endpoints", put(trustProof="/x/../api/v1/trust/proof")))
+        self.assertEqual(self.received("?did="), [f"GET /x/../api/v1/trust/proof?did={did}"])
+
+        self.probe([T1[2], T1[8]], discovery=put(authorityDid=".."))
+        self.assertEqual(self.received("/api/v1/did/"), ["GET /api/v1/did/.."])
+
+        run, failed = self.run_scripts(url=self.authority.url + "/x/..")
+        self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+        self.assertEqual(self.authority.requests, [
+            "GET /x/../.well-known/atp",
+            "GET /x/../api/v1/transparency/trust-proofs?limit=5",
+            "GET /x/../api/v1/trust/revocations?since=2026-01-01T00:00:00Z",
+        ])
+
+    def test_authority_did_is_percent_encoded(self):
+        """The DID goes into the T1.4 path and the T1.7 query percent-encoded
+        except for ":" and "@", so a "#", "?", "/", "%" or space in it does not
+        change the request, and the proof is still for the declared DID."""
+        for did in ("did:opena2a:authority:opena2a.org#key-1",
+                    "did:opena2a:agent@opena2a.org/a?b c%d"):
+            with self.subTest(did):
+                in_url = quote(did, safe=":@")
+                self.probe([] if "#" in did else [T1[2], T1[8]], discovery=put(authorityDid=did))
+                self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{in_url}"])
+                self.assertEqual(self.received("?did="),
+                                 [f"GET /api/v1/trust/proof?did={in_url}"])
+
+    def test_pattern_in_the_authority_host_or_port_is_not_a_valid_url(self):
+        """With URL globbing off, curl rejects a brace list or bracket range in
+        the host or port: no request is sent, and every test fails."""
+        port = self.authority.server_address[1]
+        for url in (f"http://127.0.0.[1-1]:{port}", f"http://127.0.0.{{1}}:{port}",
+                    f"http://127.0.0.1:{{{port}}}"):
+            with self.subTest(url):
+                run, failed = self.run_scripts(url=url)
+                self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+                self.assertEqual(run.returncode, len(LEVEL1 + LEVEL2), run.stdout)
+                self.assertEqual(self.authority.requests, [])
+                for name in (T1[1], T2[1], T2[3]):
+                    self.assertIn(f"FAIL: {name} (the authority URL is not a valid URL)",
+                                  run.stdout)
+
+    def test_unanswered_request_fails_at_the_time_limit(self):
+        """A server that accepts the connection and never answers holds each
+        request for ATP_MAX_TIME seconds, and the failure names the limit."""
+        silent = socket.socket()
+        self.addCleanup(silent.close)
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(8)
+        start = time.monotonic()
+        run, failed = self.run_scripts(url=f"http://127.0.0.1:{silent.getsockname()[1]}",
+                                       env={"ATP_CONNECT_TIMEOUT": "5", "ATP_MAX_TIME": "1"})
+        self.assertLess(time.monotonic() - start, 60)
+        self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+        for name in (T1[1], T2[1], T2[3]):
+            self.assertIn(
+                f"FAIL: {name} (no answer within the time limit: 5 s to connect, 1 s in all)",
+                run.stdout,
+            )
 
     def test_bracketed_trust_proof_endpoint_is_one_request(self):
         """curl does not expand a pattern in endpoints.trustProof: the declared
@@ -817,9 +1316,10 @@ class ConformanceScriptTest(unittest.TestCase):
 
     def test_bracketed_authority_did_is_one_request(self):
         did = self.authority.examples["discovery"]["authorityDid"][:-1] + "[f-g]"
+        in_url = did[:-5] + "%5Bf-g%5D"
         self.probe([T1[2], T1[8]], discovery=put(authorityDid=did))
-        self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{did}"])
-        self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={did}"])
+        self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{in_url}"])
+        self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={in_url}"])
 
     def test_braces_in_the_authority_url_are_sent_as_written(self):
         run, failed = self.run_scripts(url=self.authority.url + "/{a,b}")
@@ -830,14 +1330,23 @@ class ConformanceScriptTest(unittest.TestCase):
             "GET /{a,b}/api/v1/trust/revocations?since=2026-01-01T00:00:00Z",
         ])
 
-    def test_every_curl_call_turns_url_globbing_off(self):
-        for script in ("level1.sh", "level2.sh"):
-            with self.subTest(script):
-                text = (CONFORMANCE / script).read_text(encoding="utf-8")
-                options = re.findall(r"^[^#\n]*\bcurl[ \t]+(\S+)", text, re.M)
-                self.assertTrue(options)
-                for option in options:
-                    self.assertRegex(option, r"^(-[A-Za-z]*g[A-Za-z]*|--globoff)$")
+    def test_every_curl_call_passes_the_shared_options(self):
+        """Every curl call turns URL globbing off, sends dot segments as written
+        and has both time limits."""
+        calls = []
+        for script in ("lib.sh", "level1.sh", "level2.sh"):
+            text = (CONFORMANCE / script).read_text(encoding="utf-8")
+            calls += re.findall(r"(?:^[ \t]*|\$\(|[;&|][ \t]*)curl[ \t]+([^\n]*)", text, re.M)
+        self.assertTrue(calls)
+        for call in calls:
+            with self.subTest(call):
+                options = call.split()
+                self.assertTrue(
+                    any(re.fullmatch(r"-[A-Za-z]*g[A-Za-z]*|--globoff", option)
+                        for option in options)
+                )
+                for option in ("--path-as-is", "--connect-timeout", "--max-time"):
+                    self.assertIn(option, options)
 
     def test_did_document_probes(self):
         self.probes([
@@ -881,6 +1390,10 @@ class ConformanceScriptTest(unittest.TestCase):
             ("unexpired, written at -05:00", [], {"proof": put(expiresAt=at_offset(1, -5))}),
             ("string signatures", [T1[9]], {"proof": put(signatures="FAKE")}),
             ("no signatures", [T1[9]], {"proof": put(signatures=[])}),
+            ("Sigstore co-signature", [], {"proof": put(signatures=COSIGNED)}),
+            ("only a Sigstore co-signature", [T1[9]], {"proof": put(signatures=COSIGNED[1:])}),
+            ("Sigstore entry without a bundle", [T1[9]],
+             {"proof": put(signatures=[COSIGNED[0], {**COSIGNED[1], "bundle": "FAKE"}])}),
             ("no proof served", LEVEL1[6:], {"proof": 404}),
         ])
 
@@ -936,7 +1449,7 @@ class SetupErrorTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def assert_setup_error(self, conformance, path, message):
+    def assert_setup_error(self, conformance, path, message, env=None):
         for script in ("level1.sh", "level2.sh"):
             with self.subTest(script):
                 run = subprocess.run(
@@ -944,7 +1457,7 @@ class SetupErrorTest(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     timeout=60,
-                    env={"PATH": path},
+                    env={"PATH": path, **(env or {})},
                 )
                 self.assertEqual(run.returncode, 69, run.stderr)
                 self.assertIn(message, run.stderr)
@@ -962,6 +1475,14 @@ class SetupErrorTest(unittest.TestCase):
         copied = self.dir / "conformance"
         shutil.copytree(CONFORMANCE, copied)
         self.assert_setup_error(copied, os.environ.get("PATH", ""), "schema.json not found")
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_time_limit_that_is_not_a_number_exits_69(self):
+        for name, value in (("ATP_CONNECT_TIMEOUT", "ten"), ("ATP_MAX_TIME", "-1")):
+            with self.subTest(name):
+                self.assert_setup_error(CONFORMANCE, os.environ.get("PATH", ""),
+                                        f"error: {name} must be a number of seconds",
+                                        env={name: value})
 
 
 # Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
@@ -999,6 +1520,7 @@ class SchemaCheckTest(unittest.TestCase):
     EXAMPLES = {
         "### 7.1 Well-Known Endpoint": "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
+        "#### 4.3.1 Sigstore co-signature": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
     REPLACEMENTS = (
@@ -1019,7 +1541,7 @@ class SchemaCheckTest(unittest.TestCase):
     }
     SUPPORTED = {
         "type", "const", "enum", "anyOf", "pattern", "minLength", "format", "minimum",
-        "maximum", "minItems", "items", "minProperties", "required", "properties",
+        "maximum", "minItems", "items", "contains", "minProperties", "required", "properties",
         "additionalProperties", "$ref",
     }
     ANNOTATIONS = {"$schema", "$id", "title", "description", "$defs"}
@@ -1059,7 +1581,7 @@ class SchemaCheckTest(unittest.TestCase):
                 yield from self.keywords(sub)
         for sub in schema.get("anyOf", []):
             yield from self.keywords(sub)
-        for key in ("items", "additionalProperties"):
+        for key in ("items", "additionalProperties", "contains"):
             if isinstance(schema.get(key), dict):
                 yield from self.keywords(schema[key])
 
@@ -1489,6 +2011,9 @@ class AtxStatusTest(unittest.TestCase):
                 shutil.copy(ROOT / name, root / name)
             for directory in ("schemas", "registries"):
                 shutil.copytree(ROOT / directory, root / directory)
+            # The ATX example is the one mapped example file the tree lacks.
+            (root / "examples").mkdir()
+            shutil.copy(ROOT / "examples" / "atx-vc-example.json", root / "examples")
             out = io.StringIO()
             with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
                 self.assertEqual(validate_examples.main(), 1)
