@@ -171,6 +171,15 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   response envelope that verify rejects. `scripts/check_guides.py` runs every guide block
   against responses recorded from the reference authority (`scripts/guide_responses.json`)
   and fails on a block that no case runs; `scripts/test_checks.py` covers it.
+- Section 4.3: the canonical string named `{issuedAt RFC3339}` and `{expiresAt RFC3339}`
+  without saying which RFC 3339 form, so a verifier that built it from a proof served with
+  fractional seconds (`2026-10-12T02:57:21.581346834Z`) rejected a valid proof. The section
+  now states the form: UTC, whole seconds with fractional seconds dropped (not rounded), `Z`
+  suffix. An authority MUST serve both members in the form it signed, and a verifier MUST
+  reduce each served timestamp to that form before it builds the string. A table gives the
+  signed form of four served timestamps, and `scripts/validate_examples.py` fails when a row
+  disagrees with the rule or no row serves fractional seconds. Section 2.1 lists a proof
+  served with fractional-second timestamps as not yet covered by fixtures.
 - Section 4.2: the example trust proof declared a validity window of more than 26,000 days
   (`expiresAt` 2099-12-31), which Section 4.4 step 5 rejects under the Section 10.2 24-hour
   maximum. It now carries the current `trust-proof-baseline` fixture bytes: issued

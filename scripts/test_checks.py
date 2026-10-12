@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-specification claim, revocation schema, threat model, ATX status and fixture
-coverage checks in validate_examples.py, check_guides.py, the conformance
-scripts (run against fixture_authority.py; needs bash, curl and jq), the
-registry generation and --check mode of gen_registries.py, and the test-suite
-sentences of the .pre-push-review-not-required marker. Run:
+specification claim, revocation schema, threat model, signed timestamp, ATX
+status and fixture coverage checks in validate_examples.py, check_guides.py,
+the conformance scripts (run against fixture_authority.py; needs bash, curl and
+jq), the registry generation and --check mode of gen_registries.py, and the
+test-suite sentences of the .pre-push-review-not-required marker. Run:
 python3 scripts/test_checks.py
 """
 import contextlib
@@ -458,6 +458,92 @@ class ThreatModelTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("threats FAIL", out.getvalue())
         self.assertIn("row cites no section", out.getvalue())
+
+
+# A Section 4.3 with a table of served timestamps; {row} is on line 6.
+SIGNING_SPEC = (
+    "### 4.3 Signing\n\n"
+    "| Served | In the canonical string |\n"
+    "|---|---|\n"
+    "| `2026-05-23T12:00:00Z` | `2026-05-23T12:00:00Z` |\n"
+    "{row}\n\n"
+    "### 4.4 Verification\n"
+)
+# The issuedAt a live proof was served with: nanoseconds, signed in whole seconds.
+LIVE_ISSUED_AT = "2026-10-12T02:57:21.581346834Z"
+
+
+class SignedTimestampTest(unittest.TestCase):
+    def errors(self, row):
+        return validate_examples.signed_timestamp_errors(SIGNING_SPEC.format(row=row))
+
+    def test_repository_spec_passes(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.signed_timestamp_errors(spec), [])
+
+    def test_live_proof_timestamp_is_signed_in_whole_seconds(self):
+        self.assertEqual(validate_examples.signed_time(LIVE_ISSUED_AT), "2026-10-12T02:57:21Z")
+
+    def test_fractional_seconds_are_dropped_not_rounded(self):
+        self.assertEqual(validate_examples.signed_time("2026-10-12T02:57:21.999Z"), "2026-10-12T02:57:21Z")
+
+    def test_offset_is_converted_to_utc(self):
+        self.assertEqual(
+            validate_examples.signed_time("2026-10-11T20:57:21.5-06:00"), "2026-10-12T02:57:21Z"
+        )
+
+    def test_signed_form_is_unchanged(self):
+        self.assertEqual(validate_examples.signed_time("2026-05-23T12:00:00Z"), "2026-05-23T12:00:00Z")
+
+    def test_timestamp_that_is_not_rfc3339_raises(self):
+        for value in ("2026-10-12 02:57:21Z", "2026-10-12T02:57:21", "2026-13-12T02:57:21Z"):
+            with self.subTest(value), self.assertRaises(ValueError):
+                validate_examples.signed_time(value)
+
+    def test_table_with_a_fractional_row_passes(self):
+        self.assertEqual(self.errors(f"| `{LIVE_ISSUED_AT}` | `2026-10-12T02:57:21Z` |"), [])
+
+    def test_row_signing_the_served_bytes_fails_at_its_line(self):
+        errors = self.errors(f"| `{LIVE_ISSUED_AT}` | `{LIVE_ISSUED_AT}` |")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:6:"), errors[0])
+        self.assertIn("is signed as '2026-10-12T02:57:21Z'", errors[0])
+
+    def test_row_rounding_the_seconds_fails(self):
+        errors = self.errors("| `2026-10-12T02:57:21.999Z` | `2026-10-12T02:57:22Z` |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("is signed as '2026-10-12T02:57:21Z'", errors[0])
+
+    def test_row_keeping_the_offset_fails(self):
+        errors = self.errors("| `2026-10-11T20:57:21.5-06:00` | `2026-10-11T20:57:21-06:00` |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("is signed as '2026-10-12T02:57:21Z'", errors[0])
+
+    def test_row_serving_no_timestamp_fails(self):
+        errors = self.errors("| `2026-10-12 02:57:21.5Z` | `2026-10-12T02:57:21Z` |")
+        self.assertEqual(len(errors), 2)
+        self.assertIn("is not an RFC 3339 timestamp", errors[0])
+        self.assertIn("fractional seconds", errors[1])
+
+    def test_table_without_a_fractional_row_fails(self):
+        errors = self.errors("| `2026-05-24T06:00:00Z` | `2026-05-24T06:00:00Z` |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no row shows a served timestamp with fractional seconds", errors[0])
+
+    def test_section_without_a_table_fails(self):
+        text = "### 4.3 Signing\n\nNo table.\n\n### 4.4 Verification\n\n| a | b |\n|---|---|\n| c | d |\n"
+        errors = validate_examples.signed_timestamp_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no timestamp rows", errors[0])
+
+    def test_main_fails_on_signed_timestamp_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "signed_timestamp_errors", return_value=["row signs the served bytes"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("timestamp FAIL", out.getvalue())
+        self.assertIn("row signs the served bytes", out.getvalue())
 
 
 CONFORMANCE = ROOT / "conformance"

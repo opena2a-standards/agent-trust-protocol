@@ -29,6 +29,11 @@ Every defense in the Section 10.1 threat model table cites the section that
 defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
 cannot list a defense the specification never defines.
 
+The Section 4.3 table of served timestamps gives, for each, the form the
+canonical string carries (UTC, whole seconds with fractional seconds dropped,
+`Z` suffix), and includes a served timestamp with fractional seconds, so the
+string a verifier builds from a served proof is the one the authority signed.
+
 Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
@@ -78,7 +83,7 @@ import pathlib
 import re
 import sys
 from bisect import bisect_right
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 try:
     from jsonschema import Draft202012Validator
@@ -606,6 +611,76 @@ def readme_spec_version_errors(text: str, spec: str) -> list[str]:
     return errors
 
 
+def section_table(text: str, heading: str) -> list[tuple[int, str]]:
+    """(line number, line) for each row, header and delimiter included, of the
+    first table under the heading line `heading` and before the next heading.
+    Lines in code blocks are not rows."""
+    rows, state = [], "before"
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose":
+            continue
+        if state == "before" and line.strip() == heading:
+            state = "section"
+        elif state in ("section", "table") and line.lstrip().startswith("|"):
+            state = "table"
+            rows.append((number, line))
+        elif state == "table" or (state == "section" and line.startswith("#")):
+            state = "after"
+    return rows
+
+
+SIGNING_HEADING = "### 4.3 Signing"
+SERVED_TIME = re.compile(
+    r"^([0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]([0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$"
+)
+
+
+def signed_time(served: str) -> str:
+    """Section 4.3: the form a served `issuedAt` or `expiresAt` takes in the
+    canonical string: the instant in UTC, fractional seconds dropped (not
+    rounded), with a `Z` suffix."""
+    match = SERVED_TIME.match(served)
+    if not match:
+        raise ValueError(f"{served!r} is not an RFC 3339 timestamp")
+    date, clock, _, zone = match.groups()
+    offset = "+00:00" if zone in ("Z", "z") else zone
+    when = datetime.fromisoformat(f"{date}T{clock}{offset}")
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def signed_timestamp_errors(text: str) -> list[str]:
+    """Section 4.3: each row of the table under the heading pairs a served
+    timestamp with the form signed_time() gives it, and one row serves
+    fractional seconds, the case a verifier working from the text alone
+    otherwise gets wrong. Reported at the line of the row."""
+    rows = section_table(text, SIGNING_HEADING)
+    if len(rows) < 3:
+        return [f"ATP-SPEC.md: no timestamp rows in a table under {SIGNING_HEADING!r}"]
+    errors, fractional = [], False
+    for number, line in rows[2:]:
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            errors.append(f"ATP-SPEC.md:{number}: row has no signed form: {line.strip()!r}")
+            continue
+        served, signed = cells[0], cells[1]
+        try:
+            expected = signed_time(served)
+        except ValueError as exc:
+            errors.append(f"ATP-SPEC.md:{number}: {exc}")
+            continue
+        if signed != expected:
+            errors.append(
+                f"ATP-SPEC.md:{number}: served {served!r} is signed as {expected!r}, not {signed!r}"
+            )
+        fractional = fractional or "." in served
+    if not fractional:
+        errors.append(
+            f"ATP-SPEC.md: no row shows a served timestamp with fractional seconds under "
+            f"{SIGNING_HEADING!r}"
+        )
+    return errors
+
+
 THREAT_MODEL_HEADING = "### 10.1 Threat Model"
 SECTION_HEADING = re.compile(r"^#{2,6} (\d+(?:\.\d+)*)\.? ")
 SECTION_CITATION = re.compile(r"\bSection (\d+(?:\.\d+)*)")
@@ -616,20 +691,12 @@ def threat_model_errors(text: str) -> list[str]:
     that defines it, and every cited section is a numbered heading of the
     specification. A defense the specification never defines has no section
     to cite. Reported at the line of the row."""
-    headings, rows, state = set(), [], "before"
-    for number, line, kind in markdown_lines(text):
-        if kind != "prose":
-            continue
-        match = SECTION_HEADING.match(line)
+    headings = set()
+    for _, line, kind in markdown_lines(text):
+        match = SECTION_HEADING.match(line) if kind == "prose" else None
         if match:
             headings.add(match.group(1))
-        if state == "before" and line.strip() == THREAT_MODEL_HEADING:
-            state = "section"
-        elif state in ("section", "table") and line.lstrip().startswith("|"):
-            state = "table"
-            rows.append((number, line))
-        elif state == "table" or (state == "section" and line.startswith("#")):
-            state = "after"
+    rows = section_table(text, THREAT_MODEL_HEADING)
     if len(rows) < 3:
         return [f"ATP-SPEC.md: no threat rows in a table under {THREAT_MODEL_HEADING!r}"]
     errors = []
@@ -722,7 +789,17 @@ def main() -> int:
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
 
-    threat_errors = threat_model_errors((ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"))
+    spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+    timestamp_errors = signed_timestamp_errors(spec)
+    if timestamp_errors:
+        print("timestamp FAIL ATP-SPEC.md Section 4.3 served vs signed timestamps")
+        for err in timestamp_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("timestamp OK   ATP-SPEC.md Section 4.3 served vs signed timestamps")
+
+    threat_errors = threat_model_errors(spec)
     if threat_errors:
         print("threats FAIL   ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
         for err in threat_errors:

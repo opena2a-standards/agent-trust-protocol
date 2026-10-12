@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -310,6 +310,20 @@ The signature MUST be computed over a canonical byte representation of the proof
 canonical = "{did}|{trustLevel}|{trustScore:.6f}|{verdict}|{issuedAt RFC3339}|{expiresAt RFC3339}|{issuerDid}"
 signature = Ed25519.Sign(privateKey, canonical)
 ```
+
+`issuedAt` and `expiresAt` enter the canonical string as RFC 3339 UTC in whole seconds,
+grammar `YYYY-MM-DDTHH:MM:SSZ`: the instant converted to UTC, any fractional seconds
+dropped (not rounded), and a `Z` suffix. An authority MUST serve both members in exactly
+the form it signed, so the string is computable from the served proof with no second
+encoding. A verifier MUST reduce each served timestamp to that form before it builds the
+string, so a proof served with fractional seconds still verifies:
+
+| Served | In the canonical string |
+|---|---|
+| `2026-05-23T12:00:00Z` | `2026-05-23T12:00:00Z` |
+| `2026-10-12T02:57:21.581346834Z` | `2026-10-12T02:57:21Z` |
+| `2026-10-12T02:57:21.999Z` | `2026-10-12T02:57:21Z` |
+| `2026-10-11T20:57:21.5-06:00` | `2026-10-12T02:57:21Z` |
 
 Implementations SHOULD also support hybrid Ed25519 + ML-DSA-65 (FIPS 204) dual signatures for post-quantum readiness. In hybrid mode, both signatures MUST be present and both MUST verify:
 
