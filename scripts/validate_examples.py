@@ -65,13 +65,18 @@ A README line that links ATP-SPEC.md and names a version names the version in
 the specification's `**Version:**` header.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
-link to no repository an anonymous reader cannot open, by its web, SSH or wiki
-address, and every Appendix A row maps its component to a public endpoint of the
-reference authority (an `/api/` or `/.well-known/` path) instead of a source file.
+link to no repository an anonymous reader cannot open, by its web, SSH, wiki, API
+or raw-content address or a `gh repo` command, and every Appendix A row maps its
+component to a public endpoint of the reference authority (an `/api/` or
+`/.well-known/` path) instead of a source file.
 
 A sentence of ATP-SPEC.md saying "Section N shows `field` in its example" names
 only members of that section's JSON example, and every media type Section 11
-names is the Content-Type of a request or response elsewhere in the spec.
+names is the Content-Type of a request or response elsewhere in the spec. The
+claim is read within one sentence: a dot followed by whitespace and a capital
+letter ends it, and other dots (as in "e.g.", "v1.1" or "etc. and") do not. A
+claim written across such a dot, as in "Section 4.2 shows e.g. The `did` in its
+example", is not read, and neither is one using a verb other than "shows".
 
 Federation (Section 6) is what makes a trust response decentralized, and no
 second authority co-signs proofs yet, so a README.md or ATP-SPEC.md paragraph
@@ -97,9 +102,14 @@ as `unspecified`, so every prose sentence in ATP-SPEC.md or the README, and
 every sentence of the revocation schema's description, that cites the fixture
 names Section 8.1.1.
 
-A schema file that is not JSON, or a missing ATP-SPEC.md or README.md, is one
-failure line each. Every other check reads those files, so none of them runs
-until all of them can be read.
+Each unusable input is one failure line: a schema file that is not UTF-8 JSON,
+is not a JSON object or fails the metaschema check; a missing schema the checks
+read by name; an examples map that is not UTF-8 JSON or not a list of entries
+(string `file` and `schema`, and a string `heading` when it has one); and an
+ATP-SPEC.md or README.md that is missing or not UTF-8. Each other check reads
+one or more of these files, so none of them runs until all of them can be used.
+A map entry naming a schema that is not there, or a heading in a file that is
+not there, is one failure.
 
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
@@ -767,12 +777,23 @@ def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
 
 # Repositories an anonymous reader cannot open: GitHub answers 404 for them.
 NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
-# The name follows `github.com/` or, in the SSH form, `github.com:`. It may
-# carry `.wiki` (the repository's wiki) and `.git` and may end a sentence; any
-# other dot followed by a word character continues it into another
-# repository's name.
+# The name follows an address of the repository: `github.com/`, `github.com:`
+# in the SSH form, a port allowed after the host; `api.github.com/repos/`;
+# `raw.githubusercontent.com/`, with `wiki/` for the wiki's files; or a
+# `gh repo` command. The host starts the line or follows a character that is
+# neither a word character nor `-`, so `notgithub.com` is another host. The
+# name may carry `.wiki` (the repository's wiki) and `.git` and may end a
+# sentence; any other dot followed by a word character continues it into
+# another repository's name.
+REPOSITORY_ADDRESS = (
+    r"api\.github\.com(?::\d+)?/repos/",
+    r"raw\.githubusercontent\.com(?::\d+)?/(?:wiki/)?",
+    r"github\.com(?::\d+)?[/:]",
+    r"gh\s+repo\s+[a-z-]+\s+",
+)
 NOT_PUBLIC_LINK = re.compile(
-    r"github\.com[/:](" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
+    r"(?<![\w-])(?:" + "|".join(REPOSITORY_ADDRESS) + r")("
+    + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
     + r")(?:\.wiki)?(?:\.git)?(?![\w-]|\.\w)",
     re.IGNORECASE,
 )
@@ -821,48 +842,73 @@ def reference_endpoint_errors(text: str) -> list[str]:
     return errors
 
 
-# The claim stays inside one sentence: a dot outside a code span ends it, so a
-# line that repeats "Section N.N shows" is scanned once, not once per repeat.
+# The claim stays inside one sentence: a dot followed by whitespace and a
+# capital letter ends it, and other dots ("e.g.", "v1.1", "etc. and") do not.
+# Another "Section N.N shows" also ends it, so each part of a line is scanned
+# by one claim at most and a line that repeats the opening is scanned once,
+# not once per repeat.
+CLAIM_OPENING = r"Section (\d+(?:\.\d+)+) shows "
 SHOWN_IN_EXAMPLE = re.compile(
-    r"Section (\d+(?:\.\d+)+) shows ((?:`[^`]*`|[^.`])+?) in its example"
+    CLAIM_OPENING
+    + r"((?:(?!" + CLAIM_OPENING + r")(?:`[^`]*`|[^.`]|\.(?!\s+[A-Z])))+?) in its example"
 )
 CODE_SPAN = re.compile(r"`([^`]+)`")
+# The label after a heading's hashes: "4.2" in "### 4.2 Trust Proof Format".
+HEADING_LABEL = re.compile(r"#{2,6} (\S+)\s")
+
+
+def section_examples(text: str) -> dict:
+    """Each heading's example keyed by the heading's label (its section
+    number): the first ```json block between the heading and the next
+    heading, parsed, or None when there is no such block or it is not JSON.
+    A label that heads more than one section keeps its first. One pass over
+    the document."""
+    examples: dict = {}
+    current, block = None, None
+    for _, line, kind in markdown_lines(text):
+        if kind == "prose" and line.startswith("#"):
+            match = HEADING_LABEL.match(line)
+            current = match.group(1) if match and match.group(1) not in examples else None
+            if current is not None:
+                examples[current] = None
+            block = None
+        elif current is None:
+            continue
+        elif kind == "fence":
+            if block is not None:
+                try:
+                    examples[current] = json.loads("\n".join(block))
+                except json.JSONDecodeError:
+                    pass
+                current = None  # only the first ```json block counts
+            elif line.strip() == "```json":
+                block = []
+        elif kind == "code" and block is not None:
+            block.append(line)
+    return examples
 
 
 def section_example(text: str, section: str):
     """The first ```json block between the heading numbered `section` and the
     next heading, parsed; None when there is no such block or it is not JSON."""
-    heading = re.compile(r"#{2,6} " + re.escape(section) + r"\s")
-    found, block = False, None
-    for _, line, kind in markdown_lines(text):
-        if kind == "prose" and line.startswith("#"):
-            if found:
-                return None
-            found = bool(heading.match(line))
-        elif found and kind == "fence":
-            if block is not None:
-                try:
-                    return json.loads("\n".join(block))
-                except json.JSONDecodeError:
-                    return None
-            if line.strip() == "```json":
-                block = []
-        elif found and kind == "code" and block is not None:
-            block.append(line)
-    return None
+    return section_examples(text).get(section)
 
 
 def example_claim_errors(text: str) -> list[str]:
     """A sentence saying "Section N shows `field` in its example" names only
     top-level members of that section's JSON example (the Section 4.6 note
-    once said Section 4.2 shows `scanSummary`, which its example omits)."""
+    once said Section 4.2 shows `scanSummary`, which its example omits). The
+    examples are read in one pass, not once per claim."""
     errors = []
+    examples = None
     for unit in readme_units(text):
         joined, starts = join_unit(unit)
         for match in SHOWN_IN_EXAMPLE.finditer(joined):
             lineno = unit[bisect_right(starts, match.start()) - 1][0]
             section = match.group(1)
-            example = section_example(text, section)
+            if examples is None:
+                examples = section_examples(text)
+            example = examples.get(section)
             if not isinstance(example, dict):
                 errors.append(f"ATP-SPEC.md:{lineno}: Section {section} has no JSON object example")
                 continue
@@ -1091,6 +1137,24 @@ def extract_block(md_path: pathlib.Path, heading: str) -> str:
     raise SystemExit(f"error: unterminated ```json block after {heading!r} in {md_path}")
 
 
+# Schemas the checks read by name; the examples map names the others.
+SCHEMAS_READ_BY_NAME = (
+    "schemas/revocation-list-v1.schema.json",
+    "schemas/trust-proof-v1.schema.json",
+)
+
+
+def is_entry_list(entries) -> bool:
+    """The examples map is a list of objects, each with string `file` and
+    `schema` members. `heading` may be left out; when present it is a string."""
+    return isinstance(entries, list) and all(
+        isinstance(entry, dict)
+        and all(isinstance(entry.get(key), str) for key in ("file", "schema"))
+        and isinstance(entry.get("heading", ""), str)
+        for entry in entries
+    )
+
+
 def main() -> int:
     failures = 0
 
@@ -1099,30 +1163,63 @@ def main() -> int:
         print("error: no schemas/*.schema.json found")
         return 1
     unusable = 0
+    schemas = {}
     for sf in schema_files:
+        name = sf.relative_to(ROOT).as_posix()
         try:
             schema = json.loads(sf.read_text(encoding="utf-8"))
         except ValueError as exc:
-            print(f"schema INVALID {sf.relative_to(ROOT)}: not JSON: {exc}")
+            print(f"schema INVALID {name}: not JSON: {exc}")
+            unusable += 1
+            continue
+        if not isinstance(schema, dict):
+            print(f"schema INVALID {name}: not a JSON object")
             unusable += 1
             continue
         try:
             Draft202012Validator.check_schema(schema)
-            print(f"schema OK      {sf.relative_to(ROOT)}")
         except Exception as exc:  # noqa: BLE001 - report and fail
-            print(f"schema INVALID {sf.relative_to(ROOT)}: {exc}")
-            failures += 1
+            # The first line of a SchemaError; the rest repeats the metaschema.
+            print(f"schema INVALID {name}: {getattr(exc, 'message', exc)}")
+            unusable += 1
+            continue
+        print(f"schema OK      {name}")
+        schemas[name] = schema
+    for name in SCHEMAS_READ_BY_NAME:
+        if not (ROOT / name).is_file():
+            print(f"schema FAIL    {name}: missing")
+            unusable += 1
+
+    map_path = ROOT / "schemas" / "examples-map.json"
+    entries = []
+    if map_path.is_file():
+        try:
+            entries = json.loads(map_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"map INVALID    schemas/examples-map.json: not JSON: {exc}")
+            unusable += 1
+        else:
+            if not is_entry_list(entries):
+                print(
+                    "map INVALID    schemas/examples-map.json: not a list of objects "
+                    "with string file and schema members and, if present, a string heading"
+                )
+                unusable += 1
 
     documents = {}
     for name in ("ATP-SPEC.md", "README.md"):
-        if (ROOT / name).is_file():
-            documents[name] = (ROOT / name).read_text(encoding="utf-8")
-        else:
+        if not (ROOT / name).is_file():
             print(f"document FAIL  {name}: missing")
             unusable += 1
+            continue
+        try:
+            documents[name] = (ROOT / name).read_text(encoding="utf-8")
+        except ValueError as exc:
+            print(f"document FAIL  {name}: not UTF-8: {exc}")
+            unusable += 1
     if unusable:
-        # Every check below reads the schemas or one of the two documents.
-        print(f"\n{failures + unusable} failure(s); the checks that read these files did not run")
+        # Each check below reads the schemas, the map or one of the two documents.
+        print(f"\n{unusable} failure(s); the checks that read these files did not run")
         return 1
     spec, readme = documents["ATP-SPEC.md"], documents["README.md"]
 
@@ -1273,8 +1370,22 @@ def main() -> int:
     else:
         print("card OK        ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
 
-    map_path = ROOT / "schemas" / "examples-map.json"
-    entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
+    # An entry whose schema is not one checked above, or whose heading is in a
+    # file that is not there, is one failure and is not validated.
+    usable_entries = []
+    for entry in entries:
+        heading = entry.get("heading")
+        if entry["schema"] not in schemas:
+            missing = entry["schema"]
+        elif heading is not None and not (ROOT / entry["file"]).is_file():
+            missing = entry["file"]
+        else:
+            usable_entries.append(entry)
+            continue
+        label = entry["file"] if heading is None else f"{entry['file']} @ {heading!r}"
+        print(f"example FAIL   {label}: {missing} not found")
+        failures += 1
+    entries = usable_entries
     for entry in entries:
         source = ROOT / entry["file"]
         schema_path = ROOT / entry["schema"]

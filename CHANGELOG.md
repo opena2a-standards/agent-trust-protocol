@@ -413,6 +413,24 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   number exits 69), and the failure names the limits. `scripts/test_checks.py` covers each
   of these, and checks that every `curl` call passes `-g`, `--path-as-is`, `--connect-timeout`
   and `--max-time`.
+- `scripts/validate_examples.py` printed a traceback when README.md or ATP-SPEC.md was not
+  UTF-8, when `schemas/trust-proof-v1.schema.json` or `schemas/revocation-list-v1.schema.json`
+  was missing, when `schemas/examples-map.json` was not JSON or not a list of entries, and
+  when a schema file was JSON but not an object or failed the metaschema check. Each is now
+  one failure line, and no check runs until every input can be used. A map entry has string
+  `file` and `schema` members and may leave out `heading`, which is a string when present;
+  an entry naming a schema that is not there, or a heading in a file that is not there, is
+  one failure. The link check also reports the API
+  (`api.github.com/repos/`), raw-content (`raw.githubusercontent.com`), SSH-with-port and
+  `gh repo` forms of a link to a repository that is not public, and no longer reads a host
+  such as `notgithub.com` as github.com. The example-claim check ended a claim at any dot
+  outside a code span, so "Section 4.2 shows e.g. `x` in its example" was not checked; a
+  claim now ends only at a dot followed by whitespace and a capital letter, or at another
+  "Section N.N shows", and the module docstring states the claims it does not read. It also
+  read the whole document once per claim, so its time grew with the square of the number of
+  claims; the section examples are now read in one pass. `scripts/test_checks.py` covers
+  each case, asserts that a damaged schema gets no `schema OK` line, and its InputFileTest
+  and LegacyPathMilestoneTest docstrings state only what their tests assert.
 
 ## [1.0.0-rc1] - 2026-04-28
 

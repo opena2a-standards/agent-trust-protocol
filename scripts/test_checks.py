@@ -277,6 +277,34 @@ class ReferenceImplementationTest(unittest.TestCase):
             with self.subTest(longer=longer):
                 self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
 
+    def test_api_raw_port_and_gh_forms_of_the_link_fail(self):
+        for text in (
+            "curl https://api.github.com/repos/opena2a-org/opena2a-registry\n",
+            "curl https://raw.githubusercontent.com/opena2a-org/opena2a-registry/main/x\n",
+            "curl https://raw.githubusercontent.com/wiki/opena2a-org/opena2a-registry/Home.md\n",
+            "git clone ssh://git@github.com:22/opena2a-org/opena2a-registry.git\n",
+            "gh repo clone opena2a-org/opena2a-registry\n",
+        ):
+            with self.subTest(text=text):
+                errors = validate_examples.unpublished_link_errors(text, "README.md")
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("links to github.com/opena2a-org/opena2a-registry, which", errors[0])
+        self.assertEqual(
+            validate_examples.unpublished_link_errors(
+                "curl https://api.github.com/repos/opena2a-org/opena2a-registry-web\n", "README.md"
+            ),
+            [],
+        )
+
+    def test_another_host_ending_in_github_com_is_not_a_link_to_it(self):
+        for text in (
+            "See notgithub.com/opena2a-org/opena2a-registry.\n",
+            "git clone user@mygithub.com:opena2a-org/opena2a-registry\n",
+            "See https://my-github.com/opena2a-org/opena2a-registry.\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(validate_examples.unpublished_link_errors(text, "README.md"), [])
+
     def test_endpoint_rows_pass(self):
         rows = (
             "| DID resolution | `GET /api/v1/did/{did}` | 200 |\n"
@@ -398,6 +426,28 @@ class SpecClaimsTest(unittest.TestCase):
         errors = validate_examples.example_claim_errors(self.spec(note=note))
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("`signatures.ed25519`", errors[0])
+
+    def test_dot_that_does_not_end_the_sentence_keeps_the_claim(self):
+        for note in (
+            "Section 4.2 shows e.g. `notAMember` in its example.",
+            "Section 4.2 shows `notAMember` (see Section 4.3) in its example.",
+            "Section 4.2 shows `notAMember` and, as of v1.1, `did` in its example.",
+            "Section 4.2 shows `did`, `transparencyLogIndex`, etc. and `notAMember` in its example.",
+        ):
+            with self.subTest(note=note):
+                errors = validate_examples.example_claim_errors(self.spec(note=note))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith("ATP-SPEC.md:9: "), errors[0])
+                self.assertIn("`notAMember`", errors[0])
+
+    def test_many_claims_read_the_document_once(self):
+        # Reading the document once per claim took about 3.5 s here and grew
+        # with the square of the number of claims.
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        text = spec + "\n" + "Section 4.2 shows `did` in its example. " * 10000 + "\n"
+        started = time.perf_counter()
+        self.assertEqual(validate_examples.example_claim_errors(text), [])
+        self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_repeated_claim_opening_is_scanned_in_linear_time(self):
         # The earlier pattern took about 8 s on this line and grew with the
@@ -2162,8 +2212,11 @@ class FixtureCoverageTest(unittest.TestCase):
 
 
 class InputFileTest(unittest.TestCase):
-    """A file every check reads that is missing or not JSON is one failure
-    line, and main() returns without running the checks that read it."""
+    """A schema file, the examples map, ATP-SPEC.md or README.md that cannot
+    be used (missing, not UTF-8, not JSON, not the expected shape or, for a
+    schema, not valid under the metaschema) is one failure line, and main()
+    returns without running any check. Each of those checks reads one or more
+    of these files; none reads all of them."""
 
     NOT_RUN = "the checks that read these files did not run"
 
@@ -2196,7 +2249,111 @@ class InputFileTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(len(failed), 1, lines)
                 self.assertTrue(failed[0].startswith(f"schema INVALID {path}: not JSON: "), failed[0])
+                self.assertEqual([line for line in lines if line.startswith(f"schema OK      {path}")], [])
                 self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_schema_that_is_not_utf8_is_one_failure_line(self):
+        path = "schemas/discovery-v1.schema.json"
+
+        def damage(root):
+            (root / path).write_bytes(b"\xe9" + (root / path).read_bytes())
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(failed), 1, lines)
+        self.assertTrue(failed[0].startswith(f"schema INVALID {path}: not JSON: "), failed[0])
+        self.assertIn("utf-8", failed[0])
+        self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_schema_that_is_not_a_valid_object_schema_is_one_failure_line(self):
+        cases = (
+            ("discovery-v1", "[]", "not a JSON object"),
+            ("revocation-list-v1", "true", "not a JSON object"),
+            ("consistency-proof-v1", '{"type": 7}', "7 is not valid under any of the given schemas"),
+            ("trust-proof-v1", '{"properties": []}', "[] is not of type 'object'"),
+        )
+        for name, content, reason in cases:
+            path = f"schemas/{name}.schema.json"
+            with self.subTest(path=path):
+                code, lines, failed = self.run_main(
+                    lambda root, path=path, content=content: (root / path).write_text(content, encoding="utf-8")
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"schema INVALID {path}: {reason}"], lines)
+                self.assertEqual([line for line in lines if line.startswith(f"schema OK      {path}")], [])
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_missing_schema_read_by_name_is_one_failure_line(self):
+        for path in validate_examples.SCHEMAS_READ_BY_NAME:
+            with self.subTest(path=path):
+                code, lines, failed = self.run_main(lambda root, path=path: (root / path).unlink())
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"schema FAIL    {path}: missing"], lines)
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_examples_map_that_is_not_a_list_of_entries_is_one_failure_line(self):
+        for content, reason in (
+            ("{", "not JSON: "),
+            ('{"file": "ATP-SPEC.md"}', "not a list of objects"),
+            ('[{"file": "ATP-SPEC.md", "heading": "### 4.2 Trust Proof Format"}]', "not a list of objects"),
+            ('[{"file": "ATP-SPEC.md", "heading": 7, "schema": "schemas/trust-proof-v1.schema.json"}]',
+             "not a list of objects"),
+            ('[{"file": "ATP-SPEC.md", "heading": null, "schema": "schemas/trust-proof-v1.schema.json"}]',
+             "not a list of objects"),
+        ):
+            with self.subTest(content=content):
+                code, lines, failed = self.run_main(
+                    lambda root, content=content: (root / "schemas" / "examples-map.json").write_text(
+                        content, encoding="utf-8"
+                    )
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(
+                    failed[0].startswith(f"map INVALID    schemas/examples-map.json: {reason}"), failed[0]
+                )
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_map_entry_naming_a_file_that_is_not_there_is_one_failure(self):
+        for member, value in (("schema", "schemas/absent-v1.schema.json"), ("file", "ABSENT.md")):
+            def damage(root, member=member, value=value):
+                path = root / "schemas" / "examples-map.json"
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                entries[0][member] = value
+                path.write_text(json.dumps(entries), encoding="utf-8")
+
+            with self.subTest(member=member):
+                code, lines, failed = self.run_main(damage)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith("example FAIL   "), failed[0])
+                self.assertTrue(failed[0].endswith(f": {value} not found"), failed[0])
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_map_entry_may_leave_out_its_heading(self):
+        schema = "schemas/trust-proof-v1.schema.json"
+        self.assertTrue(validate_examples.is_entry_list([{"file": "examples/a.json", "schema": schema}]))
+        for heading in (7, None, ["### 4.2 Trust Proof Format"]):
+            with self.subTest(heading=heading):
+                self.assertFalse(
+                    validate_examples.is_entry_list(
+                        [{"file": "ATP-SPEC.md", "heading": heading, "schema": schema}]
+                    )
+                )
+
+    def test_entry_without_a_heading_naming_a_schema_that_is_not_there_is_one_failure(self):
+        def damage(root):
+            path = root / "schemas" / "examples-map.json"
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            entries.append({"file": "examples/absent.json", "schema": "schemas/absent-v1.schema.json"})
+            path.write_text(json.dumps(entries), encoding="utf-8")
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            failed, ["example FAIL   examples/absent.json: schemas/absent-v1.schema.json not found"], lines
+        )
+        self.assertEqual(lines[-1], "1 failure(s)")
 
     def test_missing_document_is_one_failure_line(self):
         for name in ("README.md", "ATP-SPEC.md"):
@@ -2204,6 +2361,28 @@ class InputFileTest(unittest.TestCase):
                 code, lines, failed = self.run_main(lambda root, name=name: (root / name).unlink())
                 self.assertEqual(code, 1)
                 self.assertEqual(failed, [f"document FAIL  {name}: missing"], lines)
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_document_that_is_a_directory_is_missing(self):
+        def damage(root):
+            (root / "README.md").unlink()
+            (root / "README.md").mkdir()
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, ["document FAIL  README.md: missing"], lines)
+        self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_document_that_is_not_utf8_is_one_failure_line(self):
+        for name in ("README.md", "ATP-SPEC.md"):
+            def damage(root, name=name):
+                (root / name).write_bytes(b"\xe9" + (root / name).read_bytes())
+
+            with self.subTest(name=name):
+                code, lines, failed = self.run_main(damage)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(f"document FAIL  {name}: not UTF-8: "), failed[0])
                 self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
 
     def test_unusable_files_and_an_invalid_schema_are_counted_together(self):
@@ -2219,9 +2398,11 @@ class InputFileTest(unittest.TestCase):
 
 
 class LegacyPathMilestoneTest(unittest.TestCase):
-    """Section 7.1 ends the consumer fallback to the legacy discovery path at a
-    release of the series the specification's header is on, and the changelog
-    describes the rule as Section 7.1 states it."""
+    """No vX.Y.Z-final release the specification names, such as the one at
+    which Section 7.1 ends the consumer fallback to the legacy discovery path,
+    is earlier than the version in the specification's header, and the
+    changelog entry names the same releases and describes the rule as Section
+    7.1 states it."""
 
     FINAL = re.compile(r"\bv(\d+)\.(\d+)\.(\d+)-final\b")
     ENTRY = "- §7.1 legacy-path migration rule:"
