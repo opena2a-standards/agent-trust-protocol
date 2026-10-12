@@ -296,6 +296,48 @@ class ReferenceImplementationTest(unittest.TestCase):
             [],
         )
 
+    def test_gh_api_and_github_dev_forms_of_the_link_fail(self):
+        for text in (
+            "gh api repos/opena2a-org/opena2a-registry\n",
+            "gh api /repos/opena2a-org/opena2a-registry/contents/README.md\n",
+            'gh api "repos/opena2a-org/opena2a-registry"\n',
+            "gh api '/repos/opena2a-org/opena2a-registry'\n",
+            "gh api -X GET repos/opena2a-org/opena2a-registry/issues\n",
+            'gh api -H "Accept: application/vnd.github+json" /repos/opena2a-org/opena2a-registry\n',
+            "Run `gh api --jq .private repos/opena2a-org/opena2a-registry`.\n",
+            "gh  api\trepos/OpenA2A-org/OpenA2A-Registry\n",
+            "gh api https://api.github.com/repos/opena2a-org/opena2a-registry\n",
+            "See https://github.dev/opena2a-org/opena2a-registry.\n",
+            "Open github.dev/opena2a-org/opena2a-registry/blob/main/README.md\n",
+        ):
+            with self.subTest(text=text):
+                errors = validate_examples.unpublished_link_errors(text, "README.md")
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("links to github.com/opena2a-org/opena2a-registry, which", errors[0].lower())
+        for other in (
+            "gh api repos/opena2a-org/opena2a-registry-web\n",
+            "gh api repos/opena2a-org/opena2a-registry.github.io/pages\n",
+            "gh api orgs/opena2a-org/repos\n",
+            "ugh api repos/opena2a-org/opena2a-registry\n",
+            "gh apis repos/opena2a-org/opena2a-registry\n",
+            "The checkout is at repos/opena2a-org/opena2a-registry.\n",
+            "See https://github.dev/opena2a-org/opena2a-registry-web.\n",
+            "See https://notgithub.dev/opena2a-org/opena2a-registry.\n",
+            "See https://my-github.dev/opena2a-org/opena2a-registry.\n",
+        ):
+            with self.subTest(other=other):
+                self.assertEqual(validate_examples.unpublished_link_errors(other, "README.md"), [])
+
+    def test_each_gh_api_endpoint_on_a_line_is_one_error(self):
+        text = (
+            "Intro.\n"
+            "gh api repos/opena2a-org/opena2a-registry && gh api /repos/opena2a-org/opena2a-registry/tags\n"
+        )
+        errors = validate_examples.unpublished_link_errors(text, "ATP-SPEC.md")
+        self.assertEqual(len(errors), 2, errors)
+        for error in errors:
+            self.assertTrue(error.startswith("ATP-SPEC.md:2 "), error)
+
     def test_another_host_ending_in_github_com_is_not_a_link_to_it(self):
         for text in (
             "See notgithub.com/opena2a-org/opena2a-registry.\n",
@@ -452,22 +494,72 @@ class SpecClaimsTest(unittest.TestCase):
                 self.assertTrue(errors[0].startswith("ATP-SPEC.md:9: "), errors[0])
                 self.assertIn("`notAMember`", errors[0])
 
+    def test_only_the_first_json_block_of_a_section_is_its_example(self):
+        def section(*blocks):
+            return "### 4.2 Trust Proof Format\n\n" + "".join(
+                f"```json\n{block}\n```\n\n" for block in blocks
+            )
+
+        both = section('{"first": 1}', '{"second": 2}')
+        self.assertEqual(validate_examples.section_example(both, "4.2"), {"first": 1})
+        errors = validate_examples.example_claim_errors(
+            both + "Section 4.2 shows `first` and `second` in its example.\n"
+        )
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("`second`", errors[0])
+        # A first block that is not JSON is not skipped for a later one, and
+        # is not read together with it.
+        for first, later in (
+            ("", '{"second": 2}'),
+            ("not JSON", '{"second": 2}'),
+            ('{"first": 1,', '"second": 2}'),
+        ):
+            with self.subTest(first=first):
+                self.assertIsNone(validate_examples.section_example(section(first, later), "4.2"))
+
+    def test_label_that_heads_two_sections_keeps_the_example_of_the_first(self):
+        with_example = "### 4.2 Trust Proof Format\n\n```json\n{\"first\": 1}\n```\n\n"
+        without_example = "### 4.2 Trust Proof Format\n\nProse only.\n\n"
+        for first, later, expected in (
+            (with_example, "### 4.2 Again\n\n```json\n{\"second\": 2}\n```\n", {"first": 1}),
+            (with_example, "### 4.2 Again\n\nProse only.\n", {"first": 1}),
+            (without_example, "### 4.2 Again\n\n```json\n{\"second\": 2}\n```\n", None),
+        ):
+            with self.subTest(first=first, later=later):
+                self.assertEqual(validate_examples.section_example(first + later, "4.2"), expected)
+
+    def assert_time_grows_with_the_text(self, text_of):
+        """example_claim_errors takes time in proportion to its text: on 16
+        times the text it takes about 16 times as long, where a check that
+        rescans its text takes up to 256 times as long. The bound is 64. The
+        two runs are compared with each other, in CPU time of this process, so
+        neither the speed of the machine nor other work on it decides the
+        result. A pair over the bound is run again, up to three times, and the
+        shortest time of each size is kept."""
+        texts = (text_of(500), text_of(8000))
+        tick = time.get_clock_info("process_time").resolution
+        shortest = [float("inf"), float("inf")]
+        for _ in range(3):
+            for size, text in enumerate(texts):
+                started = time.process_time()
+                errors = validate_examples.example_claim_errors(text)
+                shortest[size] = min(shortest[size], time.process_time() - started)
+                self.assertEqual(errors, [])
+            small, large = max(shortest[0], tick), shortest[1]
+            if large < 64 * small:
+                return
+        self.fail(f"16 times the text took {large / small:.0f} times as long")
+
     def test_many_claims_read_the_document_once(self):
-        # Reading the document once per claim took about 3.5 s here and grew
-        # with the square of the number of claims.
-        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
-        text = spec + "\n" + "Section 4.2 shows `did` in its example. " * 10000 + "\n"
-        started = time.perf_counter()
-        self.assertEqual(validate_examples.example_claim_errors(text), [])
-        self.assertLess(time.perf_counter() - started, 1.0)
+        # Reading the document once per claim took about 3.5 s for 10000
+        # claims here and grew with the square of their number.
+        claim = "Section 4.2 shows `did` in its example. "
+        self.assert_time_grows_with_the_text(lambda claims: self.spec() + claim * claims + "\n")
 
     def test_repeated_claim_opening_is_scanned_in_linear_time(self):
-        # The earlier pattern took about 8 s on this line and grew with the
-        # square of its length.
-        line = "Section 1.1 shows " * 11000 + "\n"
-        started = time.perf_counter()
-        self.assertEqual(validate_examples.example_claim_errors(line), [])
-        self.assertLess(time.perf_counter() - started, 1.0)
+        # The earlier pattern took about 8 s on 11000 openings and grew with
+        # the square of their number.
+        self.assert_time_grows_with_the_text(lambda openings: "Section 1.1 shows " * openings + "\n")
 
     def test_media_type_the_spec_carries_passes(self):
         self.assertEqual(validate_examples.media_type_errors(self.spec()), [])
@@ -2460,12 +2552,15 @@ class FixtureCoverageTest(unittest.TestCase):
 
 class InputFileTest(unittest.TestCase):
     """A schema file, the examples map, ATP-SPEC.md or README.md that cannot
-    be used (missing, not UTF-8, not JSON, not the expected shape or, for a
-    schema, not valid under the metaschema) is one failure line, and main()
-    returns without running any check. Each of those checks reads one or more
-    of these files; none reads all of them."""
+    be used (missing, not UTF-8, not JSON, not the expected shape, for the map
+    without an entry or, for a schema, not valid under the metaschema) is one
+    failure line, and main() returns without running any check. Each of those
+    checks reads one or more of these files; none reads all of them. A map
+    entry whose schema, file, heading or ```json block is not there is one
+    failure line in the count main() ends with."""
 
     NOT_RUN = "the checks that read these files did not run"
+    MAP = "schemas/examples-map.json"
 
     def run_main(self, damage):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2560,6 +2655,108 @@ class InputFileTest(unittest.TestCase):
                     failed[0].startswith(f"map INVALID    schemas/examples-map.json: {reason}"), failed[0]
                 )
                 self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_missing_examples_map_is_one_failure_line(self):
+        def removed(root):
+            (root / self.MAP).unlink()
+
+        def a_directory(root):
+            removed(root)
+            (root / self.MAP).mkdir()
+
+        for damage in (removed, a_directory):
+            with self.subTest(damage=damage.__name__):
+                code, lines, failed = self.run_main(damage)
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"map FAIL       {self.MAP}: missing"], lines)
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_examples_map_without_an_entry_is_one_failure_line(self):
+        self.assertTrue(validate_examples.is_entry_list([]))
+        code, lines, failed = self.run_main(
+            lambda root: (root / self.MAP).write_text("[]", encoding="utf-8")
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [f"map INVALID    {self.MAP}: lists no example"], lines)
+        self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_examples_map_that_is_not_utf8_is_one_failure_line(self):
+        def damage(root):
+            (root / self.MAP).write_bytes(b"\xe9" + (root / self.MAP).read_bytes())
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(failed), 1, lines)
+        self.assertTrue(failed[0].startswith(f"map INVALID    {self.MAP}: not JSON: "), failed[0])
+        self.assertIn("utf-8", failed[0])
+        self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def edit_map(self, edit):
+        """A damage that passes the map's entries to `edit` and writes them back."""
+        def damage(root):
+            entries = json.loads((root / self.MAP).read_text(encoding="utf-8"))
+            edit(root, entries)
+            (root / self.MAP).write_text(json.dumps(entries), encoding="utf-8")
+
+        return damage
+
+    def test_map_heading_that_is_not_in_its_file_is_one_failure(self):
+        mapped = len(json.loads((ROOT / self.MAP).read_text(encoding="utf-8")))
+
+        def edit(root, entries):
+            entries[0]["heading"] = "### 99.9 Nowhere"
+
+        code, lines, failed = self.run_main(self.edit_map(edit))
+        self.assertEqual(code, 1)
+        # The line names the file as the map does, not by its path on disk.
+        self.assertEqual(
+            failed, ["example FAIL   ATP-SPEC.md: heading '### 99.9 Nowhere' not found"], lines
+        )
+        # The other entries are validated, and the run ends with its count.
+        self.assertEqual(len([line for line in lines if line.startswith("example OK ")]), mapped - 1)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_map_heading_without_a_closed_json_block_is_one_failure(self):
+        schema = "schemas/discovery-v1.schema.json"
+        for content, reason in (
+            ("## A\n\nProse.\n\n## B\n\n```json\n{}\n```\n",
+             "no ```json block between '## A' and the next heading"),
+            ("## A\n\nProse.\n", "no ```json block after '## A'"),
+            ("## A\n\n```json\n{\n", "unterminated ```json block after '## A'"),
+        ):
+            def edit(root, entries, content=content):
+                (root / "NOTES.md").write_text(content, encoding="utf-8")
+                entries.insert(0, {"file": "NOTES.md", "heading": "## A", "schema": schema})
+
+            with self.subTest(reason=reason):
+                code, lines, failed = self.run_main(self.edit_map(edit))
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"example FAIL   NOTES.md: {reason}"], lines)
+                self.assertIn("example OK     examples/atx-vc-example.json", lines)
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_section_4_3_1_heading_that_is_not_in_the_spec_fails_both_checks_that_read_it(self):
+        heading = validate_examples.SIGSTORE_HEADING
+
+        def damage(root):
+            spec = (root / "ATP-SPEC.md").read_text(encoding="utf-8")
+            self.assertEqual(spec.count(f"\n{heading}\n"), 1)
+            (root / "ATP-SPEC.md").write_text(
+                spec.replace(f"\n{heading}\n", f"\n{heading} entry\n"), encoding="utf-8"
+            )
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            failed,
+            [
+                "cosign FAIL    schemas/trust-proof-v1.schema.json vs Section 4.3.1",
+                f"example FAIL   ATP-SPEC.md: heading {heading!r} not found",
+            ],
+            lines,
+        )
+        self.assertIn(f"    ATP-SPEC.md: heading {heading!r} not found", lines)
+        self.assertEqual(lines[-1], "2 failure(s)")
 
     def test_map_entry_naming_a_file_that_is_not_there_is_one_failure(self):
         for member, value in (("schema", "schemas/absent-v1.schema.json"), ("file", "ABSENT.md")):
