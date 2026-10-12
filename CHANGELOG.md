@@ -1012,6 +1012,28 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   directories and virtual environments, and fails when the marker leaves out a suite or its
   run command, names a suite the tree does not hold, or leaves out a manifest; it also checks
   the client's install and test commands against `clients/README.md`.
+- Section 3.1: agent identifiers were called DIDs conforming to W3C DID Core, but two of the
+  four examples (`@modelcontextprotocol/server-filesystem`, `google/weather-agent`) hold
+  characters the DID Core `did` syntax does not admit. Section 3.1 now calls an agent
+  identifier a did:opena2a DID and states that every member that holds an identifier carries
+  its unescaped form: the members that name an agent (`did`, `agentDid`, and
+  `credentialSubject.id`, which the Section 4.6 Verifiable Credential form takes unchanged
+  from `did`), the members that name an authority or a key, and a DID Document's `id` and
+  each `verificationMethod` `id`, where did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require the
+  unescaped form; no member carries the percent-encoded form. It names the characters the
+  DID Core syntax admits, says that the last two examples have that syntax as written and
+  the first two only in their percent-encoded form (`%40` for `@`, `%2F` for `/`), which
+  compares equal to the unescaped form, and says that the DID Document of such an
+  identifier, like the Section 3.2 example, therefore has an `id` outside the DID Core
+  syntax. The abstract and the identity use case in `docs/use-cases.md` say the same instead
+  of calling every agent identifier a W3C DID Core DID. `scripts/validate_examples.py` fails
+  when a member that holds an identifier, a DID Document's `id` and the Verifiable
+  Credential form's `issuer` among them, holds a `did:` value with a `%` before any `?` or
+  `#`, or one that does not have the DID Core syntax in the percent-encoded form, in a code
+  block of `ATP-SPEC.md`, the README, `docs/*.md` or `examples/*.md`, or in an
+  `examples/*.json` file. A file in `examples/` that cannot be read stays one failure, of the
+  check that already reports it; a file in `docs/` that is not UTF-8, or a link there whose
+  target is missing, is one failure of the DID check.
 
 ## [1.0.0-rc1] - 2026-04-28
 
