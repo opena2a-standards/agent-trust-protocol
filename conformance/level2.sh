@@ -9,28 +9,35 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/level1.sh" "$BASE_URL"
 L1_RESULT=$?
 
-PASS=0
-FAIL=0
-
-test_case() {
-  local name="$1" result="$2"
-  if [ "$result" = "0" ]; then echo "PASS: $name"; ((PASS++))
-  else echo "FAIL: $name"; ((FAIL++)); fi
-}
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 
 echo ""
 echo "=== Level 2: Auditable Trust ==="
 
 # T2.1: Transparency log endpoint exists
-LOG=$(curl -sf "$BASE_URL/api/v1/transparency/trust-proofs?limit=5")
+LOG=$(curl -sf "$BASE_URL/api/v1/transparency/trust-proofs?limit=5") || LOG=""
+check "$LOG" '{"body is a JSON array or object": (type == "array" or type == "object")}'
 test_case "Transparency log endpoint returns data" "$?"
 
-# T2.2: Log entries have required fields
-echo "$LOG" | jq -e '.[0].logIndex' > /dev/null 2>&1 || echo "$LOG" | jq -e '.entries[0]' > /dev/null 2>&1
+# T2.2: Log entries (a bare array or an object's entries) have required fields
+check "$LOG" '(if type == "array" then . elif type == "object" then .entries else null end) as $entries
+  | ($entries | type == "array") as $listed
+  | {
+      "at least one entry": ($listed and ($entries | length > 0)),
+      "every entry has an integer logIndex >= 0":
+        ($listed and ($entries | all(.[]; type == "object" and (.logIndex | type_ok("integer") and . >= 0)))),
+      "every entry has an RFC 3339 timestamp":
+        ($listed and ($entries | all(.[]; type == "object" and (.timestamp | is_time)))),
+      "every entry has an entryType":
+        ($listed and ($entries | all(.[]; type == "object" and (.entryType | type == "string" and length > 0))))
+    }'
 test_case "Log entries have structure" "$?"
 
-# T2.3: Revocations endpoint exists
-REV=$(curl -sf "$BASE_URL/api/v1/trust/revocations?since=2026-01-01T00:00:00Z")
+# T2.3: Revocations endpoint returns a Section 8.1 response that matches the schema
+REV=$(curl -sf "$BASE_URL/api/v1/trust/revocations?since=2026-01-01T00:00:00Z") || REV=""
+check "$REV" 'members_ok($revocation_schema; $revocation_schema.required)
+  + {"body matches schemas/revocation-list-v1.schema.json": schema_ok($revocation_schema; $revocation_schema)}'
 test_case "Revocations endpoint returns data" "$?"
 
 echo ""
