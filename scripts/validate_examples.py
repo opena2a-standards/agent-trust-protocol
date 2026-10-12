@@ -32,7 +32,12 @@ requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
 is the second signature of the optional hybrid mode, so a README sentence that
 names ML-DSA-65 also names hybrid mode. A prose sentence may wrap across lines;
-the lines of a paragraph are joined before it is split into sentences.
+the lines of a paragraph are joined before it is split into sentences. Lines of
+a ```json block are wire data, such as a sample response's algorithm name, and
+are not sentences; lines of other code blocks are checked one by one.
+
+A README line that links ATP-SPEC.md and names a version names the version in
+the specification's `**Version:**` header.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
 link to no repository an anonymous reader cannot open, and every Appendix A row
@@ -194,6 +199,8 @@ def revocation_index_errors(schema: dict | None = None) -> list[str]:
 
 WELL_KNOWN = re.compile(r"/\.well-known/([A-Za-z0-9._-]+)")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+SPEC_VERSION = re.compile(r"^\*\*Version:\*\*\s*(\S+)\s*$", re.MULTILINE)
+VERSION = re.compile(r"\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\b")
 # A line that starts a new Markdown block, so it never continues the paragraph
 # above it: a heading, list item, table row or block quote.
 BLOCK_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>)")
@@ -258,8 +265,10 @@ def discovery_path_errors(text: str) -> list[str]:
 def readme_units(text: str):
     """Yield each prose paragraph, and each code line on its own, as a list of
     (line number, line). A blank line, a fence or a new block ends a
-    paragraph."""
+    paragraph. Lines of a ```json block are wire data, not sentences, and are
+    not yielded."""
     paragraph: list[tuple[int, str]] = []
+    info = None  # the open code block's info string; None outside a block
     for number, line, kind in markdown_lines(text):
         if kind == "prose" and line.strip() and not (paragraph and BLOCK_START.match(line)):
             paragraph.append((number, line))
@@ -267,7 +276,9 @@ def readme_units(text: str):
         if paragraph:
             yield paragraph
             paragraph = []
-        if kind == "code":
+        if kind == "fence":
+            info = FENCE.match(line).group(2).strip() if info is None else None
+        elif kind == "code" and info.split()[:1] != ["json"]:
             yield [(number, line)]
         elif kind == "prose" and line.strip():
             paragraph.append((number, line))
@@ -572,6 +583,25 @@ def media_type_errors(text: str) -> list[str]:
     ]
 
 
+def readme_spec_version_errors(text: str, spec: str) -> list[str]:
+    """A README line that links ATP-SPEC.md and names a version names the
+    version in the specification's `**Version:**` header."""
+    header = SPEC_VERSION.search(spec)
+    if header is None:
+        return ["ATP-SPEC.md: no **Version:** header line"]
+    errors = []
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose" or "ATP-SPEC.md" not in line:
+            continue
+        for version in VERSION.findall(line):
+            if version != header.group(1):
+                errors.append(
+                    f"README.md:{number}: names the specification v{version}; "
+                    f"ATP-SPEC.md is {header.group(1)}"
+                )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -709,6 +739,15 @@ def main() -> int:
         failures += 1
     else:
         print("claims OK      ATP-SPEC.md example claims and Section 11 vs the specification")
+
+    version_errors = readme_spec_version_errors(readme, spec)
+    if version_errors:
+        print("version FAIL   README.md vs ATP-SPEC.md header")
+        for err in version_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("version OK     README.md vs ATP-SPEC.md header")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []

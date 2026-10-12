@@ -242,6 +242,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   are corrected: the §7.1 example is not fixture bytes, and eight fixture payloads validate,
   not seven. `scripts/validate_examples.py` fails when a sentence says a section's example
   shows a member it lacks, or Section 11 names a media type no `Content-Type` carries.
+- README: the Specification section named ATP-SPEC.md v1.0.0-rc1; it now names the header
+  version, 1.1.0-draft, and `scripts/validate_examples.py` fails when a README line that
+  links ATP-SPEC.md names any other version. The reference implementation's sample trust
+  proof was an April 2026 response; it is now the October 2026 one, which adds a
+  `proof.signature` member (the Ed25519 value repeated) and labels the second signature
+  `{"keyVersion":1,"algorithm":"ML-DSA-65"}`. The README signing check no longer reads the
+  lines of a JSON code block as sentences, so the sample's algorithm name is not reported as
+  ML-DSA-65 without hybrid mode; lines of other code blocks are still checked.
 
 ## [1.0.0-rc1] - 2026-04-28
 

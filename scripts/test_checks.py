@@ -93,6 +93,45 @@ class ReadmeSigningTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("README.md:2:"), errors[0])
 
+    def test_json_block_value_is_not_a_sentence(self):
+        text = '```json\n{ "keyVersion": 1, "algorithm": "ML-DSA-65", "value": "..." }\n```\n'
+        self.assertEqual(validate_examples.readme_signing_errors(text), [])
+
+    def test_comment_in_other_code_block_is_checked(self):
+        text = '```json\n{ "algorithm": "ML-DSA-65" }\n```\n\n```bash\n# signed with ML-DSA-65\n```\n'
+        errors = validate_examples.readme_signing_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:6:"), errors[0])
+
+
+class ReadmeSpecVersionTest(unittest.TestCase):
+    SPEC = "# Agent Trust Protocol (ATP)\n\n**Version:** 1.1.0-draft\n"
+
+    def test_repository_readme_passes(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.readme_spec_version_errors(readme, spec), [])
+
+    def test_older_version_fails(self):
+        text = "Intro.\n\n[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.0.0-rc1).\n"
+        errors = validate_examples.readme_spec_version_errors(text, self.SPEC)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:3:"), errors[0])
+
+    def test_header_version_passes(self):
+        text = "[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).\n"
+        self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_line_without_spec_link_is_not_checked(self):
+        text = "| did, signatures | Shipped (v1.0.0-rc1) | Base trust proof. |\n"
+        self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_spec_without_version_header_fails(self):
+        text = "[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).\n"
+        errors = validate_examples.readme_spec_version_errors(text, "# ATP\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("**Version:**", errors[0])
+
 
 class ReadmeDiscoveryTest(unittest.TestCase):
     def test_repository_readme_passes(self):
