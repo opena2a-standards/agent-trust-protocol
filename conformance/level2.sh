@@ -16,7 +16,7 @@ echo ""
 echo "=== Level 2: Auditable Trust ==="
 
 # T2.1: Transparency log endpoint exists. As in level1.sh, every curl call
-# passes -g so that {a,b} and [x-y] in the authority URL are sent as written.
+# passes -g so that curl does not expand {a,b} and [x-y] in the authority URL.
 LOG=$(curl -gsf "$BASE_URL/api/v1/transparency/trust-proofs?limit=5") || LOG=""
 check "$LOG" '{"body is a JSON array or object": (type == "array" or type == "object")}'
 test_case "Transparency log endpoint returns data" "$?"

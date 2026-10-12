@@ -329,8 +329,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `.../proof`) and T1.7 passed, although the declared path is not served; an `authorityDid`
   ending in `or[f-g]` sent two requests for T1.4 and for T1.7, and both failed with "more than
   one JSON value". Every `curl` call in `conformance/level1.sh` and `conformance/level2.sh`
-  now passes `-g` (`--globoff`), so `{a,b}` and `[x-y]` in the authority URL or in a served
-  value are one request to the literal URL, and the conformance README says so.
+  now passes `-g` (`--globoff`), so `curl` does not expand `{a,b}` or `[x-y]` in the authority
+  URL or in a served value: a URL that holds one stays one URL and is not requested once per
+  expansion, and the conformance README says so.
   `scripts/test_checks.py` asserts the requests the fixture authority received for a bracketed
   `endpoints.trustProof`, a bracketed `authorityDid` and braces in the authority URL, and that
   every `curl` call in both scripts passes the option. It also adds the T1.7 probes that were
