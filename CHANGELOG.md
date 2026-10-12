@@ -181,6 +181,22 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - Section 1 and the README: the transparency log was described as recording every revocation,
   but Section 8.1 allows a revocation entry with no log record. Both now say the log records
   the revocation of a logged trust proof or credential, and Section 1 names the exception.
+- Conformance scripts: an authority that omitted what a test's row names still passed it, so
+  one with no `authorityDid` or `version`, a proof without `did`, `trustLevel`, `verdict` or
+  `issuedAt`, an `expiresAt` of `"never"` and a non-JSON revocations body scored 14 of 14 and
+  3 of 3. Each test now fails when its row's subject is missing or invalid, and says what is
+  not met. T1.2 and T1.8 check every named member on its own against `schemas/` (the
+  `jq -e` list tested only its last member); T1.1, T1.4, T1.7 and T1.13 require a JSON body
+  (T1.1 passed on an HTML page); T1.7 requires the proof's `did` to be the authority DID;
+  T1.10 compares `expiresAt` as a time, not as a string; T1.3, T1.11 and T1.12 require a
+  number in range (T1.11 passed on an empty value when no proof was fetched); T1.6 and T1.9
+  require arrays; T2.2 requires every log entry to carry `logIndex`, `timestamp` and
+  `entryType` (`{"entries":["FAKE"]}` passed); T2.3 validates the response against
+  `schemas/revocation-list-v1.schema.json` (any 2xx body passed). The checks live in
+  `conformance/checks.jq` and `conformance/lib.sh`. `scripts/test_checks.py` runs both
+  scripts against `scripts/fixture_authority.py`, which serves the specification's examples
+  (all 17 tests pass), with one member removed or corrupted at a time (exactly the tests that
+  check it fail), and checks that `checks.jq` agrees with a JSON Schema validator.
 
 ## [1.0.0-rc1] - 2026-04-28
 
