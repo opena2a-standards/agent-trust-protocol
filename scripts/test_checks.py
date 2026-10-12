@@ -2,12 +2,15 @@
 """Regression tests for check_license.py and the README and revocation schema
 checks in validate_examples.py. Run: python3 scripts/test_checks.py
 """
+import contextlib
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
@@ -135,6 +138,42 @@ class RevocationIndexTest(unittest.TestCase):
         errors = validate_examples.revocation_index_errors(schema)
         self.assertEqual(len(errors), 1)
         self.assertIn("without revokedByKeyId is accepted", errors[0])
+
+    def index_errors(self, edit):
+        schema = self.schema()
+        edit(schema["properties"]["revocations"]["items"]["properties"]["transparencyLogIndex"])
+        return validate_examples.revocation_index_errors(schema)
+
+    def test_schema_without_minimum_fails(self):
+        errors = self.index_errors(lambda index: index.pop("minimum"))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("transparencyLogIndex -1 is accepted", errors[0])
+
+    def test_schema_with_number_type_fails(self):
+        errors = self.index_errors(lambda index: index.update(type="number"))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("transparencyLogIndex 1.5 is accepted", errors[0])
+
+    def test_schema_with_minimum_one_fails(self):
+        errors = self.index_errors(lambda index: index.update(minimum=1))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("transparencyLogIndex 0 is refused", errors[0])
+
+    def test_schema_widening_the_index_type_fails(self):
+        for extra, probe in (("boolean", "True"), ("array", "[]"), ("object", "{}")):
+            with self.subTest(extra=extra):
+                errors = self.index_errors(lambda index: index.update(type=["integer", extra]))
+                self.assertEqual(len(errors), 1)
+                self.assertIn(f"transparencyLogIndex {probe} is accepted", errors[0])
+
+    def test_main_fails_on_index_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "revocation_index_errors", return_value=["probe refused"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("index FAIL", out.getvalue())
+        self.assertIn("probe refused", out.getvalue())
 
 
 if __name__ == "__main__":
