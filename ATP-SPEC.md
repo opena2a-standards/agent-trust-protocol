@@ -1044,41 +1044,100 @@ The OpenA2A Registry is the reference implementation of ATP at Conformance Level
 
 ## Appendix B: Integration Examples
 
+ATP defines no client library. B.1 and B.2 call the Section 4.5 endpoints of the
+authority the verifier is configured to trust, here the reference authority at
+`https://api.oa2a.org`, with a plain HTTP client: B.1 needs Python 3.11 or later and
+`requests`, B.2 a runtime with `fetch` (Node.js 18 or later). They verify online,
+through `POST /api/v1/trust/verify`; a verifier that checks proofs offline performs the
+Section 4.4 steps itself, over the Section 4.3 canonical string with an issuer key from
+the Section 7.1 discovery document. `reject_task`, `accept_task` and `MCPClient` stand
+for the caller's own code. The integration guides in [`examples/`](./examples/) carry
+fuller versions.
+
 ### B.1 A2A Agent Verifying a Peer
 
+Called as `on_delegated_task("did:opena2a:agent:requester-agent")`:
+
 ```python
-import atp
+from datetime import datetime, timezone
 
-# Before accepting a delegated task from another agent
-proof = atp.get_trust_proof("did:opena2a:agent:requester-agent")
+import requests
 
-if not atp.verify(proof):
-    reject_task("Trust proof verification failed")
+AUTHORITY = "https://api.oa2a.org"  # the authority this verifier trusts
 
-if proof.trust_level < 3:
-    reject_task(f"Insufficient trust: level {proof.trust_level}, require 3+")
 
-accept_task()
+def verified_proof(did: str) -> dict | None:
+    """The current trust proof for did, or None unless it is about did, has not
+    expired, is accepted by the authority, and carries a trustLevel 0-4."""
+    resp = requests.get(f"{AUTHORITY}/api/v1/trust/proof", params={"did": did}, timeout=10)
+    if resp.status_code != 200:
+        return None
+    proof = resp.json().get("proof") or {}  # the response wraps the proof
+    try:
+        live = datetime.fromisoformat(proof["expiresAt"]) > datetime.now(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        live = False
+    if proof.get("did") != did or not live:
+        return None
+    check = requests.post(f"{AUTHORITY}/api/v1/trust/verify", json=proof, timeout=10)
+    if check.status_code != 200 or check.json().get("valid") is not True:
+        return None
+    level = proof.get("trustLevel")
+    return proof if type(level) is int and 0 <= level <= 4 else None
+
+
+def on_delegated_task(requester_did: str):
+    # Before accepting a delegated task from another agent
+    proof = verified_proof(requester_did)
+    if proof is None:
+        return reject_task("Trust proof verification failed")
+    if proof["trustLevel"] < 3:
+        return reject_task(f"Insufficient trust: level {proof['trustLevel']}, require 3+")
+    return accept_task()
 ```
 
 ### B.2 MCP Client Checking Server Trust
 
+Called as `await connectToServer("did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem", serverUrl)`:
+
 ```typescript
-// Before connecting to an MCP server
-const proof = await atp.getTrustProof(
-  "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
-);
+const AUTHORITY = "https://api.oa2a.org"; // the authority this client trusts
 
-if (!atp.verify(proof)) {
-  throw new Error("MCP server trust proof invalid");
+// The current trust proof for did, or null unless it is about did, has not
+// expired, is accepted by the authority, and carries a trustLevel 0-4.
+async function verifiedProof(did: string): Promise<Record<string, any> | null> {
+  const resp = await fetch(
+    `${AUTHORITY}/api/v1/trust/proof?did=${encodeURIComponent(did)}`
+  );
+  if (resp.status !== 200) return null;
+  const proof = (await resp.json()).proof ?? {}; // the response wraps the proof
+  // Date.parse returns NaN for a missing expiresAt, which also refuses
+  if (proof.did !== did || !(Date.parse(proof.expiresAt) > Date.now())) return null;
+  const check = await fetch(`${AUTHORITY}/api/v1/trust/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(proof),
+  });
+  if (check.status !== 200 || (await check.json()).valid !== true) return null;
+  const level = proof.trustLevel;
+  return Number.isInteger(level) && level >= 0 && level <= 4 ? proof : null;
 }
 
-if (proof.trustLevel === 0) {
-  throw new Error(`BLOCKED: ${proof.verdict}`);
-}
+async function connectToServer(did: string, serverUrl: string) {
+  // Before connecting to an MCP server
+  const proof = await verifiedProof(did);
 
-// Proceed with connection
-const client = new MCPClient(serverUrl);
+  if (proof === null) {
+    throw new Error("MCP server trust proof invalid");
+  }
+
+  if (proof.trustLevel === 0) {
+    throw new Error(`BLOCKED: ${proof.verdict}`);
+  }
+
+  // Proceed with connection
+  return new MCPClient(serverUrl);
+}
 ```
 
 ### B.3 CI/CD Pipeline Gate

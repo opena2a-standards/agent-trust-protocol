@@ -147,6 +147,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
+  (the PyPI package of that name is unrelated), so neither ran. They now call the Section
+  4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,
+  take it from under `proof` in the response, refuse a proof about another DID, an expired
+  proof, one the verify endpoint does not accept, and one without an integer `trustLevel`
+  0-4. The appendix states that ATP defines no client library and that an offline verifier
+  performs the Section 4.4 steps itself. `scripts/check_guides.py` runs B.1 and B.2 against
+  the recorded responses (B.3 runs the opena2a CLI and is not run).
 - Integration guides (`examples/`): the samples read the trust level from the top level of
   the `GET /api/v1/trust/proof` response, where it is absent; the fields sit under `proof`.
   For a server at level 2 under threshold 3, the CI gate printed `Trust level: null`, then

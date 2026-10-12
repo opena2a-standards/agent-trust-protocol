@@ -756,9 +756,10 @@ class GenRegistriesTest(unittest.TestCase):
 
 
 class GuideBlocksTest(unittest.TestCase):
-    """check_guides.py runs the integration guides' blocks against recorded
-    responses; each test below puts back one defect the guides used to carry
-    and expects the check to fail on it."""
+    """check_guides.py runs the blocks of the integration guides and of
+    ATP-SPEC.md Appendix B.1 and B.2 against recorded responses; each test
+    below puts back one defect the examples used to carry, or could, and
+    expects the check to fail on it."""
 
     @classmethod
     def setUpClass(cls):
@@ -832,6 +833,31 @@ class GuideBlocksTest(unittest.TestCase):
         )
         failing = self.failing_cases(texts, check_guides.REFRESH)
         self.assertEqual(failing, ["a2a refresh: the stored proof is what verify accepts"])
+
+    def test_spec_example_importing_an_atp_library_fails(self):
+        texts = self.edited("spec", "import requests\n", "import requests\nimport atp\n")
+        failing = self.failing_cases(texts, check_guides.SPEC_PEER)
+        self.assertEqual(
+            failing,
+            [case.name for case in check_guides.CASES if case.block == check_guides.SPEC_PEER],
+        )
+
+    def test_spec_example_without_the_did_check_fails(self):
+        texts = self.edited("spec", 'proof.get("did") != did or ', "")
+        failing = self.failing_cases(texts, check_guides.SPEC_PEER)
+        self.assertEqual(failing, ["spec b.1: proof about another DID is rejected"])
+
+    def test_spec_example_reading_the_envelope_fails(self):
+        texts = self.edited("spec", "(await resp.json()).proof ?? {}", "await resp.json()")
+        failing = self.failing_cases(texts, check_guides.SPEC_MCP)
+        self.assertIn("spec b.2: listed server connects", failing)
+
+    def test_spec_examples_are_appendix_b1_and_b2(self):
+        examples = self.texts["spec"]
+        self.assertTrue(examples.startswith("### B.1 "))
+        self.assertIn("\n### B.2 ", examples)
+        self.assertNotIn("### B.3 ", examples)
+        self.assertEqual(check_guides.spec_examples("# No appendix\n"), "")
 
     def test_block_no_case_runs_fails(self):
         texts = {**self.texts, "ci": self.texts["ci"] + "\n## Extra\n\n```bash\necho extra\n```\n"}

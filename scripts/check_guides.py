@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Run the code blocks of the integration guides in examples/ against recorded
-authority responses, so a guide that drifts from what the authority answers
-fails the build. Run: python3 scripts/check_guides.py
+"""Run the code blocks of the integration guides in examples/ and of
+ATP-SPEC.md Appendix B.1 and B.2 against recorded authority responses, so an
+example that drifts from what the authority answers fails the build.
+Run: python3 scripts/check_guides.py
 
-Every fenced block in the three guides is run by a case below or read by one
-as an input (agents.json, mcp-config.json, the agent card, the quick check's
-example output). A block no case uses is an error, so a new block cannot land
-unchecked.
+Every fenced block in the three guides and in Appendix B.1 and B.2 is run by a
+case below or read by one as an input (agents.json, mcp-config.json, the agent
+card, the quick check's example output). A block no case uses is an error, so
+a new block cannot land unchecked. Appendix B.3 runs the opena2a CLI, which no
+stub here answers for, and is not run.
 
 No request leaves the machine. Bash blocks and the shell steps of the YAML
 workflows run with a curl stub first on PATH, Python blocks with a requests
@@ -39,7 +41,9 @@ GUIDES = {
     "ci": ROOT / "examples" / "ci-cd-integration.md",
     "mcp": ROOT / "examples" / "mcp-integration.md",
     "a2a": ROOT / "examples" / "a2a-integration.md",
+    "spec": ROOT / "ATP-SPEC.md",
 }
+SPEC_EXAMPLES = ("\n### B.1 ", "\n### B.3 ")
 RECORDED = json.loads((SCRIPTS / "guide_responses.json").read_text(encoding="utf-8"))
 AUTHORITY = "api.oa2a.org"
 SCENARIO_ENV = "ATP_GUIDE_SCENARIO"
@@ -48,6 +52,7 @@ TIMEOUT = 60
 FS = "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
 GH = "did:opena2a:mcp_server:@modelcontextprotocol/server-github"
 WEATHER = "did:opena2a:agent:weather-agent"
+REQUESTER = "did:opena2a:agent:requester-agent"
 CARD_URL = "https://weather.example.com/.well-known/agent.json"
 RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -446,6 +451,8 @@ DELEGATE = ("a2a", "### Delegating with trust context", 0)
 A2A_TS = ("a2a", "## Verification: TypeScript", 0)
 A2A_CURL = ("a2a", "## Verification: cURL", 0)
 REFRESH = ("a2a", "## Refreshing Trust Proofs", 0)
+SPEC_PEER = ("spec", "### B.1 A2A Agent Verifying a Peer", 0)
+SPEC_MCP = ("spec", "### B.2 MCP Client Checking Server Trust", 0)
 
 GATE_FILE = {"scripts/atp-trust-gate.sh": GATE}
 UNTRUSTED_VERIFIER = "https://verifier.example.net/always-valid"
@@ -476,6 +483,28 @@ class Case:
 
 def at(level, verdict="passed", **changes):
     return proof(trustLevel=level, verdict=verdict, **changes)
+
+
+# Appendix B calls functions the reader supplies; these stand in for them.
+PEER_DRIVER = (
+    "def reject_task(reason):\n"
+    "    print('task rejected:', reason)\n\n\n"
+    "def accept_task():\n"
+    "    print('task accepted')\n\n\n"
+    f"on_delegated_task({REQUESTER!r})\n"
+)
+MCP_DRIVER = (
+    "class MCPClient {\n"
+    "  constructor(url) {\n"
+    "    console.log(`connected to ${url}`);\n"
+    "  }\n"
+    "}\n\n"
+    "try {\n"
+    "  await connectToServer(" + json.dumps(FS) + ', "https://mcp.example.com");\n'
+    "} catch (error) {\n"
+    "  console.log(`refused: ${error.message}`);\n"
+    "}\n"
+)
 
 
 CASES = [
@@ -620,6 +649,41 @@ CASES = [
              " json=CARD['trustProof'], timeout=10).json()\n"
              "print('valid', check.get('valid'), check.get('error', ''))\n"
          )),
+    # ATP-SPEC.md Appendix B
+    Case("spec b.1: level 3 peer is accepted", SPEC_PEER, 0, ("task accepted",),
+         lambda b: {"proofs": {REQUESTER: at(3, did=REQUESTER)}}, driver=PEER_DRIVER),
+    Case("spec b.1: level 2 peer is rejected", SPEC_PEER, 0,
+         ("task rejected: Insufficient trust: level 2, require 3+",),
+         lambda b: {"proofs": {REQUESTER: proof(did=REQUESTER)}}, driver=PEER_DRIVER),
+    Case("spec b.1: expired proof is rejected", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",),
+         lambda b: {"proofs": {REQUESTER: at(3, did=REQUESTER, expired=True)}},
+         driver=PEER_DRIVER),
+    Case("spec b.1: proof about another DID is rejected", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",),
+         lambda b: {"proofs": {REQUESTER: at(3)}}, driver=PEER_DRIVER),
+    Case("spec b.1: string level is rejected", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",),
+         lambda b: {"proofs": {REQUESTER: at("3", did=REQUESTER)}}, driver=PEER_DRIVER),
+    Case("spec b.1: proof the authority refuses is rejected", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",),
+         lambda b: {"proofs": {REQUESTER: at(3, did=REQUESTER, signatures=[])}},
+         driver=PEER_DRIVER),
+    Case("spec b.1: unknown peer is rejected", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",), driver=PEER_DRIVER),
+    Case("spec b.2: listed server connects", SPEC_MCP, 0,
+         ("connected to https://mcp.example.com",),
+         lambda b: {"proofs": {FS: proof()}}, driver=MCP_DRIVER),
+    Case("spec b.2: blocked server is refused", SPEC_MCP, 0, ("refused: BLOCKED: blocked",),
+         lambda b: {"proofs": {FS: at(0, "blocked")}}, driver=MCP_DRIVER),
+    Case("spec b.2: expired proof is refused", SPEC_MCP, 0,
+         ("refused: MCP server trust proof invalid",),
+         lambda b: {"proofs": {FS: proof(expired=True)}}, driver=MCP_DRIVER),
+    Case("spec b.2: null level is refused", SPEC_MCP, 0,
+         ("refused: MCP server trust proof invalid",),
+         lambda b: {"proofs": {FS: proof(trustLevel=None)}}, driver=MCP_DRIVER),
+    Case("spec b.2: unknown server is refused", SPEC_MCP, 0,
+         ("refused: MCP server trust proof invalid",), driver=MCP_DRIVER),
 ]
 
 
@@ -702,7 +766,20 @@ def run_case(case, blocks, root, node):
 
 
 def guide_texts():
-    return {key: path.read_text(encoding="utf-8") for key, path in GUIDES.items()}
+    texts = {key: path.read_text(encoding="utf-8") for key, path in GUIDES.items()}
+    texts["spec"] = spec_examples(texts["spec"])
+    return texts
+
+
+def spec_examples(text):
+    """The text of Appendix B.1 and B.2, the specification's runnable examples
+    (empty when B.1 is missing, so its cases fail on the missing block)."""
+    first, after = SPEC_EXAMPLES
+    start = text.find(first)
+    if start < 0:
+        return ""
+    end = text.find(after, start)
+    return text[start + 1:] if end < 0 else text[start + 1:end + 1]
 
 
 def unchecked_blocks(texts):
