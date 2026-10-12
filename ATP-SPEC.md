@@ -12,7 +12,7 @@
 
 ## Abstract
 
-The Agent Trust Protocol (ATP) defines a standard for expressing, verifying, and distributing trust assertions about AI agents. It enables any party to answer the question: "Should I trust this agent?" with a cryptographically verifiable, auditable, and decentralized response.
+The Agent Trust Protocol (ATP) defines a standard for expressing, verifying, and distributing trust assertions about AI agents. It enables any party to answer the question: "Should I trust this agent?" with a cryptographically verifiable and auditable response. Federation (Section 6, conformance Level 3), in which several trust authorities co-sign a proof so that the response is decentralized, is specified and not yet demonstrated: no second authority co-signs proofs yet, and no conformance fixture covers a co-signed proof (Section 2.1).
 
 ATP is designed for a world where millions of AI agents operate across organizational boundaries — MCP servers handling filesystem access, A2A agents delegating tasks to each other, autonomous agents making decisions on behalf of users. Each of these interactions requires a trust decision. ATP provides the infrastructure for making that decision reliably.
 

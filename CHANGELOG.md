@@ -92,6 +92,11 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Abstract and README headline: the trust response is cryptographically verifiable and
+  auditable; a decentralized response (Section 6 federation, conformance Level 3) is stated
+  as specified and not yet demonstrated, since no second authority co-signs proofs and no
+  conformance fixture covers a co-signed proof. `scripts/validate_examples.py` fails a
+  README.md or ATP-SPEC.md paragraph that calls ATP decentralized without saying so.
 - Section 8.1: `transparencyLogIndex` is OPTIONAL per revocation entry; it was REQUIRED, so
   an authority revoking an agent it had logged nothing for (registered and revoked before
   its first proof) had to fabricate an index or omit the revocation, and omitting it kept

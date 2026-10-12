@@ -135,6 +135,46 @@ class ReadmeSpecVersionTest(unittest.TestCase):
         self.assertIn("**Version:**", errors[0])
 
 
+class FederationClaimTest(unittest.TestCase):
+    def test_repository_readme_and_spec_pass(self):
+        for doc in ("README.md", "ATP-SPEC.md"):
+            text = (ROOT / doc).read_text(encoding="utf-8")
+            self.assertEqual(validate_examples.federation_claim_errors(text, doc), [], doc)
+
+    def test_unqualified_headline_fails_at_its_line(self):
+        text = (
+            "# ATP\n\n"
+            'ATP enables any party to answer "Should I trust this agent?" with a\n'
+            "cryptographically verifiable, auditable, and decentralized response.\n"
+        )
+        errors = validate_examples.federation_claim_errors(text, "ATP-SPEC.md")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:3:"), errors[0])
+
+    def test_qualification_elsewhere_in_the_paragraph_passes(self):
+        text = (
+            "A decentralized response comes from federation.\n"
+            "Federation is specified and not yet demonstrated.\n"
+        )
+        self.assertEqual(validate_examples.federation_claim_errors(text), [])
+
+    def test_qualification_in_another_paragraph_does_not_count(self):
+        text = "A decentralized response.\n\nFederation is not yet demonstrated.\n"
+        errors = validate_examples.federation_claim_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:1:"), errors[0])
+
+    def test_level_names_identifiers_and_code_are_not_claims(self):
+        text = (
+            "### Level 3: Decentralized Trust (federation)\n\n"
+            "| 3 | Decentralized Trust | + federation consensus. |\n\n"
+            "Agents are named by a Decentralized Identifier (DID).\n\n"
+            "- W3C DID Core: Decentralized Identifiers v1.0\n\n"
+            "```\n# decentralized\n```\n"
+        )
+        self.assertEqual(validate_examples.federation_claim_errors(text), [])
+
+
 class ReadmeDiscoveryTest(unittest.TestCase):
     def test_repository_readme_passes(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

@@ -57,6 +57,12 @@ A sentence of ATP-SPEC.md saying "Section N shows `field` in its example" names
 only members of that section's JSON example, and every media type Section 11
 names is the Content-Type of a request or response elsewhere in the spec.
 
+Federation (Section 6) is what makes a trust response decentralized, and no
+second authority co-signs proofs yet, so a README.md or ATP-SPEC.md paragraph
+that calls ATP or its response decentralized also says federation is not yet
+demonstrated. Headings and table rows naming the Level 3 conformance level, and
+"Decentralized Identifier", are not claims.
+
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
@@ -214,6 +220,11 @@ VERSION = re.compile(r"\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\b")
 # above it: a heading, list item, table row or block quote.
 BLOCK_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>)")
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+# "decentralized" as a claim about ATP; "Decentralized Identifier(s)" names DIDs.
+DECENTRALIZED = re.compile(r"\bdecentrali[sz]ed\b(?!\s+identifier)", re.IGNORECASE)
+# A heading or table row, where "Decentralized Trust" names conformance Level 3.
+LEVEL_NAME_LINE = re.compile(r"^\s*(#{1,6}\s|\|)")
+NOT_DEMONSTRATED = "not yet demonstrated"
 
 # Section 4.6: the schema table is the one home of each ATX field's status.
 SPEC_ATX_HEADING = "### 4.6 Agent Trust eXtension (ATX)"
@@ -720,6 +731,30 @@ def threat_model_errors(text: str) -> list[str]:
     return errors
 
 
+def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
+    """Section 6 federation is what makes a trust response decentralized, and
+    no second authority co-signs proofs yet (Section 2.1 lists the Level 3
+    cosignature as not covered by fixtures). A prose paragraph calling ATP or
+    its response decentralized also says federation is not yet demonstrated.
+    Headings and table rows that name the Level 3 conformance level, code
+    lines, and "Decentralized Identifier" (a DID) are not claims. Reported at
+    the line the sentence starts on."""
+    code = {number for number, _, kind in markdown_lines(text) if kind != "prose"}
+    errors = []
+    for unit in readme_units(text):
+        if unit[0][0] in code or LEVEL_NAME_LINE.match(unit[0][1]):
+            continue
+        if NOT_DEMONSTRATED in " ".join(line.strip() for _, line in unit).lower():
+            continue
+        for lineno, sentence in unit_sentences(unit):
+            if DECENTRALIZED.search(sentence):
+                errors.append(
+                    f"{name}:{lineno}: calls ATP decentralized without saying federation "
+                    f"is {NOT_DEMONSTRATED}: {sentence.strip()!r}"
+                )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -885,6 +920,16 @@ def main() -> int:
         failures += 1
     else:
         print("version OK     README.md vs ATP-SPEC.md header")
+
+    for doc in ("README.md", "ATP-SPEC.md"):
+        federation_errors = federation_claim_errors((ROOT / doc).read_text(encoding="utf-8"), doc)
+        if federation_errors:
+            print(f"federation FAIL {doc} vs Section 6")
+            for err in federation_errors:
+                print(f"    {err}")
+            failures += 1
+        else:
+            print(f"federation OK  {doc} vs Section 6")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
