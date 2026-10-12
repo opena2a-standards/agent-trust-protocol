@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Regression tests for check_license.py and the README and revocation schema
-checks in validate_examples.py. Run: python3 scripts/test_checks.py
+"""Regression tests for check_license.py, the README and revocation schema
+checks in validate_examples.py, and the test-suite sentence of the
+.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
 import io
@@ -185,6 +186,15 @@ class RevocationIndexTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("index FAIL", out.getvalue())
         self.assertIn("probe refused", out.getvalue())
+
+
+class TestSuiteMarkerTest(unittest.TestCase):
+    def test_marker_names_the_only_unit_test_suite(self):
+        marker = (ROOT / ".pre-push-review-not-required").read_text(encoding="utf-8")
+        title = (ROOT / "conformance" / "README.md").read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn("Test Suite", title)
+        self.assertNotIn("The only test suite", marker)
+        self.assertIn("The only unit test suite is scripts/test_checks.py", marker)
 
 
 if __name__ == "__main__":
