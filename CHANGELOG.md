@@ -342,13 +342,13 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - The link check missed the SSH form (`git@github.com:`) and the wiki form (`.wiki`,
   `.wiki.git`) of a link to a repository that is not public; it now reports both. The check
   of sentences saying a section shows a member in its example took time quadratic in a line
-  that repeats "Section N.N shows" and is now linear: a claim ends with its sentence, at a
-  dot outside a code span, so a member named in a later sentence is no longer read as part
-  of the claim. `scripts/validate_examples.py` printed a traceback when a schema file was
-  not JSON or when README.md or ATP-SPEC.md was missing; each is now one failure line, and
-  the checks that read those files do not run until all of them can be read.
-  `scripts/test_checks.py` covers each of these and an ATX example that is JSON but not an
-  object, which is one error per ATX v1.1 field.
+  that repeats "Section N.N shows" without "in its example"; the scan of such a line is now
+  linear: a claim ends with its sentence, at a dot outside a code span, so a member named in
+  a later sentence is no longer read as part of the claim. `scripts/validate_examples.py`
+  printed a traceback when a schema file was not JSON or when README.md or ATP-SPEC.md was
+  missing; each is now one failure line, and the checks that read those files do not run
+  until all of them can be read. `scripts/test_checks.py` covers each of these and an ATX
+  example that is JSON but not an object, which is one error per ATX v1.1 field.
 - Section 7.1 ended the legacy-path fallback at "ATP v1.0.0-final" while the specification
   header is 1.1.0-draft; it now ends at v1.1.0-final, the final release of the series the
   header is on. One entry above is corrected: it said the legacy path must gain the
