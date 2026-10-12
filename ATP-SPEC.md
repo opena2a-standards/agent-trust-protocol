@@ -104,10 +104,10 @@ Two complementary suites test these levels:
 | `transparency-inclusion-proof-tampered-path.json` | 2 | §5.4 rule 2 (root recomputation) | REJECT[PROOF_INVALID] |
 | `transparency-consistency-proof-valid.json` | 2 | §5.5 Consistency Proof (RFC 6962 §2.1.2 / RFC 9162 §2.1.4.2) | ACCEPT |
 | `transparency-consistency-proof-tampered-path.json` | 2 | §5.5 rule 2 (append-only) | REJECT[PROOF_INVALID] |
-| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |
+| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes (1.1; the `revocation-list-valid` fixture predates them).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 

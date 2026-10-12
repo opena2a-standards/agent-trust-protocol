@@ -63,9 +63,9 @@ What you can do today:
 curl https://api.oa2a.org/api/v1/trust/revocations
 ```
 
-The conformance suite pins the Section 8.1 body (`fixtures/revocation-list-valid.json`) and the malformed-timestamp rejection.
+The conformance suite pins the malformed-timestamp rejection and a Section 8.1 body, `fixtures/revocation-list-valid.json`, whose free-text `reason` predates the Section 8.1.1 codes: the current schema refuses it, and a client processes it as `unspecified`.
 
-Where it stops today: the revocation response body is not signed; its authenticity rides on the transport. The reference authority publishes the list for polling and does not push it to federation peers.
+Where it stops today: the revocation response body is not signed; its authenticity rides on the transport. The reference authority publishes the list for polling and does not push it to federation peers. No fixture yet pins a registered reason code or an entry without `transparencyLogIndex` ([`ATP-SPEC.md`](ATP-SPEC.md) Section 2.1 lists what fixtures do not cover).
 
 Why you can check this yourself: [`ATP-SPEC.md`](ATP-SPEC.md); [atp-conformance](https://github.com/opena2a-standards/atp-conformance), 14 byte-pinned fixtures with Go and Python verifiers; the live-endpoint scripts [`conformance/level1.sh`](conformance/level1.sh) and [`conformance/level2.sh`](conformance/level2.sh) that exercise a running authority; and the reference authority's live endpoints at `api.oa2a.org` (`/.well-known/atp`, `/api/v1/trust/proof`, `/api/v1/trust/verify`, `/api/v1/trust/revocations`).
 

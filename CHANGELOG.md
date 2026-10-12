@@ -207,6 +207,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   when the example lacks an ATX v1.1 field, when the schema describes one as anything but
   ATX v1.1, or when any of the three files says "Proposed v1.1"; `scripts/test_checks.py`
   covers each case.
+- Section 2.1 called the suite's `notCovered` list authoritative, though that list can lag
+  the specification and leave out requirements Section 2.1 lists; the Section 2.1 list is now
+  the authoritative one and says the suite's list can lag it. The README said the suite pins the Section 8.1 body,
+  the Section 2.1 table listed `revocation-list-valid.json` as a structural ACCEPT and the
+  revocation schema called that fixture its ground truth, yet the fixture's free-text
+  `reason` predates the Section 8.1.1 codes and the schema refuses it. All three now say so,
+  and that a client processes the reason as `unspecified`; the README names the reason-code
+  and index-less cases no fixture pins yet. `scripts/validate_examples.py` fails when the
+  Section 2.1 list does not say it is authoritative, or when a prose sentence in the
+  specification or README, or a sentence of the schema description, cites the fixture
+  without Section 8.1.1; `scripts/test_checks.py` covers each case.
 
 ## [1.0.0-rc1] - 2026-04-28
 

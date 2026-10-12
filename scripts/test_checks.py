@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Regression tests for check_license.py, the README, revocation schema and ATX
-status checks in validate_examples.py, the conformance scripts (run against
-fixture_authority.py; needs bash, curl and jq), and the test-suite sentence of
-the .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+"""Regression tests for check_license.py, the README, revocation schema, ATX
+status and fixture coverage checks in validate_examples.py, the conformance
+scripts (run against fixture_authority.py; needs bash, curl and jq), and the
+test-suite sentence of the .pre-push-review-not-required marker. Run:
+python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -581,6 +582,85 @@ class AtxStatusTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("atx FAIL", out.getvalue())
         self.assertIn("status differs", out.getvalue())
+
+
+class FixtureCoverageTest(unittest.TestCase):
+    PRE_FIX_ROW = "| `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |"
+
+    def files(self):
+        return {
+            "spec": (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"),
+            "readme": (ROOT / "README.md").read_text(encoding="utf-8"),
+            "schema": (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8"),
+        }
+
+    def test_repository_files_pass(self):
+        self.assertEqual(validate_examples.fixture_coverage_errors(**self.files()), [])
+
+    def test_readme_citing_fixture_without_8_1_1_fails(self):
+        files = self.files()
+        files["readme"] += (
+            "\nThe conformance suite pins the Section 8.1 body\n"
+            "(`fixtures/revocation-list-valid.json`) and the malformed-timestamp rejection.\n"
+        )
+        line = len(files["readme"].splitlines()) - 1
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith(f"README.md:{line}: cites revocation-list-valid"), errors[0])
+
+    def test_spec_table_row_without_8_1_1_fails(self):
+        files = self.files()
+        row = next(
+            line for line in files["spec"].splitlines() if line.startswith("| `revocation-list-valid.json` |")
+        )
+        files["spec"] = files["spec"].replace(row, self.PRE_FIX_ROW)
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertRegex(errors[0], r"^ATP-SPEC\.md:\d+: cites revocation-list-valid")
+
+    def test_coverage_list_deferring_to_the_suite_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace(
+            "this list is authoritative, and the suite's `notCovered` list can lag it",
+            "the suite's `notCovered` list is authoritative",
+        )
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("does not say 'this list is authoritative'", errors[0])
+
+    def test_spec_without_coverage_list_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace(validate_examples.COVERAGE_LIST, "Uncovered")
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("no 'Not yet covered by fixtures' list", errors[0])
+
+    def test_schema_description_calling_fixture_ground_truth_fails(self):
+        files = self.files()
+        schema = json.loads(files["schema"])
+        schema["description"] = (
+            "Structural schema for the section 8.1 revocation response, derived from that section's "
+            "pinned body with the atp-conformance revocation-list-valid fixture as ground truth. "
+            "`reason` is a section 8.1.1 code, never free text."
+        )
+        files["schema"] = json.dumps(schema, indent=2)
+        errors = validate_examples.fixture_coverage_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("the description cites revocation-list-valid without section 8.1.1", errors[0])
+
+    def test_code_block_may_cite_fixture(self):
+        files = self.files()
+        files["readme"] += "\n```bash\nls fixtures/revocation-list-valid.json\n```\n"
+        self.assertEqual(validate_examples.fixture_coverage_errors(**files), [])
+
+    def test_main_fails_on_fixture_coverage_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "fixture_coverage_errors", return_value=["coverage differs"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("fixtures FAIL", out.getvalue())
+        self.assertIn("coverage differs", out.getvalue())
 
 
 if __name__ == "__main__":

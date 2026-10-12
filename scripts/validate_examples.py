@@ -44,6 +44,14 @@ same status, the example file carries every ATX v1.1 field, the trust-proof
 schema describes an ATX v1.1 member as ATX v1.1, and none of the three labels
 a v1.1 field "Proposed" (the status Section 4.6 retired).
 
+Section 2.1 lists the requirements no fixture covers yet and says that list is
+authoritative: the suite's `notCovered` list can lag it. The suite's
+revocation-list-valid fixture carries a free-text `reason` from before the
+Section 8.1.1 codes, which the revocation schema refuses and a client processes
+as `unspecified`, so every prose sentence in ATP-SPEC.md or the README, and
+every sentence of the revocation schema's description, that cites the fixture
+names Section 8.1.1.
+
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
@@ -188,6 +196,12 @@ README_ATX_HEADING = "## Agent Trust eXtension (ATX)"
 ATX_V11_STATUS = "ATX v1.1"
 RETIRED_STATUS = re.compile(r"\bproposed\s*\(?\s*v1\.1\b", re.IGNORECASE)
 
+# Section 2.1: the spec's own list of requirements no fixture covers yet.
+COVERAGE_LIST = "Not yet covered by fixtures"
+COVERAGE_AUTHORITY = "this list is authoritative"
+# The suite's Section 8.1 fixture, byte-pinned with a pre-8.1.1 free-text reason.
+REVOCATION_FIXTURE = "revocation-list-valid"
+
 
 def markdown_lines(text: str):
     """Yield (line number, line, kind) for each line, kind being "fence" for a
@@ -261,21 +275,26 @@ def sentences(text: str):
     yield begin, text[begin:]
 
 
+def unit_sentences(unit):
+    """Yield (line number, sentence) for each sentence of a unit from
+    readme_units, the line number being the one the sentence starts on."""
+    starts, parts, offset = [], [], 0
+    for _, line in unit:
+        starts.append(offset)
+        parts.append(line.strip())
+        offset += len(parts[-1]) + 1
+    for begin, sentence in sentences(" ".join(parts)):
+        yield unit[bisect_right(starts, begin) - 1][0], sentence
+
+
 def readme_signing_errors(text: str) -> list[str]:
     """Section 4.3: Ed25519 MUST, hybrid Ed25519 + ML-DSA-65 SHOULD. A README
     sentence naming ML-DSA-65 without hybrid mode reads as a mandatory second
     signature. Reported at the line the sentence starts on."""
     errors = []
     for unit in readme_units(text):
-        starts, parts, offset = [], [], 0
-        for _, line in unit:
-            starts.append(offset)
-            parts.append(line.strip())
-            offset += len(parts[-1]) + 1
-        joined = " ".join(parts)
-        for begin, sentence in sentences(joined):
+        for lineno, sentence in unit_sentences(unit):
             if "ML-DSA-65" in sentence and "hybrid" not in sentence.lower():
-                lineno = unit[bisect_right(starts, begin) - 1][0]
                 errors.append(
                     f"README.md:{lineno}: names ML-DSA-65 without hybrid mode: {sentence.strip()!r}"
                 )
@@ -358,6 +377,48 @@ def atx_status_errors(spec: str, readme: str, example: str, schema: str) -> list
         for number, line in enumerate(text.splitlines(), start=1):
             if RETIRED_STATUS.search(line):
                 errors.append(f"{name}:{number}: labels a field \"Proposed\" v1.1, a status Section 4.6 retired")
+    return errors
+
+
+def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
+    """Section 2.1's list of requirements no fixture covers yet is the spec's
+    own, so it says it is authoritative rather than deferring to the suite's
+    `notCovered` list, which can lag it. The revocation-list-valid fixture's
+    free-text `reason` predates the Section 8.1.1 codes: the revocation schema
+    refuses it and a client processes it as `unspecified`. A sentence citing
+    the fixture names Section 8.1.1, so it never reads as a body the schema
+    accepts. Code blocks are not checked."""
+    errors = []
+    coverage = [
+        unit for unit in readme_units(spec) if unit[0][1].startswith(COVERAGE_LIST)
+    ]
+    if not coverage:
+        errors.append(f"ATP-SPEC.md: no {COVERAGE_LIST!r} list in Section 2.1")
+    elif COVERAGE_AUTHORITY not in " ".join(line.strip() for _, line in coverage[0]):
+        errors.append(
+            f"ATP-SPEC.md:{coverage[0][0][0]}: the {COVERAGE_LIST!r} list does not say "
+            f"{COVERAGE_AUTHORITY!r}; the suite's notCovered list can lag the spec"
+        )
+
+    for name, text in (("ATP-SPEC.md", spec), ("README.md", readme)):
+        code = {number for number, _, kind in markdown_lines(text) if kind != "prose"}
+        for unit in readme_units(text):
+            if unit[0][0] in code:
+                continue
+            for lineno, sentence in unit_sentences(unit):
+                if REVOCATION_FIXTURE in sentence and "8.1.1" not in sentence:
+                    errors.append(
+                        f"{name}:{lineno}: cites {REVOCATION_FIXTURE} without Section 8.1.1, "
+                        f"whose codes its free-text reason predates: {sentence.strip()!r}"
+                    )
+
+    description = json.loads(schema).get("description", "")
+    for _, sentence in sentences(description):
+        if REVOCATION_FIXTURE in sentence and "8.1.1" not in sentence:
+            errors.append(
+                "schemas/revocation-list-v1.schema.json: the description cites "
+                f"{REVOCATION_FIXTURE} without section 8.1.1: {sentence.strip()!r}"
+            )
     return errors
 
 
@@ -449,8 +510,9 @@ def main() -> int:
     else:
         print("signing OK     README.md vs Section 4.3")
 
+    spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
     atx_errors = atx_status_errors(
-        (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"),
+        spec,
         readme,
         (ROOT / "examples" / "atx-example.json").read_text(encoding="utf-8"),
         (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
@@ -462,6 +524,19 @@ def main() -> int:
         failures += 1
     else:
         print("atx OK         README.md, example and schema vs Section 4.6")
+
+    coverage_errors = fixture_coverage_errors(
+        spec,
+        readme,
+        (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8"),
+    )
+    if coverage_errors:
+        print("fixtures FAIL  Section 2.1, README.md and revocation schema vs Section 8.1.1")
+        for err in coverage_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("fixtures OK    Section 2.1, README.md and revocation schema vs Section 8.1.1")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
