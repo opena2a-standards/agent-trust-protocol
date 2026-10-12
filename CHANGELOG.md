@@ -435,14 +435,15 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   authority signature, so a proof whose only signature was ML-DSA-65 was schema-valid and
   passed T1.9, though Section 4.4 step 4 rejects it. `contains` now names `ed25519Signature`,
   written out in full because `conformance/checks.jq` reads no keyword beside `$ref`; the
-  "at least one authority signature" of the entry above is an Ed25519 one. The schema also
-  required every `tlogEntries` item to be a `hashedrekord` entry with an inclusion proof,
-  where Section 4.3.1 requires at least one such entry; it now requires one and admits
-  entries of other kinds beside it. T1.9 is now "Trust proof has an Ed25519 authority
-  signature", in `level1.sh` and the conformance README, because a proof whose only
-  signature is a Sigstore co-signature or an ML-DSA-65 signature fails it. A time limit of 0,
-  or one under a millisecond, which `curl` reads as no limit, now exits 69 like a value that
-  is not a number. Section 2.1 lists two Section 4.4 requirements no fixture covers: step 3
+  "at least one authority signature" of the Section 4.3.1 entry under Added is an Ed25519
+  one. The schema also required every `tlogEntries` item to be a `hashedrekord` entry with
+  an inclusion proof, where Section 4.3.1 requires at least one such entry; it now requires
+  one and admits entries of other kinds beside it. T1.9 is now "Trust proof has an Ed25519
+  authority signature", in `level1.sh` and the conformance README, because a proof whose
+  only signature is a Sigstore co-signature or an ML-DSA-65 signature fails it. A time limit
+  of 0, or one under a millisecond, which `curl` reads as no overall limit (`--max-time`) or
+  as its own connect default (`--connect-timeout`), now exits 69 like a value that is not a
+  number. Section 2.1 lists two Section 4.4 requirements no fixture covers: step 3
   rejecting a proof signed by a revoked authority key, and step 4 rejecting a proof whose
   only Ed25519 entry is signed by a key of a DID other than its `issuerDid`. The abstract no
   longer says that Sigstore signing factors into the trust score, which no section

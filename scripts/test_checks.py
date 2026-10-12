@@ -1726,7 +1726,8 @@ class SetupErrorTest(unittest.TestCase):
 
     @unittest.skipUnless(HAS_JQ, "needs jq")
     def test_time_limit_under_a_millisecond_exits_69(self):
-        """curl counts a limit in whole milliseconds and reads 0 as no limit."""
+        """curl counts a limit in whole milliseconds and reads 0 as no overall
+        limit (--max-time) or as its own connect default (--connect-timeout)."""
         for name, value in (("ATP_MAX_TIME", "0"), ("ATP_MAX_TIME", "0.0004"),
                             ("ATP_CONNECT_TIMEOUT", "0.0"), ("ATP_CONNECT_TIMEOUT", "000")):
             with self.subTest(name=name, value=value):
