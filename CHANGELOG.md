@@ -306,8 +306,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   4.3 canonical string writes as `4`. `scripts/test_checks.py` adds probes for `issuerDid`,
   `entryType`, an empty `verificationMethod`, an extra top-level revocations member, an
   `expiresAt` of February 30, an empty endpoint string and a body holding two JSON values,
-  and its date-time check, written apart from `checks.jq`, now rejects what `checks.jq`
-  rejects. The conformance README describes the schema agreement edits as they are.
+  and its date-time check, written apart from `checks.jq`, now also rejects an out-of-range
+  UTC offset and a trailing newline, as `checks.jq` does. The conformance README describes the
+  schema agreement edits as they are.
 
 ## [1.0.0-rc1] - 2026-04-28
 
