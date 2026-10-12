@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-specification claim, revocation schema, ATX status and fixture coverage checks
-in validate_examples.py, check_guides.py, the conformance scripts (run against
-fixture_authority.py; needs bash, curl and jq), the registry generation and
---check mode of gen_registries.py, and the test-suite sentences of the
-.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+specification claim, revocation schema, threat model, ATX status and fixture
+coverage checks in validate_examples.py, check_guides.py, the conformance
+scripts (run against fixture_authority.py; needs bash, curl and jq), the
+registry generation and --check mode of gen_registries.py, and the test-suite
+sentences of the .pre-push-review-not-required marker. Run:
+python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -390,6 +391,73 @@ class RevocationIndexTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("index FAIL", out.getvalue())
         self.assertIn("probe refused", out.getvalue())
+
+
+# A specification with Sections 4.3 and 10.2 and a one-row threat model table;
+# the row is on line 13.
+THREAT_SPEC = (
+    "## 4. Trust Proofs\n\n"
+    "### 4.3 Signing\n\n"
+    "## 10. Security Considerations\n\n"
+    "### 10.1 Threat Model\n\n"
+    "ATP assumes the following threats.\n\n"
+    "| Threat | Defense | Conformance Level |\n"
+    "|--------|---------|-------------------|\n"
+    "{row}\n\n"
+    "### 10.2 Trust Proof Validity\n"
+)
+ISSUE_ROW = "| Signing key compromise | Multi-key threshold signing | Level 1+ |"
+
+
+class ThreatModelTest(unittest.TestCase):
+    def errors(self, row, after=""):
+        return validate_examples.threat_model_errors(THREAT_SPEC.format(row=row) + after)
+
+    def test_repository_spec_passes(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.threat_model_errors(spec), [])
+
+    def test_repository_spec_with_the_issue_row_fails(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        row = next(line for line in spec.splitlines() if line.startswith("| Signing key compromise |"))
+        errors = validate_examples.threat_model_errors(spec.replace(row, ISSUE_ROW))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'Multi-key threshold signing', cites no section", errors[0])
+
+    def test_defense_citing_no_section_fails_at_its_line(self):
+        errors = self.errors(ISSUE_ROW)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:13:"), errors[0])
+
+    def test_defense_citing_a_missing_section_fails(self):
+        errors = self.errors("| Signing key compromise | Threshold signing (Section 4.7) | Level 1+ |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("cites Section 4.7, which is not a heading", errors[0])
+
+    def test_defense_citing_existing_sections_passes(self):
+        row = "| Signing key compromise | Revocation (Section 4.3) and validity (Section 10.2) | Level 1+ |"
+        self.assertEqual(self.errors(row), [])
+
+    def test_heading_inside_a_code_block_is_not_a_section(self):
+        row = "| Signing key compromise | Threshold signing (Section 4.7) | Level 1+ |"
+        errors = self.errors(row, after="\n```markdown\n### 4.7 Threshold Signing\n```\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("cites Section 4.7", errors[0])
+
+    def test_section_without_a_table_fails(self):
+        text = "### 10.1 Threat Model\n\nNo table.\n\n### 10.2 Trust Proof Validity\n\n| a | b |\n"
+        errors = validate_examples.threat_model_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no threat rows", errors[0])
+
+    def test_main_fails_on_threat_model_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "threat_model_errors", return_value=["row cites no section"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("threats FAIL", out.getvalue())
+        self.assertIn("row cites no section", out.getvalue())
 
 
 CONFORMANCE = ROOT / "conformance"

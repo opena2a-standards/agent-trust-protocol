@@ -25,6 +25,10 @@ The revocation schema admits an entry without `transparencyLogIndex` (Section
 8.1: an identity revoked before the authority logged anything for it), refuses
 an index that is not an integer >= 0, and requires every other entry member.
 
+Every defense in the Section 10.1 threat model table cites the section that
+defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
+cannot list a defense the specification never defines.
+
 Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
@@ -602,6 +606,53 @@ def readme_spec_version_errors(text: str, spec: str) -> list[str]:
     return errors
 
 
+THREAT_MODEL_HEADING = "### 10.1 Threat Model"
+SECTION_HEADING = re.compile(r"^#{2,6} (\d+(?:\.\d+)*)\.? ")
+SECTION_CITATION = re.compile(r"\bSection (\d+(?:\.\d+)*)")
+
+
+def threat_model_errors(text: str) -> list[str]:
+    """Section 10.1: every defense in the threat model table cites the section
+    that defines it, and every cited section is a numbered heading of the
+    specification. A defense the specification never defines has no section
+    to cite. Reported at the line of the row."""
+    headings, rows, state = set(), [], "before"
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose":
+            continue
+        match = SECTION_HEADING.match(line)
+        if match:
+            headings.add(match.group(1))
+        if state == "before" and line.strip() == THREAT_MODEL_HEADING:
+            state = "section"
+        elif state in ("section", "table") and line.lstrip().startswith("|"):
+            state = "table"
+            rows.append((number, line))
+        elif state == "table" or (state == "section" and line.startswith("#")):
+            state = "after"
+    if len(rows) < 3:
+        return [f"ATP-SPEC.md: no threat rows in a table under {THREAT_MODEL_HEADING!r}"]
+    errors = []
+    for number, line in rows[2:]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            errors.append(f"ATP-SPEC.md:{number}: row has no defense cell: {line.strip()!r}")
+            continue
+        threat, defense = cells[0], cells[1]
+        cited = SECTION_CITATION.findall(defense)
+        if not cited:
+            errors.append(
+                f"ATP-SPEC.md:{number}: the defense for {threat!r}, {defense!r}, cites no section"
+            )
+        for section in cited:
+            if section not in headings:
+                errors.append(
+                    f"ATP-SPEC.md:{number}: the defense for {threat!r} cites Section {section}, "
+                    "which is not a heading of the specification"
+                )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -670,6 +721,15 @@ def main() -> int:
         failures += 1
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
+
+    threat_errors = threat_model_errors((ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"))
+    if threat_errors:
+        print("threats FAIL   ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
+        for err in threat_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("threats OK     ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     discovery_errors = discovery_path_errors(readme)

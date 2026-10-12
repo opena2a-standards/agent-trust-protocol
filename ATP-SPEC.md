@@ -968,15 +968,16 @@ The transparency log is public by design. It records WHICH agents were evaluated
 
 ### 10.1 Threat Model
 
-ATP assumes the following threats and provides the corresponding defenses:
+ATP assumes the following threats and provides the corresponding defenses, each defined in
+the section it cites:
 
 | Threat | Defense | Conformance Level |
 |--------|---------|-------------------|
-| Signing key compromise | Multi-key threshold signing | Level 1+ |
-| Silent trust manipulation | Transparency log with Merkle proofs | Level 2+ |
-| Single point of failure | Federation consensus | Level 3 |
-| Revocation failure | Revocation API + federation propagation | Level 2+ |
-| Quantum threat | Hybrid Ed25519 + ML-DSA-65 signatures | Optional |
+| Signing key compromise | Key revocation (Section 8.2), which Section 4.4 step 3 enforces, and the 24-hour proof validity maximum (Section 10.2) | Level 1+ |
+| Silent trust manipulation | Transparency log with Merkle proofs (Section 5) | Level 2+ |
+| Single point of failure | Federation consensus (Section 6.2) | Level 3 |
+| Revocation failure | Revocation API (Section 8.1) + federation propagation (Section 6.4.2) | Level 2+ |
+| Quantum threat | Hybrid Ed25519 + ML-DSA-65 signatures (Section 4.3) | Optional |
 | Query surveillance | Privacy mechanisms (Section 9) | RECOMMENDED |
 
 ### 10.2 Trust Proof Validity

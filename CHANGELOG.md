@@ -274,6 +274,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `{"keyVersion":1,"algorithm":"ML-DSA-65"}`. The README signing check no longer reads the
   lines of a JSON code block as sentences, so the sample's algorithm name is not reported as
   ML-DSA-65 without hybrid mode; lines of other code blocks are still checked.
+- Section 10.1: the threat model listed "multi-key threshold signing" as the Level 1 defense
+  against signing key compromise, and the specification defines no threshold signing. The
+  row now names the defenses it does define: key revocation (Section 8.2, enforced at
+  Section 4.4 step 3) and the 24-hour proof validity maximum (Section 10.2). Every other
+  defense in the table now cites its section too. `scripts/validate_examples.py` fails when a
+  defense cites no section or cites one that is not a heading of the specification.
 
 ## [1.0.0-rc1] - 2026-04-28
 
