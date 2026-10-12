@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); and §8.1.1 revocation reason codes (1.1; the `revocation-list-valid` fixture predates them).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; the suite's `notCovered` list is authoritative): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes (1.1; the `revocation-list-valid` fixture predates them).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -344,6 +344,12 @@ A verifier MUST perform the following checks in order:
    - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
 7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present.
+
+Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation
+of the agent itself is Section 8.1: a verifier that reads the revocation list applies an
+entry for the proof's `did` whether or not the entry carries a `transparencyLogIndex`, and
+requires no inclusion proof for an entry without one (an agent revoked before the authority
+logged anything for it).
 
 ### 4.5 Proof Retrieval
 
@@ -705,15 +711,16 @@ Returns trust score changes since the given timestamp. Each delta includes the t
 
 Revocation has two layers built on one object. Section 8.1 is the verifier-facing poll;
 this section is the inter-node push that keeps the family's revocation budget. On each
-revocation entry it appends to its log (`trust_proof_revoked`, `atx_revoked`), the issuing
+revocation it records, whether as an entry it appends to its log (`trust_proof_revoked`,
+`atx_revoked`) or as a Section 8.1 entry without a `transparencyLogIndex`, the issuing
 authority MUST `POST /federation/v1/revocations` to every active federation peer. The
 request body is the Section 8.1 revocation object (`revocations[]` and `nextSince`),
 restricted to the entries that peer has not yet acknowledged. Authenticity rides on the
-federation bearer key over TLS, as for the delta pull, and on each entry's
-`transparencyLogIndex` anchoring the revocation in the Section 5 log; when the Section 8.1
-object is signed, the push is signed by reference.
+federation bearer key over TLS, as for the delta pull, and on the `transparencyLogIndex` of
+each entry that carries one, anchoring the revocation in the Section 5 log; when the Section
+8.1 object is signed, the push is signed by reference.
 
-Budget: the sender SHOULD attempt delivery within 5 seconds of the log entry and MUST
+Budget: the sender SHOULD attempt delivery within 5 seconds of recording the revocation and MUST
 complete delivery to every reachable peer within 60 seconds. A peer MUST respond 2xx only
 after it has durably recorded the entries; the sender retries with backoff and flags a peer
 unreachable after 30 seconds without acknowledgement.
@@ -723,7 +730,8 @@ startup, after any delivery gap, and whenever 5 minutes pass with no push from a
 receiver MUST pull `GET {sender}/api/v1/trust/revocations?since={cursor}` before serving
 that sender's revocations, and the sender SHOULD push an empty batch at least every 5
 minutes as the liveness signal. Entries apply idempotently, keyed on `agentDid` and
-`transparencyLogIndex`; the cursor advances to the greatest `nextSince` received.
+`transparencyLogIndex`, or on `agentDid` and `revokedAt` for an entry without an index; the
+cursor advances to the greatest `nextSince` received.
 
 ## 7. Discovery
 
@@ -854,17 +862,32 @@ Returns all revocations since the given timestamp:
 Clients SHOULD poll this endpoint periodically (RECOMMENDED: every 5 minutes) and compare against locally cached trust proofs. A client subscribed to Section 7.3 `revocation` events SHOULD still poll: the poll is the bound, the subscription is the latency.
 
 The example is the suite's `revocation-list-valid` fixture, with `reason` written as its
-Section 8.1.1 code. All body
-members are REQUIRED (`revocations` MAY be empty); `revokedAt` and `nextSince`
+Section 8.1.1 code. Both body
+members are REQUIRED (`revocations` MAY be empty), and so is every entry member
+except `transparencyLogIndex`; `revokedAt` and `nextSince`
 are RFC 3339 UTC timestamps and a client MUST treat a malformed timestamp as
 a rejection of the whole response, not a skippable entry — silently dropping
 an unparseable revocation keeps a revoked agent trusted. The machine-readable
 shape is
 [`schemas/revocation-list-v1.schema.json`](./schemas/revocation-list-v1.schema.json).
 The response body itself is not signed: authenticity rides on the transport
-and on each entry's `transparencyLogIndex` anchoring the revocation in the
-§5 log. Signing the revocation response is an open hardening question for a
+and, for an entry that carries one, on its `transparencyLogIndex` anchoring the
+revocation in the §5 log; an entry without one rests on the transport alone.
+Signing the revocation response is an open hardening question for a
 future revision, like the STH timestamp coverage noted in §5.6.
+
+`transparencyLogIndex` is the log index of the revocation's own `trust_proof_revoked` or
+`atx_revoked` entry (Section 5.1.1), and it is OPTIONAL. An authority that logged a trust
+proof or credential for the agent MUST log the revocation and carry that index in the entry.
+An entry without the member therefore revokes an agent the authority logged nothing for: an
+agent registered and revoked before its first proof, or any agent revoked by an authority
+that keeps no Section 5 log. An authority that logged nothing for the agent MAY still log the
+revocation (a `trust_proof_revoked` entry without `proofHash`) and carry its index. A client
+MUST apply an entry without the index exactly as it applies one with it, MUST NOT require an
+inclusion proof for it, and MUST NOT reject the entry or the response for its absence:
+dropping a revocation because it carries no index keeps a revoked agent trusted, the same
+failure as dropping one with a malformed timestamp. An entry that carries the index can be
+checked for inclusion against the authority's log (Section 5.4); an entry without it cannot.
 
 `reason` is a Section 8.1.1 code, never free text. The response is read across
 organizations without authentication, so whatever an authority puts in `reason` reaches
