@@ -15,8 +15,9 @@ L1_RESULT=$?
 echo ""
 echo "=== Level 2: Auditable Trust ==="
 
-# T2.1: Transparency log endpoint exists
-LOG=$(curl -sf "$BASE_URL/api/v1/transparency/trust-proofs?limit=5") || LOG=""
+# T2.1: Transparency log endpoint exists. As in level1.sh, every curl call
+# passes -g so that curl does not expand {a,b} and [x-y] in the authority URL.
+LOG=$(curl -gsf "$BASE_URL/api/v1/transparency/trust-proofs?limit=5") || LOG=""
 check "$LOG" '{"body is a JSON array or object": (type == "array" or type == "object")}'
 test_case "Transparency log endpoint returns data" "$?"
 
@@ -35,7 +36,7 @@ check "$LOG" '(if type == "array" then . elif type == "object" then .entries els
 test_case "Log entries have structure" "$?"
 
 # T2.3: Revocations endpoint returns a Section 8.1 response that matches the schema
-REV=$(curl -sf "$BASE_URL/api/v1/trust/revocations?since=2026-01-01T00:00:00Z") || REV=""
+REV=$(curl -gsf "$BASE_URL/api/v1/trust/revocations?since=2026-01-01T00:00:00Z") || REV=""
 check "$REV" 'members_ok($revocation_schema; $revocation_schema.required)
   + {"body matches schemas/revocation-list-v1.schema.json": schema_ok($revocation_schema; $revocation_schema)}'
 test_case "Revocations endpoint returns data" "$?"

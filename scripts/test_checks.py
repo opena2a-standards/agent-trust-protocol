@@ -681,10 +681,11 @@ class ConformanceScriptTest(unittest.TestCase):
         cls.authority.shutdown()
         cls.authority.server_close()
 
-    def run_scripts(self, **overrides):
+    def run_scripts(self, url=None, **overrides):
         self.authority.overrides = overrides
+        self.authority.requests.clear()
         run = subprocess.run(
-            ["bash", str(CONFORMANCE / "level2.sh"), self.authority.url],
+            ["bash", str(CONFORMANCE / "level2.sh"), url or self.authority.url],
             capture_output=True,
             text=True,
             timeout=120,
@@ -706,6 +707,10 @@ class ConformanceScriptTest(unittest.TestCase):
         for label, expected, overrides in cases:
             with self.subTest(label):
                 self.probe(expected, **overrides)
+
+    def received(self, part):
+        """The requests of the last run that contain part."""
+        return [request for request in self.authority.requests if part in request]
 
     def test_spec_examples_pass_every_test(self):
         run = self.probe([])
@@ -748,6 +753,53 @@ class ConformanceScriptTest(unittest.TestCase):
         run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=userinfo)))
         self.assertIn("(endpoints.trustProof does not start with /)", run.stdout)
         self.assertEqual(other.requests, [])
+
+    def test_trust_proof_endpoint_reading(self):
+        """T1.7 requests /api/v1/trust/proof when endpoints.trustProof is not a
+        string, and reads a string with its NUL characters and trailing
+        newlines removed."""
+        did = self.authority.examples["discovery"]["authorityDid"]
+        for label, expected, value in (
+            ("number", [T1[2]], 42),
+            ("trailing newline", [], "/api/v1/trust/proof\n"),
+            ("leading NUL character", [], "\x00/api/v1/trust/proof"),
+            ("NUL character inside the path", [], "/api/v1/trust\x00/proof"),
+        ):
+            with self.subTest(label):
+                self.probe(expected, discovery=inside("endpoints", put(trustProof=value)))
+                self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={did}"])
+
+    def test_bracketed_trust_proof_endpoint_is_one_request(self):
+        """curl does not expand a pattern in endpoints.trustProof: the declared
+        path gets one request, and T1.7 fails when it is not served."""
+        did = self.authority.examples["discovery"]["authorityDid"]
+        self.probe(LEVEL1[6:],
+                   discovery=inside("endpoints", put(trustProof="/api/v1/trust/proo[e-f]")))
+        self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proo[e-f]?did={did}"])
+
+    def test_bracketed_authority_did_is_one_request(self):
+        did = self.authority.examples["discovery"]["authorityDid"][:-1] + "[f-g]"
+        self.probe([T1[2], T1[8]], discovery=put(authorityDid=did))
+        self.assertEqual(self.received("/api/v1/did/"), [f"GET /api/v1/did/{did}"])
+        self.assertEqual(self.received("?did="), [f"GET /api/v1/trust/proof?did={did}"])
+
+    def test_braces_in_the_authority_url_are_sent_as_written(self):
+        run, failed = self.run_scripts(url=self.authority.url + "/{a,b}")
+        self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+        self.assertEqual(self.authority.requests, [
+            "GET /{a,b}/.well-known/atp",
+            "GET /{a,b}/api/v1/transparency/trust-proofs?limit=5",
+            "GET /{a,b}/api/v1/trust/revocations?since=2026-01-01T00:00:00Z",
+        ])
+
+    def test_every_curl_call_turns_url_globbing_off(self):
+        for script in ("level1.sh", "level2.sh"):
+            with self.subTest(script):
+                text = (CONFORMANCE / script).read_text(encoding="utf-8")
+                options = re.findall(r"^[^#\n]*\bcurl[ \t]+(\S+)", text, re.M)
+                self.assertTrue(options)
+                for option in options:
+                    self.assertRegex(option, r"^(-[A-Za-z]*g[A-Za-z]*|--globoff)$")
 
     def test_did_document_probes(self):
         self.probes([
