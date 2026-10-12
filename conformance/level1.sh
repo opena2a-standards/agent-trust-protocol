@@ -23,9 +23,9 @@ test_case "Discovery endpoint returns JSON" "$?"
 check "$DISCOVERY" 'members_ok($discovery_schema; ["authorityDid", "version", "endpoints"])'
 test_case "Discovery has authorityDid, version, endpoints" "$?"
 
-# T1.3: Discovery has conformance level
+# T1.3: Discovery has conformance level (an integer, 1-3)
 check "$DISCOVERY" 'members_ok($discovery_schema; ["conformanceLevel"])'
-test_case "Conformance level >= 1" "$?"
+test_case "Conformance level is 1-3" "$?"
 
 # T1.4: DID resolution works for the registry's own DID
 AUTHORITY_DID=$(field "$DISCOVERY" '.authorityDid')
@@ -37,22 +37,27 @@ else
 fi
 test_case "DID resolution returns document" "$?"
 
-# T1.5: DID Document has @context
-check "$DID_DOC" '{"@context": (type == "object" and .["@context"] != null)}'
+# T1.5: DID Document has @context (a non-empty string or a non-empty array)
+check "$DID_DOC" '{"@context is a non-empty string or array":
+  (type == "object" and (.["@context"] | (type == "string" or type == "array") and length > 0))}'
 test_case "DID Document has @context" "$?"
 
 # T1.6: DID Document has verificationMethod
 check "$DID_DOC" '{"verificationMethod is a non-empty array": (type == "object" and (.verificationMethod | type == "array" and length > 0))}'
 test_case "DID Document has verificationMethod" "$?"
 
-# T1.7: Trust proof endpoint returns a proof for the authority DID
+# T1.7: Trust proof endpoint returns a proof for the authority DID. A declared
+# endpoints.trustProof is appended to the authority URL, so it must be a path:
+# a value such as "@other.example/..." would send the request to another host.
 PROOF_ENDPOINT=$(field "$DISCOVERY" '.endpoints.trustProof')
-if [ -n "$AUTHORITY_DID" ]; then
+if [ -z "$AUTHORITY_DID" ]; then
+  unmet "discovery has no authorityDid"
+elif [ -n "$PROOF_ENDPOINT" ] && [ "${PROOF_ENDPOINT:0:1}" != "/" ]; then
+  unmet "endpoints.trustProof does not start with /"
+else
   PROOF=$(curl -sf "$BASE_URL${PROOF_ENDPOINT:-/api/v1/trust/proof}?did=$AUTHORITY_DID") || PROOF=""
   check "$PROOF" '{"body is a JSON object": (type == "object"), "did is the authority DID": (type == "object" and .did == $did)}' \
     --arg did "$AUTHORITY_DID"
-else
-  unmet "discovery has no authorityDid"
 fi
 test_case "Trust proof endpoint returns proof" "$?"
 
@@ -68,7 +73,8 @@ test_case "Trust proof has at least one signature" "$?"
 check "$PROOF" '{"expiresAt is an RFC 3339 time after now": (type == "object" and (.expiresAt | rfc3339 | . != null and . > now))}'
 test_case "Trust proof not expired" "$?"
 
-# T1.11: Trust level is valid (an integer, 0-4)
+# T1.11: Trust level is valid (an integer, 0-4). Like JSON Schema's integer
+# type, it accepts a zero fraction: 4.0 is the integer 4.
 check "$PROOF" 'members_ok($proof_schema; ["trustLevel"])'
 test_case "Trust level is 0-4" "$?"
 

@@ -12,7 +12,7 @@
 
 ## Abstract
 
-The Agent Trust Protocol (ATP) defines a standard for expressing, verifying, and distributing trust assertions about AI agents. It enables any party to answer the question: "Should I trust this agent?" with a cryptographically verifiable, auditable, and decentralized response.
+The Agent Trust Protocol (ATP) defines a standard for expressing, verifying, and distributing trust assertions about AI agents. It enables any party to answer the question: "Should I trust this agent?" with a cryptographically verifiable and auditable response. Federation (Section 6, conformance Level 3), in which several trust authorities co-sign a proof so that the response is decentralized, is specified and not yet demonstrated: no second authority co-signs proofs yet, and no conformance fixture covers a co-signed proof (Section 2.1).
 
 ATP is designed for a world where millions of AI agents operate across organizational boundaries — MCP servers handling filesystem access, A2A agents delegating tasks to each other, autonomous agents making decisions on behalf of users. Each of these interactions requires a trust decision. ATP provides the infrastructure for making that decision reliably.
 
@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -311,6 +311,20 @@ canonical = "{did}|{trustLevel}|{trustScore:.6f}|{verdict}|{issuedAt RFC3339}|{e
 signature = Ed25519.Sign(privateKey, canonical)
 ```
 
+`issuedAt` and `expiresAt` enter the canonical string as RFC 3339 UTC in whole seconds,
+grammar `YYYY-MM-DDTHH:MM:SSZ`: the instant converted to UTC, any fractional seconds
+dropped (not rounded), and a `Z` suffix. An authority MUST serve both members in exactly
+the form it signed, so the string is computable from the served proof with no second
+encoding. A verifier MUST reduce each served timestamp to that form before it builds the
+string, so a proof served with fractional seconds still verifies:
+
+| Served | In the canonical string |
+|---|---|
+| `2026-05-23T12:00:00Z` | `2026-05-23T12:00:00Z` |
+| `2026-10-12T02:57:21.581346834Z` | `2026-10-12T02:57:21Z` |
+| `2026-10-12T02:57:21.999Z` | `2026-10-12T02:57:21Z` |
+| `2026-10-11T20:57:21.5-06:00` | `2026-10-12T02:57:21Z` |
+
 Implementations SHOULD also support hybrid Ed25519 + ML-DSA-65 (FIPS 204) dual signatures for post-quantum readiness. In hybrid mode, both signatures MUST be present and both MUST verify:
 
 ```json
@@ -387,7 +401,7 @@ The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the c
 | scanSummary | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | HackMyAgent and equivalent scanner results at issuance time. |
 | declaredPurpose | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Optional structured declaration of what the agent is *for* (category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). Identity/attestation claim and an offline detection signal only — never an authorization input. When present it is covered by the v1.1 signed payload. See [`atx-spec` core.md §1.5](https://github.com/opena2a-org/atx-spec). |
 
-Note: Section 4.2 shows `scanSummary` and `transparencyLogIndex` in its example payload. These are illustrative fields, not enumerated as part of the canonical form. ATX signs `scanSummary` inside its v1.1 TBS so that its shape and semantics can be standardized.
+Note: Section 4.2 shows `transparencyLogIndex` in its example payload; it is not one of the seven fields the Section 4.3 canonical form covers. `scanSummary` is not in that example: it is an ATX v1.1 claim, and ATX signs it inside its v1.1 TBS so that its shape and semantics can be standardized.
 
 #### Reference Example
 
@@ -791,8 +805,11 @@ reference verifiers require, ratified here as normative: endpoint key
 `transparencySth` (not `transparencySTH`), key material as `publicKeyHex`
 (raw lowercase hex) with per-key `status` and `validFrom`, fragment-qualified
 full-DID `keyId` values, and `supportedMethods` naming the `did:opena2a`
-method. The suite's `discovery-valid` fixture additionally carries an
-ML-DSA-65 key entry (~2.6 KB hex), omitted here for readability. The
+method. The example above is illustrative, not the suite's `discovery-valid`
+fixture bytes: the fixture declares `conformanceLevel` 2 and four
+`capabilities`, has no `federation` endpoint and no `federationPeers`, and
+carries a second key, an ML-DSA-65 entry whose `publicKeyHex` is 3,904 hex
+characters (the 1,952-byte FIPS 204 public key). The
 machine-readable shape is
 [`schemas/discovery-v1.schema.json`](./schemas/discovery-v1.schema.json);
 required members are `authorityDid`, `version`, `endpoints`, `publicKeys`.
@@ -918,9 +935,13 @@ reason.
 | `manual` | An operator of the issuing authority revoked outside the automated triggers | 1.1.0 |
 | `expiry_reissuance_failed` | The proof or credential expired and its reissuance failed | 1.1.0 |
 
-The codes other than `unspecified` are the revocation triggers of atx-spec core.md Section
-3.3, so a trust-proof revocation and an ATX revocation for the same trigger carry the same
-bytes.
+Each code other than `unspecified` names one revocation trigger of atx-spec core.md Section
+3.3: `content_hash_violation` for CONTENT_HASH_VIOLATION, `manual` for manual revocation,
+`security_incident` for a security incident, and `expiry_reissuance_failed` for ATX expiry
+with failed reissuance. That section names the triggers and spells no codes; this table is
+where the codes are spelled. The `reason` of an `atx_revoked` entry is a code from this
+table (Section 5.1.1), so a trust-proof revocation and an ATX revocation for the same
+trigger carry the same bytes.
 
 ### 8.2 Key Revocation
 
@@ -961,15 +982,16 @@ The transparency log is public by design. It records WHICH agents were evaluated
 
 ### 10.1 Threat Model
 
-ATP assumes the following threats and provides the corresponding defenses:
+ATP assumes the following threats and provides the corresponding defenses, each defined in
+the section it cites:
 
 | Threat | Defense | Conformance Level |
 |--------|---------|-------------------|
-| Signing key compromise | Multi-key threshold signing | Level 1+ |
-| Silent trust manipulation | Transparency log with Merkle proofs | Level 2+ |
-| Single point of failure | Federation consensus | Level 3 |
-| Revocation failure | Revocation API + federation propagation | Level 2+ |
-| Quantum threat | Hybrid Ed25519 + ML-DSA-65 signatures | Optional |
+| Signing key compromise | Key revocation (Section 8.2), which Section 4.4 step 3 enforces, and the 24-hour proof validity maximum (Section 10.2) | Level 1+ |
+| Silent trust manipulation | Transparency log with Merkle proofs (Section 5) | Level 2+ |
+| Single point of failure | Federation consensus (Section 6.2) | Level 3 |
+| Revocation failure | Revocation API (Section 8.1) + federation propagation (Section 6.4.2) | Level 2+ |
+| Quantum threat | Hybrid Ed25519 + ML-DSA-65 signatures (Section 4.3) | Optional |
 | Query surveillance | Privacy mechanisms (Section 9) | RECOMMENDED |
 
 ### 10.2 Trust Proof Validity
@@ -1002,7 +1024,9 @@ This specification defines:
 
 - **DID Method:** `did:opena2a` — Decentralized Identifier method for catalogued agent-ecosystem resources (registered in the did-method-opena2a specification; `did:atp` was the pre-rc1 name)
 - **Well-Known URI:** `/.well-known/atp` — Trust authority discovery
-- **Media Type:** `application/atp+json` — ATP trust proof format
+- **Media Type:** none. A trust proof is served and posted as `application/json` (Section
+  4.5), the type the reference authority uses; this revision registers no ATP-specific
+  media type.
 
 ---
 
@@ -1035,41 +1059,100 @@ The OpenA2A Registry is the reference implementation of ATP at Conformance Level
 
 ## Appendix B: Integration Examples
 
+ATP defines no client library. B.1 and B.2 call the Section 4.5 endpoints of the
+authority the verifier is configured to trust, here the reference authority at
+`https://api.oa2a.org`, with a plain HTTP client: B.1 needs Python 3.11 or later and
+`requests`, B.2 a runtime with `fetch` (Node.js 18 or later). They verify online,
+through `POST /api/v1/trust/verify`; a verifier that checks proofs offline performs the
+Section 4.4 steps itself, over the Section 4.3 canonical string with an issuer key from
+the Section 7.1 discovery document. `reject_task`, `accept_task` and `MCPClient` stand
+for the caller's own code. The integration guides in [`examples/`](./examples/) carry
+fuller versions.
+
 ### B.1 A2A Agent Verifying a Peer
 
+Called as `on_delegated_task("did:opena2a:agent:requester-agent")`:
+
 ```python
-import atp
+from datetime import datetime, timezone
 
-# Before accepting a delegated task from another agent
-proof = atp.get_trust_proof("did:opena2a:agent:requester-agent")
+import requests
 
-if not atp.verify(proof):
-    reject_task("Trust proof verification failed")
+AUTHORITY = "https://api.oa2a.org"  # the authority this verifier trusts
 
-if proof.trust_level < 3:
-    reject_task(f"Insufficient trust: level {proof.trust_level}, require 3+")
 
-accept_task()
+def verified_proof(did: str) -> dict | None:
+    """The current trust proof for did, or None unless it is about did, has not
+    expired, is accepted by the authority, and carries a trustLevel 0-4."""
+    resp = requests.get(f"{AUTHORITY}/api/v1/trust/proof", params={"did": did}, timeout=10)
+    if resp.status_code != 200:
+        return None
+    proof = resp.json().get("proof") or {}  # the response wraps the proof
+    try:
+        live = datetime.fromisoformat(proof["expiresAt"]) > datetime.now(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        live = False
+    if proof.get("did") != did or not live:
+        return None
+    check = requests.post(f"{AUTHORITY}/api/v1/trust/verify", json=proof, timeout=10)
+    if check.status_code != 200 or check.json().get("valid") is not True:
+        return None
+    level = proof.get("trustLevel")
+    return proof if type(level) is int and 0 <= level <= 4 else None
+
+
+def on_delegated_task(requester_did: str):
+    # Before accepting a delegated task from another agent
+    proof = verified_proof(requester_did)
+    if proof is None:
+        return reject_task("Trust proof verification failed")
+    if proof["trustLevel"] < 3:
+        return reject_task(f"Insufficient trust: level {proof['trustLevel']}, require 3+")
+    return accept_task()
 ```
 
 ### B.2 MCP Client Checking Server Trust
 
+Called as `await connectToServer("did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem", serverUrl)`:
+
 ```typescript
-// Before connecting to an MCP server
-const proof = await atp.getTrustProof(
-  "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
-);
+const AUTHORITY = "https://api.oa2a.org"; // the authority this client trusts
 
-if (!atp.verify(proof)) {
-  throw new Error("MCP server trust proof invalid");
+// The current trust proof for did, or null unless it is about did, has not
+// expired, is accepted by the authority, and carries a trustLevel 0-4.
+async function verifiedProof(did: string): Promise<Record<string, any> | null> {
+  const resp = await fetch(
+    `${AUTHORITY}/api/v1/trust/proof?did=${encodeURIComponent(did)}`
+  );
+  if (resp.status !== 200) return null;
+  const proof = (await resp.json()).proof ?? {}; // the response wraps the proof
+  // Date.parse returns NaN for a missing expiresAt, which also refuses
+  if (proof.did !== did || !(Date.parse(proof.expiresAt) > Date.now())) return null;
+  const check = await fetch(`${AUTHORITY}/api/v1/trust/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(proof),
+  });
+  if (check.status !== 200 || (await check.json()).valid !== true) return null;
+  const level = proof.trustLevel;
+  return Number.isInteger(level) && level >= 0 && level <= 4 ? proof : null;
 }
 
-if (proof.trustLevel === 0) {
-  throw new Error(`BLOCKED: ${proof.verdict}`);
-}
+async function connectToServer(did: string, serverUrl: string) {
+  // Before connecting to an MCP server
+  const proof = await verifiedProof(did);
 
-// Proceed with connection
-const client = new MCPClient(serverUrl);
+  if (proof === null) {
+    throw new Error("MCP server trust proof invalid");
+  }
+
+  if (proof.trustLevel === 0) {
+    throw new Error(`BLOCKED: ${proof.verdict}`);
+  }
+
+  // Proceed with connection
+  return new MCPClient(serverUrl);
+}
 ```
 
 ### B.3 CI/CD Pipeline Gate

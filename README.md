@@ -4,7 +4,7 @@
 
 An open standard for verifiable trust assertions about AI agents. The agent-specific credential format defined by ATP is the Agent Trust eXtension (ATX).
 
-ATP enables any party to answer "Should I trust this agent?" with a cryptographically verifiable, auditable, and decentralized response.
+ATP enables any party to answer "Should I trust this agent?" with a cryptographically verifiable and auditable response. A decentralized response, co-signed by several trust authorities (federation, conformance Level 3), is specified and not yet demonstrated: no second authority co-signs proofs yet, and no conformance fixture covers a co-signed proof.
 
 ## Quick Start
 
@@ -71,7 +71,7 @@ Why you can check this yourself: [`ATP-SPEC.md`](ATP-SPEC.md); [atp-conformance]
 
 ## Specification
 
-[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.0.0-rc1).
+[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).
 
 ## Conformance Levels
 
@@ -118,7 +118,7 @@ ATP is designed to complement:
 
 The OpenA2A Registry implements ATP at Level 2 conformance. Its source code is not public; the reference trust authority it runs is live at `api.oa2a.org`, and [ATP-SPEC Appendix A](ATP-SPEC.md#appendix-a-reference-implementation) maps each component to the public endpoint that demonstrates it.
 
-Verified working request and response (April 2026):
+Verified working request and response (October 2026):
 
 ```bash
 curl "https://api.oa2a.org/api/v1/trust/proof?did=did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
@@ -134,19 +134,20 @@ Returns a hybrid Ed25519 plus ML-DSA-65 signed trust proof:
     "trustLevel": 2,
     "trustScore": 0.7432,
     "verdict": "listed",
-    "issuedAt": "2026-04-28T13:32:11Z",
-    "expiresAt": "2026-04-29T13:32:11Z",
+    "issuedAt": "2026-10-12T02:57:21.581346834Z",
+    "expiresAt": "2026-10-13T02:57:21.581346834Z",
     "issuerDid": "did:opena2a:registry:opena2a.org",
     "signatures": [
       { "keyVersion": 1, "algorithm": "ed25519", "value": "..." },
-      { "keyVersion": 0, "algorithm": "ml-dsa-65", "value": "..." }
-    ]
+      { "keyVersion": 1, "algorithm": "ML-DSA-65", "value": "..." }
+    ],
+    "signature": "..."
   },
   "publicKey": "..."
 }
 ```
 
-This hybrid proof carries both an Ed25519 signature for fast local verification today and an ML-DSA-65 signature (FIPS 204, post-quantum) for forward compatibility. Local verification requires no further network calls.
+This hybrid proof carries both an Ed25519 signature for fast local verification today and an ML-DSA-65 signature (FIPS 204, post-quantum) for forward compatibility. `proof.signature` repeats the Ed25519 value from `signatures`. Local verification requires no further network calls.
 
 ## Related Standards
 

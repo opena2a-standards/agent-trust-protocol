@@ -32,7 +32,7 @@ The test suite mirrors the three conformance levels defined in ATP-SPEC.md Secti
 ./conformance/level2.sh https://api.oa2a.org
 ```
 
-Both scripts exit with the number of failed tests as the exit code (0 = all passed). A failed test names what is not met:
+Both scripts exit with the number of failed tests as the exit code (0 = all passed). When `curl`, `jq` or a schema file is missing they exit 69 before running any test, a code no failed-test count reaches. A failed test names what is not met:
 
 ```
 FAIL: Trust proof has all required fields (not met: verdict, issuedAt)
@@ -40,7 +40,7 @@ FAIL: Trust proof has all required fields (not met: verdict, issuedAt)
 
 ## Test Coverage
 
-A test that names several members checks each one on its own. "Matches the schema" means the member's value is valid against its property in the named file under `schemas/`; timestamps must be RFC 3339 and are compared as times, whatever their UTC offset.
+A test that names several members checks each one on its own. "Matches the schema" means the member's value is valid against its property in the named file under `schemas/`; timestamps must be RFC 3339 (a UTC offset from 00:00 to 23:59, and nothing after the timestamp, not even a newline) and are compared as times, whatever their UTC offset.
 
 ### Level 1: Basic Trust (14 tests)
 
@@ -50,13 +50,13 @@ A test that names several members checks each one on its own. "Matches the schem
 | T1.2 | Discovery document has `authorityDid`, `version` and `endpoints`, each matching `discovery-v1.schema.json` |
 | T1.3 | `conformanceLevel` is present and matches `discovery-v1.schema.json` (an integer from 1 to 3) |
 | T1.4 | DID resolution returns a JSON document for the authority's own DID |
-| T1.5 | DID Document has `@context` |
+| T1.5 | DID Document has `@context`, a non-empty string or a non-empty array |
 | T1.6 | DID Document has a non-empty `verificationMethod` array |
-| T1.7 | Trust proof endpoint returns a JSON proof whose `did` is the authority DID |
+| T1.7 | Trust proof endpoint returns a JSON proof whose `did` is the authority DID. The request goes to `endpoints.trustProof` appended to the authority URL (`/api/v1/trust/proof` when it is absent, empty or not a string), and the test fails without a request when it is a non-empty string that does not start with `/`. The script reads the value with its NUL characters and trailing newlines removed |
 | T1.8 | Trust proof has all required fields (`did`, `trustLevel`, `trustScore`, `verdict`, `issuedAt`, `expiresAt`, `issuerDid`), each matching `trust-proof-v1.schema.json` |
 | T1.9 | Trust proof has at least one signature (`signatures` matches `trust-proof-v1.schema.json`) |
 | T1.10 | Trust proof is not expired: `expiresAt` is an RFC 3339 time later than now |
-| T1.11 | Trust level is an integer from 0 to 4 |
+| T1.11 | Trust level is an integer from 0 to 4. As in JSON Schema, a value written with a zero fraction is an integer: `4.0` passes as the trust level 4, which the Section 4.3 canonical string writes as `4` (see `trust-proof-v1.schema.json`) |
 | T1.12 | Trust score is a number from 0.0 to 1.0 |
 | T1.13 | Verify endpoint accepts the trust proof and returns a JSON object |
 | T1.14 | Verification result is `valid=true` |
@@ -77,7 +77,7 @@ Tests T1.4 to T1.14 fail when there is nothing to check: no `authorityDid` in th
 python3 scripts/test_checks.py
 ```
 
-Runs both scripts against `scripts/fixture_authority.py`, a local authority that serves the specification's own examples, and expects all 17 tests to pass. It then removes or corrupts one member at a time (an HTML discovery body, a proof without `verdict`, an `expiresAt` of `"never"`, a log entry that is a string, a revocation `reason` in free text, and others) and expects exactly the tests that check that member to fail. It also checks that `checks.jq` agrees with a JSON Schema validator on the specification's examples and on every one-member edit of them. Needs `bash`, `curl`, `jq` and the Python `jsonschema` package.
+Runs both scripts against `scripts/fixture_authority.py`, a local authority that serves the specification's own examples, and expects all 17 tests to pass. It then removes or corrupts one member at a time (an HTML discovery body, a proof without `verdict`, an `expiresAt` of `"never"`, a log entry that is a string, a revocation `reason` in free text, and others) and expects exactly the tests that check that member to fail, and that a missing `jq` or schema file exits 69. It also checks that `checks.jq` agrees with a JSON Schema validator on the specification's examples and on edits of them: each member removed, each member replaced by one of a fixed set of values (`null`, `true`, `-1`, `1.5`, `"x"`, `[]`, `{}` and a few malformed timestamps), and one extra top-level member added. Needs `bash`, `curl`, `jq` and the Python `jsonschema` package.
 
 ## Adding Tests
 

@@ -65,11 +65,13 @@ An A2A agent card with ATP trust embedded in the `atp` field:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `atp.did` | Yes | The agent's ATP DID (see [ATP-SPEC Section 3](../ATP-SPEC.md#3-agent-identifiers)) |
-| `atp.trustLevel` | Yes | Current trust level (0-4) |
+| `atp.trustLevel` | Yes | Current trust level (0-4), an unsigned copy for display. Verifiers read the level from `trustProof`, which the authority signed |
 | `atp.trustProof` | Yes | The signed trust proof object |
-| `atp.verifyAt` | No | Override URL for proof verification (defaults to the issuer's well-known endpoint) |
+| `atp.verifyAt` | No | Verification URL suggested by the card's publisher. The samples below do not use it: they verify against the authority the verifier is configured with (by default `https://api.oa2a.org/api/v1/trust/verify`), because the card is unverified input and a card that named its own verifier could name one that always answers valid |
 
-The `trustProof` object is the exact format defined in [ATP-SPEC Section 4.2](../ATP-SPEC.md#42-trust-proof-format). It is self-contained: a verifier does not need to fetch the proof separately if it is embedded in the agent card.
+The `trustProof` object is the exact format defined in [ATP-SPEC Section 4.2](../ATP-SPEC.md#42-trust-proof-format), the object under `proof` in the authority's `GET /api/v1/trust/proof` response, not that whole response. It is self-contained: a verifier does not need to fetch the proof separately if it is embedded in the agent card.
+
+The Python samples need Python 3.11 or later: `datetime.fromisoformat` reads the authority's nanosecond timestamps from 3.11 on.
 
 ---
 
@@ -80,7 +82,11 @@ import requests
 from datetime import datetime, timezone
 
 
-def verify_a2a_agent(agent_card_url: str, min_trust_level: int = 3) -> dict:
+def verify_a2a_agent(
+    agent_card_url: str,
+    min_trust_level: int = 3,
+    verify_url: str = "https://api.oa2a.org/api/v1/trust/verify",
+) -> dict:
     """
     Fetch an A2A agent card and verify its ATP trust proof.
 
@@ -104,8 +110,8 @@ def verify_a2a_agent(agent_card_url: str, min_trust_level: int = 3) -> dict:
     if expires < datetime.now(timezone.utc):
         return {"trusted": False, "reason": "Trust proof expired"}
 
-    # 4. Verify the trust proof against the ATP authority
-    verify_url = atp.get("verifyAt", "https://api.oa2a.org/api/v1/trust/verify")
+    # 4. Verify the trust proof against the authority this verifier trusts.
+    #    The card's own atp.verifyAt is not used: the card chose it.
     verification = requests.post(
         verify_url,
         json=proof,
@@ -116,8 +122,11 @@ def verify_a2a_agent(agent_card_url: str, min_trust_level: int = 3) -> dict:
     if not verification.get("valid"):
         return {"trusted": False, "reason": verification.get("error", "Verification failed")}
 
-    # 5. Check trust level meets minimum
-    trust_level = atp.get("trustLevel", 0)
+    # 5. Read the level from the signed proof, not the card's unsigned atp.trustLevel.
+    #    A level that is not an integer 0-4 is not trusted.
+    trust_level = proof.get("trustLevel")
+    if type(trust_level) is not int or not 0 <= trust_level <= 4:
+        return {"trusted": False, "reason": "Trust proof carries no readable trust level"}
     if trust_level < min_trust_level:
         return {
             "trusted": False,
@@ -182,7 +191,8 @@ interface VerifyResult {
 
 async function verifyA2AAgent(
   agentCardUrl: string,
-  minTrustLevel = 3
+  minTrustLevel = 3,
+  verifyUrl = "https://api.oa2a.org/api/v1/trust/verify"
 ): Promise<VerifyResult> {
   // 1. Fetch the agent card
   const card = await fetch(agentCardUrl).then((r) => r.json());
@@ -192,16 +202,15 @@ async function verifyA2AAgent(
     return { trusted: false, reason: "No ATP trust proof in agent card" };
   }
 
-  const { atp } = card;
-  const proof = atp.trustProof;
+  const proof = card.atp.trustProof;
 
-  // 3. Check expiry locally
-  if (new Date(proof.expiresAt) < new Date()) {
+  // 3. Check expiry locally; Date.parse returns NaN for a missing expiresAt, which also refuses
+  if (!(Date.parse(proof.expiresAt) > Date.now())) {
     return { trusted: false, reason: "Trust proof expired" };
   }
 
-  // 4. Verify against the ATP authority
-  const verifyUrl = atp.verifyAt || "https://api.oa2a.org/api/v1/trust/verify";
+  // 4. Verify against the authority this verifier trusts.
+  //    The card's own atp.verifyAt is not used: the card chose it.
   const verification = await fetch(verifyUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -212,15 +221,20 @@ async function verifyA2AAgent(
     return { trusted: false, reason: verification.error || "Verification failed" };
   }
 
-  // 5. Check trust level
-  if (atp.trustLevel < minTrustLevel) {
+  // 5. Read the level from the signed proof, not the card's unsigned atp.trustLevel.
+  //    A level that is not an integer 0-4 is not trusted.
+  const level = proof.trustLevel;
+  if (!Number.isInteger(level) || level < 0 || level > 4) {
+    return { trusted: false, reason: "Trust proof carries no readable trust level" };
+  }
+  if (level < minTrustLevel) {
     return {
       trusted: false,
-      reason: `Trust level ${atp.trustLevel} below minimum ${minTrustLevel}`,
+      reason: `Trust level ${level} below minimum ${minTrustLevel}`,
     };
   }
 
-  return { trusted: true, trustLevel: atp.trustLevel, score: proof.trustScore };
+  return { trusted: true, trustLevel: level, score: proof.trustScore };
 }
 
 // --- Usage ---
@@ -280,19 +294,32 @@ Trust proofs expire after 24 hours (see [ATP-SPEC Section 10.2](../ATP-SPEC.md#1
 ```python
 import threading
 
+import requests
+
+
 def refresh_proof_periodically(did: str, interval_seconds: int = 3600):
     """Fetch a fresh trust proof every hour and update the agent card."""
     def refresh():
-        proof = requests.get(
-            f"https://api.oa2a.org/api/v1/trust/proof?did={did}",
-            timeout=10,
-        ).json()
-        # Update the in-memory agent card with the new proof
-        update_agent_card_proof(proof)
-        threading.Timer(interval_seconds, refresh).start()
+        try:
+            resp = requests.get(
+                "https://api.oa2a.org/api/v1/trust/proof",
+                params={"did": did},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            # The response wraps the proof: {"proof": {...}, "algorithm": ..., "publicKey": ...}.
+            # The card carries the proof itself, the object POST /api/v1/trust/verify accepts.
+            update_agent_card_proof(resp.json()["proof"])
+        finally:
+            # Schedule the next refresh even when this one failed
+            timer = threading.Timer(interval_seconds, refresh)
+            timer.daemon = True
+            timer.start()
 
     refresh()
 ```
+
+`update_agent_card_proof` is your own function: it replaces `atp.trustProof` in the served card (and `atp.trustLevel`, the display copy, with the proof's `trustLevel`).
 
 ---
 

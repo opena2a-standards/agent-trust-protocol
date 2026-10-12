@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-revocation schema, ATX status and fixture coverage checks in
-validate_examples.py, the conformance scripts (run against fixture_authority.py;
-needs bash, curl and jq), the registry generation and --check mode of
-gen_registries.py, and the test-suite sentences of the
-.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+specification claim, revocation schema, threat model, signed timestamp, ATX
+status and fixture coverage checks in validate_examples.py, check_guides.py,
+the conformance scripts (run against fixture_authority.py; needs bash, curl and
+jq), the registry generation and --check mode of gen_registries.py, and the
+test-suite sentences of the .pre-push-review-not-required marker. Run:
+python3 scripts/test_checks.py
 """
 import contextlib
 import copy
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,6 +26,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
+import check_guides  # noqa: E402
 import check_license  # noqa: E402
 import fixture_authority  # noqa: E402
 import gen_registries  # noqa: E402
@@ -92,6 +95,85 @@ class ReadmeSigningTest(unittest.TestCase):
         errors = validate_examples.readme_signing_errors(text)
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("README.md:2:"), errors[0])
+
+    def test_json_block_value_is_not_a_sentence(self):
+        text = '```json\n{ "keyVersion": 1, "algorithm": "ML-DSA-65", "value": "..." }\n```\n'
+        self.assertEqual(validate_examples.readme_signing_errors(text), [])
+
+    def test_comment_in_other_code_block_is_checked(self):
+        text = '```json\n{ "algorithm": "ML-DSA-65" }\n```\n\n```bash\n# signed with ML-DSA-65\n```\n'
+        errors = validate_examples.readme_signing_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:6:"), errors[0])
+
+
+class ReadmeSpecVersionTest(unittest.TestCase):
+    SPEC = "# Agent Trust Protocol (ATP)\n\n**Version:** 1.1.0-draft\n"
+
+    def test_repository_readme_passes(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.readme_spec_version_errors(readme, spec), [])
+
+    def test_older_version_fails(self):
+        text = "Intro.\n\n[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.0.0-rc1).\n"
+        errors = validate_examples.readme_spec_version_errors(text, self.SPEC)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:3:"), errors[0])
+
+    def test_header_version_passes(self):
+        text = "[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).\n"
+        self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_line_without_spec_link_is_not_checked(self):
+        text = "| did, signatures | Shipped (v1.0.0-rc1) | Base trust proof. |\n"
+        self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_spec_without_version_header_fails(self):
+        text = "[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).\n"
+        errors = validate_examples.readme_spec_version_errors(text, "# ATP\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("**Version:**", errors[0])
+
+
+class FederationClaimTest(unittest.TestCase):
+    def test_repository_readme_and_spec_pass(self):
+        for doc in ("README.md", "ATP-SPEC.md"):
+            text = (ROOT / doc).read_text(encoding="utf-8")
+            self.assertEqual(validate_examples.federation_claim_errors(text, doc), [], doc)
+
+    def test_unqualified_headline_fails_at_its_line(self):
+        text = (
+            "# ATP\n\n"
+            'ATP enables any party to answer "Should I trust this agent?" with a\n'
+            "cryptographically verifiable, auditable, and decentralized response.\n"
+        )
+        errors = validate_examples.federation_claim_errors(text, "ATP-SPEC.md")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:3:"), errors[0])
+
+    def test_qualification_elsewhere_in_the_paragraph_passes(self):
+        text = (
+            "A decentralized response comes from federation.\n"
+            "Federation is specified and not yet demonstrated.\n"
+        )
+        self.assertEqual(validate_examples.federation_claim_errors(text), [])
+
+    def test_qualification_in_another_paragraph_does_not_count(self):
+        text = "A decentralized response.\n\nFederation is not yet demonstrated.\n"
+        errors = validate_examples.federation_claim_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("README.md:1:"), errors[0])
+
+    def test_level_names_identifiers_and_code_are_not_claims(self):
+        text = (
+            "### Level 3: Decentralized Trust (federation)\n\n"
+            "| 3 | Decentralized Trust | + federation consensus. |\n\n"
+            "Agents are named by a Decentralized Identifier (DID).\n\n"
+            "- W3C DID Core: Decentralized Identifiers v1.0\n\n"
+            "```\n# decentralized\n```\n"
+        )
+        self.assertEqual(validate_examples.federation_claim_errors(text), [])
 
 
 class ReadmeDiscoveryTest(unittest.TestCase):
@@ -194,6 +276,92 @@ class ReferenceImplementationTest(unittest.TestCase):
         self.assertIn("row names a file", out.getvalue())
 
 
+class SpecClaimsTest(unittest.TestCase):
+    SPEC = (
+        "### 4.2 Trust Proof Format\n"
+        "\n"
+        "```json\n"
+        '{"did": "did:opena2a:agent:x", "transparencyLogIndex": 42}\n'
+        "```\n"
+        "\n"
+        "### 4.6 Agent Trust eXtension (ATX)\n"
+        "\n"
+        "{note}\n"
+        "\n"
+        "### 4.5 Proof Retrieval\n"
+        "\n"
+        "```\n"
+        "POST /api/v1/trust/verify\n"
+        "Content-Type: application/json\n"
+        "```\n"
+        "\n"
+        "## 11. IANA Considerations\n"
+        "\n"
+        "{iana}\n"
+        "\n"
+        "## 12. References\n"
+    )
+    NOTE = "Note: Section 4.2 shows `transparencyLogIndex` in its example payload."
+    IANA = "- **Media Type:** none. A trust proof is `application/json`."
+
+    def spec(self, note=NOTE, iana=IANA):
+        return self.SPEC.replace("{note}", note).replace("{iana}", iana)
+
+    def test_repository_spec_passes(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.example_claim_errors(spec), [])
+        self.assertEqual(validate_examples.media_type_errors(spec), [])
+
+    def test_repository_section_4_2_example_omits_scan_summary(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        example = validate_examples.section_example(spec, "4.2")
+        self.assertIn("transparencyLogIndex", example)
+        self.assertNotIn("scanSummary", example)
+
+    def test_member_the_example_shows_passes(self):
+        self.assertEqual(validate_examples.example_claim_errors(self.spec()), [])
+
+    def test_member_the_example_omits_fails(self):
+        note = (
+            "Note: Section 4.2 shows `scanSummary` and\n"
+            "`transparencyLogIndex` in its example payload."
+        )
+        errors = validate_examples.example_claim_errors(self.spec(note=note))
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:9: "), errors[0])
+        self.assertIn("`scanSummary`", errors[0])
+
+    def test_section_without_json_example_fails(self):
+        note = "Note: Section 4.5 shows `trustLevel` in its example."
+        errors = validate_examples.example_claim_errors(self.spec(note=note))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Section 4.5 has no JSON object example", errors[0])
+
+    def test_media_type_the_spec_carries_passes(self):
+        self.assertEqual(validate_examples.media_type_errors(self.spec()), [])
+
+    def test_media_type_nothing_carries_fails(self):
+        iana = "- **Media Type:** `application/atp+json` — ATP trust proof format"
+        errors = validate_examples.media_type_errors(self.spec(iana=iana))
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:20 "), errors[0])
+        self.assertIn("application/atp+json", errors[0])
+
+    def test_missing_iana_section_fails(self):
+        errors = validate_examples.media_type_errors("## 12. References\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("not found", errors[0])
+
+    def test_main_fails_on_claim_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "media_type_errors", return_value=["type unused"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("claims FAIL", out.getvalue())
+        self.assertIn("type unused", out.getvalue())
+
+
 class RevocationIndexTest(unittest.TestCase):
     def schema(self):
         path = ROOT / "schemas" / "revocation-list-v1.schema.json"
@@ -266,13 +434,166 @@ class RevocationIndexTest(unittest.TestCase):
         self.assertIn("probe refused", out.getvalue())
 
 
+# A specification with Sections 4.3 and 10.2 and a one-row threat model table;
+# the row is on line 13.
+THREAT_SPEC = (
+    "## 4. Trust Proofs\n\n"
+    "### 4.3 Signing\n\n"
+    "## 10. Security Considerations\n\n"
+    "### 10.1 Threat Model\n\n"
+    "ATP assumes the following threats.\n\n"
+    "| Threat | Defense | Conformance Level |\n"
+    "|--------|---------|-------------------|\n"
+    "{row}\n\n"
+    "### 10.2 Trust Proof Validity\n"
+)
+ISSUE_ROW = "| Signing key compromise | Multi-key threshold signing | Level 1+ |"
+
+
+class ThreatModelTest(unittest.TestCase):
+    def errors(self, row, after=""):
+        return validate_examples.threat_model_errors(THREAT_SPEC.format(row=row) + after)
+
+    def test_repository_spec_passes(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.threat_model_errors(spec), [])
+
+    def test_repository_spec_with_the_issue_row_fails(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        row = next(line for line in spec.splitlines() if line.startswith("| Signing key compromise |"))
+        errors = validate_examples.threat_model_errors(spec.replace(row, ISSUE_ROW))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'Multi-key threshold signing', cites no section", errors[0])
+
+    def test_defense_citing_no_section_fails_at_its_line(self):
+        errors = self.errors(ISSUE_ROW)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:13:"), errors[0])
+
+    def test_defense_citing_a_missing_section_fails(self):
+        errors = self.errors("| Signing key compromise | Threshold signing (Section 4.7) | Level 1+ |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("cites Section 4.7, which is not a heading", errors[0])
+
+    def test_defense_citing_existing_sections_passes(self):
+        row = "| Signing key compromise | Revocation (Section 4.3) and validity (Section 10.2) | Level 1+ |"
+        self.assertEqual(self.errors(row), [])
+
+    def test_heading_inside_a_code_block_is_not_a_section(self):
+        row = "| Signing key compromise | Threshold signing (Section 4.7) | Level 1+ |"
+        errors = self.errors(row, after="\n```markdown\n### 4.7 Threshold Signing\n```\n")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("cites Section 4.7", errors[0])
+
+    def test_section_without_a_table_fails(self):
+        text = "### 10.1 Threat Model\n\nNo table.\n\n### 10.2 Trust Proof Validity\n\n| a | b |\n"
+        errors = validate_examples.threat_model_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no threat rows", errors[0])
+
+    def test_main_fails_on_threat_model_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "threat_model_errors", return_value=["row cites no section"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("threats FAIL", out.getvalue())
+        self.assertIn("row cites no section", out.getvalue())
+
+
+# A Section 4.3 with a table of served timestamps; {row} is on line 6.
+SIGNING_SPEC = (
+    "### 4.3 Signing\n\n"
+    "| Served | In the canonical string |\n"
+    "|---|---|\n"
+    "| `2026-05-23T12:00:00Z` | `2026-05-23T12:00:00Z` |\n"
+    "{row}\n\n"
+    "### 4.4 Verification\n"
+)
+# The issuedAt a live proof was served with: nanoseconds, signed in whole seconds.
+LIVE_ISSUED_AT = "2026-10-12T02:57:21.581346834Z"
+
+
+class SignedTimestampTest(unittest.TestCase):
+    def errors(self, row):
+        return validate_examples.signed_timestamp_errors(SIGNING_SPEC.format(row=row))
+
+    def test_repository_spec_passes(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.assertEqual(validate_examples.signed_timestamp_errors(spec), [])
+
+    def test_live_proof_timestamp_is_signed_in_whole_seconds(self):
+        self.assertEqual(validate_examples.signed_time(LIVE_ISSUED_AT), "2026-10-12T02:57:21Z")
+
+    def test_fractional_seconds_are_dropped_not_rounded(self):
+        self.assertEqual(validate_examples.signed_time("2026-10-12T02:57:21.999Z"), "2026-10-12T02:57:21Z")
+
+    def test_offset_is_converted_to_utc(self):
+        self.assertEqual(
+            validate_examples.signed_time("2026-10-11T20:57:21.5-06:00"), "2026-10-12T02:57:21Z"
+        )
+
+    def test_signed_form_is_unchanged(self):
+        self.assertEqual(validate_examples.signed_time("2026-05-23T12:00:00Z"), "2026-05-23T12:00:00Z")
+
+    def test_timestamp_that_is_not_rfc3339_raises(self):
+        for value in ("2026-10-12 02:57:21Z", "2026-10-12T02:57:21", "2026-13-12T02:57:21Z"):
+            with self.subTest(value), self.assertRaises(ValueError):
+                validate_examples.signed_time(value)
+
+    def test_table_with_a_fractional_row_passes(self):
+        self.assertEqual(self.errors(f"| `{LIVE_ISSUED_AT}` | `2026-10-12T02:57:21Z` |"), [])
+
+    def test_row_signing_the_served_bytes_fails_at_its_line(self):
+        errors = self.errors(f"| `{LIVE_ISSUED_AT}` | `{LIVE_ISSUED_AT}` |")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:6:"), errors[0])
+        self.assertIn("is signed as '2026-10-12T02:57:21Z'", errors[0])
+
+    def test_row_rounding_the_seconds_fails(self):
+        errors = self.errors("| `2026-10-12T02:57:21.999Z` | `2026-10-12T02:57:22Z` |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("is signed as '2026-10-12T02:57:21Z'", errors[0])
+
+    def test_row_keeping_the_offset_fails(self):
+        errors = self.errors("| `2026-10-11T20:57:21.5-06:00` | `2026-10-11T20:57:21-06:00` |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("is signed as '2026-10-12T02:57:21Z'", errors[0])
+
+    def test_row_serving_no_timestamp_fails(self):
+        errors = self.errors("| `2026-10-12 02:57:21.5Z` | `2026-10-12T02:57:21Z` |")
+        self.assertEqual(len(errors), 2)
+        self.assertIn("is not an RFC 3339 timestamp", errors[0])
+        self.assertIn("fractional seconds", errors[1])
+
+    def test_table_without_a_fractional_row_fails(self):
+        errors = self.errors("| `2026-05-24T06:00:00Z` | `2026-05-24T06:00:00Z` |")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no row shows a served timestamp with fractional seconds", errors[0])
+
+    def test_section_without_a_table_fails(self):
+        text = "### 4.3 Signing\n\nNo table.\n\n### 4.4 Verification\n\n| a | b |\n|---|---|\n| c | d |\n"
+        errors = validate_examples.signed_timestamp_errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no timestamp rows", errors[0])
+
+    def test_main_fails_on_signed_timestamp_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "signed_timestamp_errors", return_value=["row signs the served bytes"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("timestamp FAIL", out.getvalue())
+        self.assertIn("row signs the served bytes", out.getvalue())
+
+
 CONFORMANCE = ROOT / "conformance"
 HAS_JQ = shutil.which("jq") is not None
 HAS_SCRIPT_TOOLS = HAS_JQ and all(shutil.which(tool) for tool in ("bash", "curl"))
 LEVEL1 = [
     "Discovery endpoint returns JSON",
     "Discovery has authorityDid, version, endpoints",
-    "Conformance level >= 1",
+    "Conformance level is 1-3",
     "DID resolution returns document",
     "DID Document has @context",
     "DID Document has verificationMethod",
@@ -304,6 +625,10 @@ def put(**members):
 
 def first(member, edit):
     return lambda body: edit(body[member][0])
+
+
+def inside(member, edit):
+    return lambda body: edit(body[member])
 
 
 def at_offset(hours_from_now, utc_offset_hours):
@@ -378,14 +703,33 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no version", [T1[2]], {"discovery": pop("version")}),
             ("version 2.0", [T1[2]], {"discovery": put(version="2.0")}),
             ("empty endpoints", [T1[2]], {"discovery": put(endpoints={})}),
+            ("empty endpoint string", [T1[2]],
+             {"discovery": inside("endpoints", put(trustProof=""))}),
             ("no conformanceLevel", [T1[3]], {"discovery": pop("conformanceLevel")}),
             ("string conformanceLevel", [T1[3]], {"discovery": put(conformanceLevel="3")}),
+            ("conformanceLevel 0", [T1[3]], {"discovery": put(conformanceLevel=0)}),
+            ("conformanceLevel 4", [T1[3]], {"discovery": put(conformanceLevel=4)}),
         ])
+
+    def test_trust_proof_endpoint_must_be_a_path(self):
+        other = fixture_authority.serve()
+        self.addCleanup(other.server_close)
+        self.addCleanup(other.shutdown)
+        userinfo = "@" + other.url.split("//", 1)[1] + "/api/v1/trust/proof"
+        run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=userinfo)))
+        self.assertIn("(endpoints.trustProof does not start with /)", run.stdout)
+        self.assertEqual(other.requests, [])
 
     def test_did_document_probes(self):
         self.probes([
             ("no @context", [T1[5]], {"did": pop("@context")}),
+            ("false @context", [T1[5]], {"did": put(**{"@context": False})}),
+            ("empty @context array", [T1[5]], {"did": put(**{"@context": []})}),
+            ("empty @context string", [T1[5]], {"did": put(**{"@context": ""})}),
+            ("object @context", [T1[5]], {"did": put(**{"@context": {}})}),
+            ("string @context", [], {"did": put(**{"@context": "https://www.w3.org/ns/did/v1"})}),
             ("string verificationMethod", [T1[6]], {"did": put(verificationMethod="key-1")}),
+            ("empty verificationMethod", [T1[6]], {"did": put(verificationMethod=[])}),
             ("not found", [T1[4], T1[5], T1[6]], {"did": 404}),
         ])
 
@@ -396,12 +740,24 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no verdict", [T1[8]], {"proof": pop("verdict")}),
             ("unknown verdict", [T1[8]], {"proof": put(verdict="trusted")}),
             ("no issuedAt", [T1[8]], {"proof": pop("issuedAt")}),
+            ("no issuerDid", [T1[8]], {"proof": pop("issuerDid")}),
+            ("issuedAt offset +99:99", [T1[8]],
+             {"proof": put(issuedAt="2026-01-01T00:00:00+99:99")}),
+            ("issuedAt offset +24:00", [T1[8]],
+             {"proof": put(issuedAt="2026-01-01T00:00:00+24:00")}),
+            ("issuedAt followed by a newline", [T1[8]],
+             {"proof": put(issuedAt="2026-01-01T00:00:00Z\n")}),
             ("no trustLevel", [T1[8], T1[11]], {"proof": pop("trustLevel")}),
+            ("trustLevel 4.0", [], {"proof": put(trustLevel=4.0)}),
             ("fractional trustLevel", [T1[8], T1[11]], {"proof": put(trustLevel=2.5)}),
             ("string trustLevel", [T1[8], T1[11]], {"proof": put(trustLevel="3")}),
             ("trustLevel 5", [T1[8], T1[11]], {"proof": put(trustLevel=5)}),
             ("string trustScore", [T1[8], T1[12]], {"proof": put(trustScore="0.5")}),
             ("expiresAt never", [T1[8], T1[10]], {"proof": put(expiresAt="never")}),
+            ("expiresAt February 30", [T1[8], T1[10]],
+             {"proof": put(expiresAt="2099-02-30T00:00:00Z")}),
+            ("unexpired expiresAt followed by a newline", [T1[8], T1[10]],
+             {"proof": put(expiresAt=at_offset(1, 0) + "\n")}),
             ("expired, written at +05:00", [T1[10]], {"proof": put(expiresAt=at_offset(-1, 5))}),
             ("unexpired, written at -05:00", [], {"proof": put(expiresAt=at_offset(1, -5))}),
             ("string signatures", [T1[9]], {"proof": put(signatures="FAKE")}),
@@ -423,6 +779,7 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no entries", [T2[2]], {"log": '{"entries": []}'}),
             ("string entry", [T2[2]], {"log": '{"entries": ["FAKE"]}'}),
             ("entry without timestamp", [T2[2]], {"log": first("entries", pop("timestamp"))}),
+            ("entry without entryType", [T2[2]], {"log": first("entries", pop("entryType"))}),
             ("negative logIndex", [T2[2]], {"log": first("entries", put(logIndex=-1))}),
         ])
 
@@ -438,10 +795,61 @@ class ConformanceScriptTest(unittest.TestCase):
              {"revocations": first("revocations", put(reason="key leaked"))}),
             ("malformed revokedAt", [T2[3]],
              {"revocations": first("revocations", put(revokedAt="2026-03-22 15:00"))}),
+            ("extra top-level member", [T2[3]], {"revocations": put(unexpected=1)}),
         ])
 
+    def test_body_with_two_json_values_fails(self):
+        body = json.dumps(self.authority.examples["revocations"])
+        run = self.probe([T2[3]], revocations=body + "\n" + body)
+        self.assertIn("(more than one JSON value)", run.stdout)
 
-RFC3339 = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$")
+
+@unittest.skipUnless(all(shutil.which(tool) for tool in ("bash", "curl", "dirname")),
+                     "the conformance scripts need bash, curl and dirname")
+class SetupErrorTest(unittest.TestCase):
+    """A missing tool or schema stops both scripts with exit code 69, which no
+    count of failed tests reaches, before any test runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def assert_setup_error(self, conformance, path, message):
+        for script in ("level1.sh", "level2.sh"):
+            with self.subTest(script):
+                run = subprocess.run(
+                    [shutil.which("bash"), str(conformance / script), "http://127.0.0.1:9"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={"PATH": path},
+                )
+                self.assertEqual(run.returncode, 69, run.stderr)
+                self.assertIn(message, run.stderr)
+                self.assertEqual(run.stdout, "")
+
+    def test_missing_jq_exits_69(self):
+        bin_dir = self.dir / "bin"
+        bin_dir.mkdir()
+        for tool in ("bash", "curl", "dirname"):
+            (bin_dir / tool).symlink_to(shutil.which(tool))
+        self.assert_setup_error(CONFORMANCE, str(bin_dir), "error: jq is required")
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_missing_schema_exits_69(self):
+        copied = self.dir / "conformance"
+        shutil.copytree(CONFORMANCE, copied)
+        self.assert_setup_error(copied, os.environ.get("PATH", ""), "schema.json not found")
+
+
+# Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
+# offset bounded by number), so the agreement tests can catch a mistake in either.
+RFC3339 = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))"
+)
 DATE_TIME = FormatChecker(formats=())
 
 
@@ -449,7 +857,11 @@ DATE_TIME = FormatChecker(formats=())
 def is_date_time(value):
     if not isinstance(value, str):
         return True
-    if not RFC3339.match(value):
+    match = RFC3339.fullmatch(value)
+    if not match:
+        return False
+    offset_hours, offset_minutes = match.group(2, 3)
+    if offset_hours is not None and (int(offset_hours) > 23 or int(offset_minutes) > 59):
         return False
     try:
         datetime.fromisoformat(value[:10] + "T" + value[11:19])
@@ -461,15 +873,31 @@ def is_date_time(value):
 @unittest.skipUnless(HAS_JQ, "checks.jq needs jq")
 class SchemaCheckTest(unittest.TestCase):
     """checks.jq's schema_ok, which the scripts validate bodies with, agrees
-    with a JSON Schema validator on the spec examples and on every edit that
-    removes or replaces one of their members."""
+    with a JSON Schema validator on the spec examples, on each edit that
+    removes one of their members or replaces it with one of REPLACEMENTS, and
+    on each example with one extra top-level member."""
 
     EXAMPLES = {
         "### 7.1 Well-Known Endpoint": "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
-    REPLACEMENTS = (None, True, -1, 1.5, "x", [], {})
+    REPLACEMENTS = (
+        None, True, -1, 1.5, "x", [], {},
+        "2026-01-01T00:00:00+24:00", "2026-01-01T00:00:00Z\n", "2099-02-30T00:00:00Z",
+    )
+    TIMESTAMPS = {
+        "2026-01-01T00:00:00Z": True,
+        "2026-01-01t00:00:00.5z": True,
+        "2026-01-01T00:00:00+23:59": True,
+        "2026-01-01T00:00:00-00:00": True,
+        "2026-01-01T00:00:00+99:99": False,
+        "2026-01-01T00:00:00+24:00": False,
+        "2026-01-01T00:00:00-00:60": False,
+        "2026-01-01T00:00:00Z\n": False,
+        "\n2026-01-01T00:00:00Z": False,
+        "2099-02-30T00:00:00Z": False,
+    }
     SUPPORTED = {
         "type", "const", "enum", "anyOf", "pattern", "minLength", "format", "minimum",
         "maximum", "minItems", "items", "minProperties", "required", "properties",
@@ -515,6 +943,20 @@ class SchemaCheckTest(unittest.TestCase):
         for key in ("items", "additionalProperties"):
             if isinstance(schema.get(key), dict):
                 yield from self.keywords(schema[key])
+
+    def test_rfc3339_bounds_the_offset_and_rejects_a_trailing_newline(self):
+        timestamps = list(self.TIMESTAMPS)
+        run = subprocess.run(
+            ["jq", "-c", "-L", str(CONFORMANCE), 'include "checks"; map(rfc3339 != null)'],
+            input=json.dumps(timestamps),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        expected = list(self.TIMESTAMPS.values())
+        self.assertEqual(dict(zip(timestamps, json.loads(run.stdout))), self.TIMESTAMPS)
+        self.assertEqual([is_date_time(value) for value in timestamps], expected)
 
     def test_schemas_use_only_keywords_checks_jq_implements(self):
         for name in self.EXAMPLES.values():
@@ -627,6 +1069,129 @@ class GenRegistriesTest(unittest.TestCase):
         self.assertIn("registries/trust-levels.json", err)
         self.assertIn("registries/revocation-reasons.json", err)
         self.assertNotIn("transparency-entry-types", err)
+
+
+class GuideBlocksTest(unittest.TestCase):
+    """check_guides.py runs the blocks of the integration guides and of
+    ATP-SPEC.md Appendix B.1 and B.2 against recorded responses; each test
+    below puts back one defect the examples used to carry, or could, and
+    expects the check to fail on it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.texts = check_guides.guide_texts()
+
+    def edited(self, guide, old, new):
+        self.assertIn(old, self.texts[guide])
+        return {**self.texts, guide: self.texts[guide].replace(old, new, 1)}
+
+    def failing_cases(self, texts, block):
+        errors = check_guides.run(texts, select=lambda case: case.block == block)
+        return [
+            case.name
+            for case in check_guides.CASES
+            if any(error.startswith(case.name + ":") for error in errors)
+        ]
+
+    def test_repository_guides_pass(self):
+        self.assertEqual(check_guides.run(), [])
+
+    def test_gate_reading_the_top_level_fails(self):
+        texts = self.edited("ci", "jq -ce '.proof | objects'", "jq -ce '. | objects'")
+        failing = self.failing_cases(texts, check_guides.GATE)
+        self.assertIn("gate: level 2 at threshold 2 passes", failing)
+
+    def test_gate_without_expiry_check_fails(self):
+        texts = self.edited("ci", "fromdateiso8601 > now", "fromdateiso8601 > 0")
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.GATE), ["gate: expired proof refuses"]
+        )
+
+    def test_gate_without_revocation_check_fails(self):
+        texts = self.edited("ci", '  true) refuse "revoked" ;;', "  true) ;;")
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.GATE), ["gate: revoked agent refuses"]
+        )
+
+    def test_batch_loop_in_a_pipeline_subshell_fails(self):
+        texts = self.edited(
+            "ci", "while read -r DID; do", "jq -r '.[]' \"$AGENTS_FILE\" | while read -r DID; do"
+        )
+        texts["ci"] = texts["ci"].replace("done < <(jq -r '.[]' \"$AGENTS_FILE\")", "done", 1)
+        failing = self.failing_cases(texts, check_guides.BATCH)
+        self.assertIn("batch: blocked and missing agents fail", failing)
+
+    def test_quick_check_reading_the_top_level_fails(self):
+        texts = self.edited("mcp", "jq '.proof | {", "jq '{")
+        errors = check_guides.run(texts, select=lambda case: case.block == check_guides.QUICK)
+        self.assertEqual(len(errors), 1)
+        self.assertIn('"trustLevel": null', errors[0])
+
+    def test_python_check_reading_the_top_level_fails(self):
+        texts = self.edited("mcp", 'proof = resp.json().get("proof") or {}', "proof = resp.json()")
+        failing = self.failing_cases(texts, check_guides.MCP_PY)
+        self.assertIn("mcp python: listed server connects", failing)
+
+    def test_a2a_following_the_cards_verify_at_fails(self):
+        texts = self.edited(
+            "a2a",
+            "        verify_url,\n        json=proof,",
+            '        atp.get("verifyAt", verify_url),\n        json=proof,',
+        )
+        failing = self.failing_cases(texts, check_guides.A2A_PY)
+        self.assertEqual(failing, ["a2a python: the card's verifyAt is not followed"])
+
+    def test_refresh_storing_the_envelope_fails(self):
+        texts = self.edited(
+            "a2a",
+            'update_agent_card_proof(resp.json()["proof"])',
+            "update_agent_card_proof(resp.json())",
+        )
+        failing = self.failing_cases(texts, check_guides.REFRESH)
+        self.assertEqual(failing, ["a2a refresh: the stored proof is what verify accepts"])
+
+    def test_spec_example_importing_an_atp_library_fails(self):
+        texts = self.edited("spec", "import requests\n", "import requests\nimport atp\n")
+        failing = self.failing_cases(texts, check_guides.SPEC_PEER)
+        self.assertEqual(
+            failing,
+            [case.name for case in check_guides.CASES if case.block == check_guides.SPEC_PEER],
+        )
+
+    def test_spec_example_without_the_did_check_fails(self):
+        texts = self.edited("spec", 'proof.get("did") != did or ', "")
+        failing = self.failing_cases(texts, check_guides.SPEC_PEER)
+        self.assertEqual(failing, ["spec b.1: proof about another DID is rejected"])
+
+    def test_spec_example_reading_the_envelope_fails(self):
+        texts = self.edited("spec", "(await resp.json()).proof ?? {}", "await resp.json()")
+        failing = self.failing_cases(texts, check_guides.SPEC_MCP)
+        self.assertIn("spec b.2: listed server connects", failing)
+
+    def test_spec_examples_are_appendix_b1_and_b2(self):
+        examples = self.texts["spec"]
+        self.assertTrue(examples.startswith("### B.1 "))
+        self.assertIn("\n### B.2 ", examples)
+        self.assertNotIn("### B.3 ", examples)
+        self.assertEqual(check_guides.spec_examples("# No appendix\n"), "")
+
+    def test_block_no_case_runs_fails(self):
+        texts = {**self.texts, "ci": self.texts["ci"] + "\n## Extra\n\n```bash\necho extra\n```\n"}
+        errors = check_guides.unchecked_blocks(texts)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'## Extra' is run by no case", errors[0])
+
+    def test_stub_refuses_hosts_other_than_the_authority_and_served_cards(self):
+        proof_url = "https://api.oa2a.org/api/v1/trust/proof?did=x"
+        self.assertIsNone(check_guides.answer({}, "GET", "https://verifier.example.net/v", ""))
+        self.assertIsNone(check_guides.answer({"unreachable": True}, "GET", proof_url, ""))
+
+    def test_stub_answers_a_since_timestamp_on_advisories_with_the_recorded_400(self):
+        status, body = check_guides.answer(
+            {}, "GET", "https://api.oa2a.org/api/v1/trust/advisories?since=2026-10-11T00:00:00Z", ""
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("YYYY-MM-DD", body)
 
 
 class TestSuiteMarkerTest(unittest.TestCase):

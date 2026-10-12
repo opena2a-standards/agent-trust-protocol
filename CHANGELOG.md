@@ -67,7 +67,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `schemas/discovery-v1.schema.json`: machine-readable JSON Schemas
   (draft 2020-12) for the three fixture-backed ATP wire structures, derived
   from §4.2/§5.6/§7.1 with the atp-conformance fixtures as ground truth (all
-  seven fixture payloads validate).
+  eight fixture payloads validate: six trust proofs, `discovery-valid` and
+  `transparency-log-sth`).
 - `scripts/validate_examples.py` + `schemas/examples-map.json` + CI workflow:
   schemas metaschema-checked and the §4.2/§5.6/§7.1 examples validated on
   every push/PR.
@@ -91,6 +92,11 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Abstract and README headline: the trust response is cryptographically verifiable and
+  auditable; a decentralized response (Section 6 federation, conformance Level 3) is stated
+  as specified and not yet demonstrated, since no second authority co-signs proofs and no
+  conformance fixture covers a co-signed proof. `scripts/validate_examples.py` fails a
+  README.md or ATP-SPEC.md paragraph that calls ATP decentralized without saying so.
 - Section 8.1: `transparencyLogIndex` is OPTIONAL per revocation entry; it was REQUIRED, so
   an authority revoking an agent it had logged nothing for (registered and revoked before
   its first proof) had to fabricate an index or omit the revocation, and omitting it kept
@@ -131,10 +137,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   private-use grammar; `registries/revocation-reasons.json` is generated from the table, and
   `scripts/validate_examples.py` fails when the schema's codes and the table differ or the
   schema accepts free text. Section 2.1 lists reason codes as not yet fixture-covered.
-- §4.2/§5.6/§7.1 example blocks now carry conformance-fixture bytes (artifacts
+- §4.2/§5.6 example blocks now carry conformance-fixture bytes (artifacts
   that verify against the reference verifiers) instead of placeholders; the
   Proposed v1.1 fields (`slsaLevel`, `scanSummary`) moved out of the §4.2
-  example, which now shows exactly the rc1 canonical-form-covered shape.
+  example, which now shows the seven rc1 canonical-form fields, `signatures`
+  and `transparencyLogIndex`. The §7.1 example is illustrative: it differs
+  from the `discovery-valid` fixture in `conformanceLevel` (3 against 2),
+  `capabilities` (6 against 4), the `federation` endpoint and `federationPeers`
+  (the fixture has neither) and its keys (1 against 2), and §7.1 says so.
 - §3.1/§3.4 examples and §11: `a2a_agent` example tokens replaced with the
   registered `agent` type (`a2a_agent` documented as a deprecated legacy
   alias); the type list now defers to the did-method-opena2a registry; the two
@@ -142,6 +152,39 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
+  (the PyPI package of that name is unrelated), so neither ran. They now call the Section
+  4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,
+  take it from under `proof` in the response, refuse a proof about another DID, an expired
+  proof, one the verify endpoint does not accept, and one without an integer `trustLevel`
+  0-4. The appendix states that ATP defines no client library and that an offline verifier
+  performs the Section 4.4 steps itself. `scripts/check_guides.py` runs B.1 and B.2 against
+  the recorded responses (B.3 runs the opena2a CLI and is not run).
+- Integration guides (`examples/`): the samples read the trust level from the top level of
+  the `GET /api/v1/trust/proof` response, where it is absent; the fields sit under `proof`.
+  For a server at level 2 under threshold 3, the CI gate printed `Trust level: null`, then
+  `Trust gate passed.`, and exited 0. Every sample now reads `proof` and refuses an agent
+  whose level is not an integer 0-4. The CI guide's checks live in one gate script,
+  `atp-trust-gate.sh`, that every workflow runs: it also refuses an expired proof and an
+  agent on the Section 8.1 revocation list, and exits with the documented codes (0 passed,
+  1 refused, 2 authority unreachable; no script returned 2 before). The batch script keeps
+  its failure flag out of a pipeline subshell, matches answers by DID and exits 2 when the
+  authority rejects the request. The trust monitor sends `since` as a date, the format the
+  advisories endpoint takes. The A2A samples read the level from the signed proof, not the
+  card's unsigned copy, and verify against the authority the verifier is configured with,
+  not the card's own `verifyAt`. The proof refresh helper stores the proof, not the
+  response envelope that verify rejects. `scripts/check_guides.py` runs every guide block
+  against responses recorded from the reference authority (`scripts/guide_responses.json`)
+  and fails on a block that no case runs; `scripts/test_checks.py` covers it.
+- Section 4.3: the canonical string named `{issuedAt RFC3339}` and `{expiresAt RFC3339}`
+  without saying which RFC 3339 form, so a verifier that built it from a proof served with
+  fractional seconds (`2026-10-12T02:57:21.581346834Z`) rejected a valid proof. The section
+  now states the form: UTC, whole seconds with fractional seconds dropped (not rounded), `Z`
+  suffix. An authority MUST serve both members in the form it signed, and a verifier MUST
+  reduce each served timestamp to that form before it builds the string. A table gives the
+  signed form of four served timestamps, and `scripts/validate_examples.py` fails when a row
+  disagrees with the rule or no row serves fractional seconds. Section 2.1 lists a proof
+  served with fractional-second timestamps as not yet covered by fixtures.
 - Section 4.2: the example trust proof declared a validity window of more than 26,000 days
   (`expiresAt` 2099-12-31), which Section 4.4 step 5 rejects under the Section 10.2 24-hour
   maximum. It now carries the current `trust-proof-baseline` fixture bytes: issued
@@ -225,6 +268,47 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   request received on 2026-10-11 (the transparency-log endpoints answer 404 and federation
   sync 401). `scripts/validate_examples.py` fails on a link to a repository listed as not
   public and on an Appendix A row that names no `/api/` or `/.well-known/` endpoint.
+- Statements that did not match the files they describe. The Section 4.6 note said the
+  Section 4.2 example shows `scanSummary`; it shows `transparencyLogIndex` only. Section 7.1
+  gave the `discovery-valid` fixture's ML-DSA-65 key as "~2.6 KB hex" and implied it was the
+  example's only difference; the key is 3,904 hex characters (1,952 bytes) and Section 7.1
+  now lists every difference. Section 8.1.1 said its codes are the atx-spec Section 3.3
+  triggers; that section names the triggers in prose, so Section 8.1.1 now maps each code to
+  its trigger and says the shared bytes come from the `atx_revoked` entry's `reason` being a
+  Section 8.1.1 code. Section 11 defined `application/atp+json`, which nothing serves or
+  sends; it now registers no media type and names `application/json`. Two entries above
+  are corrected: the §7.1 example is not fixture bytes, and eight fixture payloads validate,
+  not seven. `scripts/validate_examples.py` fails when a sentence says a section's example
+  shows a member it lacks, or Section 11 names a media type no `Content-Type` carries.
+- README: the Specification section named ATP-SPEC.md v1.0.0-rc1; it now names the header
+  version, 1.1.0-draft, and `scripts/validate_examples.py` fails when a README line that
+  links ATP-SPEC.md names any other version. The reference implementation's sample trust
+  proof was an April 2026 response; it is now the October 2026 one, which adds a
+  `proof.signature` member (the Ed25519 value repeated) and labels the second signature
+  `{"keyVersion":1,"algorithm":"ML-DSA-65"}`. The README signing check no longer reads the
+  lines of a JSON code block as sentences, so the sample's algorithm name is not reported as
+  ML-DSA-65 without hybrid mode; lines of other code blocks are still checked.
+- Section 10.1: the threat model listed "multi-key threshold signing" as the Level 1 defense
+  against signing key compromise, and the specification defines no threshold signing. The
+  row now names the defenses it does define: key revocation (Section 8.2, enforced at
+  Section 4.4 step 3) and the 24-hour proof validity maximum (Section 10.2). Every other
+  defense in the table now cites its section too. `scripts/validate_examples.py` fails when a
+  defense cites no section or cites one that is not a heading of the specification.
+- Conformance scripts, follow-up: T1.5 requires `@context` to be a non-empty string or array
+  (`false` passed). An RFC 3339 timestamp needs a UTC offset from 00:00 to 23:59 and nothing
+  after it, so `+99:99` and a trailing newline no longer pass T1.8, T1.10, T2.2 and T2.3.
+  T1.7 fails without sending a request when `endpoints.trustProof` is a non-empty string that
+  does not start with `/` (the script reads it with its NUL characters and trailing newlines
+  removed); a value such as `@other.example/api/v1/trust/proof` sent it to another host. T1.3 is
+  labelled "Conformance level is 1-3". A missing `curl`, `jq` or schema file exits 69, not 1,
+  which read as one failed test. T1.11 and the `trustLevel` description in
+  `schemas/trust-proof-v1.schema.json` state that `4.0` is the integer 4, which the Section
+  4.3 canonical string writes as `4`. `scripts/test_checks.py` adds probes for `issuerDid`,
+  `entryType`, an empty `verificationMethod`, an extra top-level revocations member, an
+  `expiresAt` of February 30, an empty endpoint string and a body holding two JSON values,
+  and its date-time check, written apart from `checks.jq`, now also rejects an out-of-range
+  UTC offset and a trailing newline, as `checks.jq` does. The conformance README describes the
+  schema agreement edits as they are.
 
 ## [1.0.0-rc1] - 2026-04-28
 

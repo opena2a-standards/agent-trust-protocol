@@ -12,6 +12,10 @@ MCP (Model Context Protocol) servers expose tools, resources, and prompts to AI 
 3. If trust level meets the threshold, client connects to the server
 4. Client caches the proof and re-checks periodically
 
+The proof endpoint answers an envelope, `{"proof": {...}, "algorithm": ..., "publicKey": ...}`. The trust fields (`trustLevel`, `verdict`, `trustScore`, `expiresAt`) sit under `proof`, and the samples below that fetch a proof read them there. A sample that cannot read an integer trust level from 0 to 4 refuses the connection.
+
+The Python samples need Python 3.11 or later: `datetime.fromisoformat` reads the authority's nanosecond timestamps from 3.11 on.
+
 ---
 
 ## Quick Check: cURL
@@ -19,17 +23,17 @@ MCP (Model Context Protocol) servers expose tools, resources, and prompts to AI 
 ```bash
 # Check trust before connecting to an MCP server
 curl -s "https://api.oa2a.org/api/v1/trust/proof?did=did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem" \
-  | jq '{trustLevel: .trustLevel, verdict: .verdict, score: .trustScore, expires: .expiresAt}'
+  | jq '.proof | {trustLevel: .trustLevel, verdict: .verdict, score: .trustScore, expires: .expiresAt}'
 ```
 
-Example response:
+Example response (the reference authority's answer for this server, recorded 2026-10-12 UTC):
 
 ```json
 {
-  "trustLevel": 3,
-  "verdict": "passed",
-  "score": 0.85,
-  "expires": "2026-03-23T14:00:00Z"
+  "trustLevel": 2,
+  "verdict": "listed",
+  "score": 0.7432,
+  "expires": "2026-10-13T02:57:21.581346834Z"
 }
 ```
 
@@ -38,6 +42,8 @@ Example response:
 ## Python: Trust-Gated MCP Connection
 
 ```python
+from datetime import datetime, timezone
+
 import requests
 
 
@@ -50,7 +56,7 @@ def check_mcp_trust(server_name: str, min_level: int = 2) -> dict:
         min_level: Minimum trust level to allow connection (default: 2)
 
     Returns:
-        {"allowed": True/False, "trustLevel": int, "reason": str}
+        {"allowed": True/False, "trustLevel": int or None, "reason": str}
     """
     did = f"did:opena2a:mcp_server:{server_name}"
 
@@ -61,21 +67,31 @@ def check_mcp_trust(server_name: str, min_level: int = 2) -> dict:
     )
 
     if resp.status_code == 404:
-        return {"allowed": False, "trustLevel": -1, "reason": "Server not found in registry"}
+        return {"allowed": False, "trustLevel": None, "reason": "Server not found in registry"}
 
     resp.raise_for_status()
-    proof = resp.json()
+    # The trust fields sit under "proof", not at the top level of the response
+    proof = resp.json().get("proof") or {}
+
+    # A level that is not an integer 0-4 refuses the connection
+    trust_level = proof.get("trustLevel")
+    if type(trust_level) is not int or not 0 <= trust_level <= 4:
+        return {"allowed": False, "trustLevel": None, "reason": "No readable trust level in the proof"}
 
     # Blocked servers: always refuse
-    if proof.get("trustLevel", 0) == 0:
+    if trust_level == 0:
         return {
             "allowed": False,
             "trustLevel": 0,
             "reason": f"BLOCKED: {proof.get('verdict', 'unknown')}",
         }
 
+    # Expired proofs: refuse, and fetch a fresh proof before trying again
+    expires = datetime.fromisoformat(proof["expiresAt"].replace("Z", "+00:00"))
+    if expires <= datetime.now(timezone.utc):
+        return {"allowed": False, "trustLevel": trust_level, "reason": "Trust proof expired"}
+
     # Check minimum trust level
-    trust_level = proof.get("trustLevel", 0)
     if trust_level < min_level:
         return {
             "allowed": False,
@@ -104,7 +120,7 @@ else:
 ```typescript
 interface McpTrustResult {
   allowed: boolean;
-  trustLevel: number;
+  trustLevel: number | null;
   reason: string;
 }
 
@@ -118,31 +134,49 @@ async function checkMcpTrust(
   const resp = await fetch(url);
 
   if (resp.status === 404) {
-    return { allowed: false, trustLevel: -1, reason: "Server not found in registry" };
+    return { allowed: false, trustLevel: null, reason: "Server not found in registry" };
+  }
+  if (!resp.ok) {
+    throw new Error(`ATP authority answered HTTP ${resp.status}`);
   }
 
-  const proof = await resp.json();
+  // The trust fields sit under "proof", not at the top level of the response
+  const { proof } = await resp.json();
+  const level = proof?.trustLevel;
 
-  if (proof.trustLevel === 0) {
+  // A level that is not an integer 0-4 refuses the connection
+  if (!Number.isInteger(level) || level < 0 || level > 4) {
+    return { allowed: false, trustLevel: null, reason: "No readable trust level in the proof" };
+  }
+
+  if (level === 0) {
     return { allowed: false, trustLevel: 0, reason: `BLOCKED: ${proof.verdict}` };
   }
 
-  if (proof.trustLevel < minLevel) {
+  // Date.parse returns NaN for a missing or unreadable expiresAt, which also refuses
+  if (!(Date.parse(proof.expiresAt) > Date.now())) {
+    return { allowed: false, trustLevel: level, reason: "Trust proof expired" };
+  }
+
+  if (level < minLevel) {
     return {
       allowed: false,
-      trustLevel: proof.trustLevel,
-      reason: `Trust level ${proof.trustLevel} below minimum ${minLevel}`,
+      trustLevel: level,
+      reason: `Trust level ${level} below minimum ${minLevel}`,
     };
   }
 
-  return { allowed: true, trustLevel: proof.trustLevel, reason: "ok" };
+  return { allowed: true, trustLevel: level, reason: "ok" };
 }
 
 // --- Usage ---
 
 const result = await checkMcpTrust("@modelcontextprotocol/server-filesystem");
 if (result.allowed) {
+  console.log(`Safe to connect (trust level ${result.trustLevel})`);
   // Connect to MCP server
+} else {
+  console.log(`Connection refused: ${result.reason}`);
 }
 ```
 
@@ -150,7 +184,7 @@ if (result.allowed) {
 
 ## Batch Check: Multiple MCP Servers
 
-When an MCP client config references multiple servers, use the batch endpoint to verify them all in one request:
+When an MCP client config references multiple servers, use the batch endpoint (ATP-SPEC Section 7.2) to verify them all in one request:
 
 ```python
 import requests
@@ -160,25 +194,34 @@ def check_mcp_servers_batch(server_names: list[str], min_level: int = 2) -> dict
     """
     Batch-verify multiple MCP servers against ATP.
 
-    Returns a dict mapping server name to trust result.
+    Returns a dict mapping server name to trust result. A server the answer
+    leaves out, or answers without an integer level 0-4, is not allowed.
     """
-    agents = [
-        {"did": f"did:opena2a:mcp_server:{name}"} for name in server_names
-    ]
+    dids = {name: f"did:opena2a:mcp_server:{name}" for name in server_names}
 
     resp = requests.post(
         "https://api.oa2a.org/api/v1/trust/batch",
-        json={"agents": agents},
+        json={"agents": [{"did": did} for did in dids.values()]},
         timeout=15,
-    ).json()
+    )
+    resp.raise_for_status()
+
+    # Match answers by DID, not by position
+    answers = {answer.get("did"): answer for answer in resp.json().get("results", [])}
 
     results = {}
-    for name, answer in zip(server_names, resp.get("results", [])):
-        trust_level = answer.get("trustLevel", -1)
+    for name, did in dids.items():
+        answer = answers.get(did, {})
+        trust_level = answer.get("trustLevel")
+        readable = type(trust_level) is int and 0 <= trust_level <= 4
+        verdict = answer.get("verdict", "unknown")
         results[name] = {
-            "allowed": trust_level >= min_level and trust_level != 0,
-            "trustLevel": trust_level,
-            "verdict": answer.get("verdict", "unknown"),
+            "allowed": readable
+            and trust_level != 0
+            and verdict != "blocked"
+            and trust_level >= min_level,
+            "trustLevel": trust_level if readable else None,
+            "verdict": verdict,
         }
 
     return results
@@ -252,9 +295,10 @@ TOOL_TRUST_REQUIREMENTS = {
 }
 
 
-def can_use_tool(tool_name: str, server_trust_level: int) -> bool:
+def can_use_tool(tool_name: str, server_trust_level: int | None) -> bool:
     required = TOOL_TRUST_REQUIREMENTS.get(tool_name, 3)
-    return server_trust_level >= required
+    # An unread level (None) allows no tool
+    return type(server_trust_level) is int and server_trust_level >= required
 ```
 
 ---

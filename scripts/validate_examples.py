@@ -25,6 +25,15 @@ The revocation schema admits an entry without `transparencyLogIndex` (Section
 8.1: an identity revoked before the authority logged anything for it), refuses
 an index that is not an integer >= 0, and requires every other entry member.
 
+Every defense in the Section 10.1 threat model table cites the section that
+defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
+cannot list a defense the specification never defines.
+
+The Section 4.3 table of served timestamps gives, for each, the form the
+canonical string carries (UTC, whole seconds with fractional seconds dropped,
+`Z` suffix), and includes a served timestamp with fractional seconds, so the
+string a verifier builds from a served proof is the one the authority signed.
+
 Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
@@ -32,12 +41,27 @@ requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
 is the second signature of the optional hybrid mode, so a README sentence that
 names ML-DSA-65 also names hybrid mode. A prose sentence may wrap across lines;
-the lines of a paragraph are joined before it is split into sentences.
+the lines of a paragraph are joined before it is split into sentences. Lines of
+a ```json block are wire data, such as a sample response's algorithm name, and
+are not sentences; lines of other code blocks are checked one by one.
+
+A README line that links ATP-SPEC.md and names a version names the version in
+the specification's `**Version:**` header.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
 link to no repository an anonymous reader cannot open, and every Appendix A row
 maps its component to a public endpoint of the reference authority (an `/api/` or
 `/.well-known/` path) instead of a source file.
+
+A sentence of ATP-SPEC.md saying "Section N shows `field` in its example" names
+only members of that section's JSON example, and every media type Section 11
+names is the Content-Type of a request or response elsewhere in the spec.
+
+Federation (Section 6) is what makes a trust response decentralized, and no
+second authority co-signs proofs yet, so a README.md or ATP-SPEC.md paragraph
+that calls ATP or its response decentralized also says federation is not yet
+demonstrated. Headings and table rows naming the Level 3 conformance level, and
+"Decentralized Identifier", are not claims.
 
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
@@ -65,7 +89,7 @@ import pathlib
 import re
 import sys
 from bisect import bisect_right
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 try:
     from jsonschema import Draft202012Validator
@@ -190,10 +214,17 @@ def revocation_index_errors(schema: dict | None = None) -> list[str]:
 
 WELL_KNOWN = re.compile(r"/\.well-known/([A-Za-z0-9._-]+)")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+SPEC_VERSION = re.compile(r"^\*\*Version:\*\*\s*(\S+)\s*$", re.MULTILINE)
+VERSION = re.compile(r"\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\b")
 # A line that starts a new Markdown block, so it never continues the paragraph
 # above it: a heading, list item, table row or block quote.
 BLOCK_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>)")
 SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+# "decentralized" as a claim about ATP; "Decentralized Identifier(s)" names DIDs.
+DECENTRALIZED = re.compile(r"\bdecentrali[sz]ed\b(?!\s+identifier)", re.IGNORECASE)
+# A heading or table row, where "Decentralized Trust" names conformance Level 3.
+LEVEL_NAME_LINE = re.compile(r"^\s*(#{1,6}\s|\|)")
+NOT_DEMONSTRATED = "not yet demonstrated"
 
 # Section 4.6: the schema table is the one home of each ATX field's status.
 SPEC_ATX_HEADING = "### 4.6 Agent Trust eXtension (ATX)"
@@ -254,8 +285,10 @@ def discovery_path_errors(text: str) -> list[str]:
 def readme_units(text: str):
     """Yield each prose paragraph, and each code line on its own, as a list of
     (line number, line). A blank line, a fence or a new block ends a
-    paragraph."""
+    paragraph. Lines of a ```json block are wire data, not sentences, and are
+    not yielded."""
     paragraph: list[tuple[int, str]] = []
+    info = None  # the open code block's info string; None outside a block
     for number, line, kind in markdown_lines(text):
         if kind == "prose" and line.strip() and not (paragraph and BLOCK_START.match(line)):
             paragraph.append((number, line))
@@ -263,7 +296,9 @@ def readme_units(text: str):
         if paragraph:
             yield paragraph
             paragraph = []
-        if kind == "code":
+        if kind == "fence":
+            info = FENCE.match(line).group(2).strip() if info is None else None
+        elif kind == "code" and info.split()[:1] != ["json"]:
             yield [(number, line)]
         elif kind == "prose" and line.strip():
             paragraph.append((number, line))
@@ -290,6 +325,17 @@ def unit_sentences(unit):
         offset += len(parts[-1]) + 1
     for begin, sentence in sentences(" ".join(parts)):
         yield unit[bisect_right(starts, begin) - 1][0], sentence
+
+
+def join_unit(unit: list[tuple[int, str]]) -> tuple[str, list[int]]:
+    """A unit's lines joined by single spaces, and the offset of each line in
+    the joined text, so a match maps back to the line it starts on."""
+    starts, parts, offset = [], [], 0
+    for _, line in unit:
+        starts.append(offset)
+        parts.append(line.strip())
+        offset += len(parts[-1]) + 1
+    return " ".join(parts), starts
 
 
 def readme_signing_errors(text: str) -> list[str]:
@@ -478,6 +524,237 @@ def reference_endpoint_errors(text: str) -> list[str]:
     return errors
 
 
+SHOWN_IN_EXAMPLE = re.compile(r"Section (\d+(?:\.\d+)+) shows (.+?) in its example")
+CODE_SPAN = re.compile(r"`([^`]+)`")
+
+
+def section_example(text: str, section: str):
+    """The first ```json block between the heading numbered `section` and the
+    next heading, parsed; None when there is no such block or it is not JSON."""
+    heading = re.compile(r"#{2,6} " + re.escape(section) + r"\s")
+    found, block = False, None
+    for _, line, kind in markdown_lines(text):
+        if kind == "prose" and line.startswith("#"):
+            if found:
+                return None
+            found = bool(heading.match(line))
+        elif found and kind == "fence":
+            if block is not None:
+                try:
+                    return json.loads("\n".join(block))
+                except json.JSONDecodeError:
+                    return None
+            if line.strip() == "```json":
+                block = []
+        elif found and kind == "code" and block is not None:
+            block.append(line)
+    return None
+
+
+def example_claim_errors(text: str) -> list[str]:
+    """A sentence saying "Section N shows `field` in its example" names only
+    top-level members of that section's JSON example (the Section 4.6 note
+    once said Section 4.2 shows `scanSummary`, which its example omits)."""
+    errors = []
+    for unit in readme_units(text):
+        joined, starts = join_unit(unit)
+        for match in SHOWN_IN_EXAMPLE.finditer(joined):
+            lineno = unit[bisect_right(starts, match.start()) - 1][0]
+            section = match.group(1)
+            example = section_example(text, section)
+            if not isinstance(example, dict):
+                errors.append(f"ATP-SPEC.md:{lineno}: Section {section} has no JSON object example")
+                continue
+            errors.extend(
+                f"ATP-SPEC.md:{lineno}: says Section {section} shows `{field}` in its "
+                "example, which has no such member"
+                for field in CODE_SPAN.findall(match.group(2))
+                if field not in example
+            )
+    return errors
+
+
+IANA = "## 11. IANA Considerations"
+MEDIA_TYPE = re.compile(r"`(application/[A-Za-z0-9.+-]+)`")
+CONTENT_TYPE = re.compile(r"Content-Type:\s*(application/[A-Za-z0-9.+-]+)", re.IGNORECASE)
+
+
+def media_type_errors(text: str) -> list[str]:
+    """Section 11 names only media types the spec uses: each one is the
+    `Content-Type` of a request or response in another section (it once
+    defined `application/atp+json`, which nothing served or sent)."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == IANA)
+    except StopIteration:
+        return [f"ATP-SPEC.md: heading {IANA!r} not found"]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    used = {
+        media.lower()
+        for line in lines[:start] + lines[end:]
+        for media in CONTENT_TYPE.findall(line)
+    }
+    return [
+        f"ATP-SPEC.md:{number} Section 11 names media type {media!r}, which no "
+        "Content-Type in the specification carries"
+        for number in range(start + 1, end + 1)
+        for media in MEDIA_TYPE.findall(lines[number - 1])
+        if media.lower() not in used
+    ]
+
+
+def readme_spec_version_errors(text: str, spec: str) -> list[str]:
+    """A README line that links ATP-SPEC.md and names a version names the
+    version in the specification's `**Version:**` header."""
+    header = SPEC_VERSION.search(spec)
+    if header is None:
+        return ["ATP-SPEC.md: no **Version:** header line"]
+    errors = []
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose" or "ATP-SPEC.md" not in line:
+            continue
+        for version in VERSION.findall(line):
+            if version != header.group(1):
+                errors.append(
+                    f"README.md:{number}: names the specification v{version}; "
+                    f"ATP-SPEC.md is {header.group(1)}"
+                )
+    return errors
+
+
+def section_table(text: str, heading: str) -> list[tuple[int, str]]:
+    """(line number, line) for each row, header and delimiter included, of the
+    first table under the heading line `heading` and before the next heading.
+    Lines in code blocks are not rows."""
+    rows, state = [], "before"
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose":
+            continue
+        if state == "before" and line.strip() == heading:
+            state = "section"
+        elif state in ("section", "table") and line.lstrip().startswith("|"):
+            state = "table"
+            rows.append((number, line))
+        elif state == "table" or (state == "section" and line.startswith("#")):
+            state = "after"
+    return rows
+
+
+SIGNING_HEADING = "### 4.3 Signing"
+SERVED_TIME = re.compile(
+    r"^([0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]([0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$"
+)
+
+
+def signed_time(served: str) -> str:
+    """Section 4.3: the form a served `issuedAt` or `expiresAt` takes in the
+    canonical string: the instant in UTC, fractional seconds dropped (not
+    rounded), with a `Z` suffix."""
+    match = SERVED_TIME.match(served)
+    if not match:
+        raise ValueError(f"{served!r} is not an RFC 3339 timestamp")
+    date, clock, _, zone = match.groups()
+    offset = "+00:00" if zone in ("Z", "z") else zone
+    when = datetime.fromisoformat(f"{date}T{clock}{offset}")
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def signed_timestamp_errors(text: str) -> list[str]:
+    """Section 4.3: each row of the table under the heading pairs a served
+    timestamp with the form signed_time() gives it, and one row serves
+    fractional seconds, the case a verifier working from the text alone
+    otherwise gets wrong. Reported at the line of the row."""
+    rows = section_table(text, SIGNING_HEADING)
+    if len(rows) < 3:
+        return [f"ATP-SPEC.md: no timestamp rows in a table under {SIGNING_HEADING!r}"]
+    errors, fractional = [], False
+    for number, line in rows[2:]:
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            errors.append(f"ATP-SPEC.md:{number}: row has no signed form: {line.strip()!r}")
+            continue
+        served, signed = cells[0], cells[1]
+        try:
+            expected = signed_time(served)
+        except ValueError as exc:
+            errors.append(f"ATP-SPEC.md:{number}: {exc}")
+            continue
+        if signed != expected:
+            errors.append(
+                f"ATP-SPEC.md:{number}: served {served!r} is signed as {expected!r}, not {signed!r}"
+            )
+        fractional = fractional or "." in served
+    if not fractional:
+        errors.append(
+            f"ATP-SPEC.md: no row shows a served timestamp with fractional seconds under "
+            f"{SIGNING_HEADING!r}"
+        )
+    return errors
+
+
+THREAT_MODEL_HEADING = "### 10.1 Threat Model"
+SECTION_HEADING = re.compile(r"^#{2,6} (\d+(?:\.\d+)*)\.? ")
+SECTION_CITATION = re.compile(r"\bSection (\d+(?:\.\d+)*)")
+
+
+def threat_model_errors(text: str) -> list[str]:
+    """Section 10.1: every defense in the threat model table cites the section
+    that defines it, and every cited section is a numbered heading of the
+    specification. A defense the specification never defines has no section
+    to cite. Reported at the line of the row."""
+    headings = set()
+    for _, line, kind in markdown_lines(text):
+        match = SECTION_HEADING.match(line) if kind == "prose" else None
+        if match:
+            headings.add(match.group(1))
+    rows = section_table(text, THREAT_MODEL_HEADING)
+    if len(rows) < 3:
+        return [f"ATP-SPEC.md: no threat rows in a table under {THREAT_MODEL_HEADING!r}"]
+    errors = []
+    for number, line in rows[2:]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            errors.append(f"ATP-SPEC.md:{number}: row has no defense cell: {line.strip()!r}")
+            continue
+        threat, defense = cells[0], cells[1]
+        cited = SECTION_CITATION.findall(defense)
+        if not cited:
+            errors.append(
+                f"ATP-SPEC.md:{number}: the defense for {threat!r}, {defense!r}, cites no section"
+            )
+        for section in cited:
+            if section not in headings:
+                errors.append(
+                    f"ATP-SPEC.md:{number}: the defense for {threat!r} cites Section {section}, "
+                    "which is not a heading of the specification"
+                )
+    return errors
+
+
+def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
+    """Section 6 federation is what makes a trust response decentralized, and
+    no second authority co-signs proofs yet (Section 2.1 lists the Level 3
+    cosignature as not covered by fixtures). A prose paragraph calling ATP or
+    its response decentralized also says federation is not yet demonstrated.
+    Headings and table rows that name the Level 3 conformance level, code
+    lines, and "Decentralized Identifier" (a DID) are not claims. Reported at
+    the line the sentence starts on."""
+    code = {number for number, _, kind in markdown_lines(text) if kind != "prose"}
+    errors = []
+    for unit in readme_units(text):
+        if unit[0][0] in code or LEVEL_NAME_LINE.match(unit[0][1]):
+            continue
+        if NOT_DEMONSTRATED in " ".join(line.strip() for _, line in unit).lower():
+            continue
+        for lineno, sentence in unit_sentences(unit):
+            if DECENTRALIZED.search(sentence):
+                errors.append(
+                    f"{name}:{lineno}: calls ATP decentralized without saying federation "
+                    f"is {NOT_DEMONSTRATED}: {sentence.strip()!r}"
+                )
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -547,6 +824,25 @@ def main() -> int:
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
 
+    spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+    timestamp_errors = signed_timestamp_errors(spec)
+    if timestamp_errors:
+        print("timestamp FAIL ATP-SPEC.md Section 4.3 served vs signed timestamps")
+        for err in timestamp_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("timestamp OK   ATP-SPEC.md Section 4.3 served vs signed timestamps")
+
+    threat_errors = threat_model_errors(spec)
+    if threat_errors:
+        print("threats FAIL   ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
+        for err in threat_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("threats OK     ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
+
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     discovery_errors = discovery_path_errors(readme)
     if discovery_errors:
@@ -606,6 +902,34 @@ def main() -> int:
         failures += 1
     else:
         print("reference OK   README.md and ATP-SPEC.md vs Appendix A")
+
+    claim_errors = example_claim_errors(spec) + media_type_errors(spec)
+    if claim_errors:
+        print("claims FAIL    ATP-SPEC.md example claims and Section 11 vs the specification")
+        for err in claim_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("claims OK      ATP-SPEC.md example claims and Section 11 vs the specification")
+
+    version_errors = readme_spec_version_errors(readme, spec)
+    if version_errors:
+        print("version FAIL   README.md vs ATP-SPEC.md header")
+        for err in version_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("version OK     README.md vs ATP-SPEC.md header")
+
+    for doc in ("README.md", "ATP-SPEC.md"):
+        federation_errors = federation_claim_errors((ROOT / doc).read_text(encoding="utf-8"), doc)
+        if federation_errors:
+            print(f"federation FAIL {doc} vs Section 6")
+            for err in federation_errors:
+                print(f"    {err}")
+            failures += 1
+        else:
+            print(f"federation OK  {doc} vs Section 6")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []
