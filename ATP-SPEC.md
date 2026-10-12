@@ -203,7 +203,7 @@ Response: the DID Document as JSON with `Content-Type: application/did+json`.
 
 ### 3.4 Integration with A2A Agent Cards
 
-A2A agents that participate in ATP SHOULD include their DID and a current trust proof in their agent card (`/.well-known/agent.json`):
+A2A agents that participate in ATP SHOULD include their DID and a current trust proof in their agent card (`/.well-known/agent-card.json`):
 
 ```json
 {

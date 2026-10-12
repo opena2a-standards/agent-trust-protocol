@@ -4,7 +4,7 @@ How to embed ATP trust proofs in A2A agent cards and verify them before delegati
 
 ## Overview
 
-The [Google A2A Protocol](https://github.com/google/A2A) defines how agents discover each other via agent cards served at `/.well-known/agent.json`. ATP extends this by adding a cryptographically signed trust proof to the card, so an agent receiving a task delegation can verify the sender's trust before accepting work.
+The [Google A2A Protocol](https://github.com/google/A2A) defines how agents discover each other via agent cards served at `/.well-known/agent-card.json`. ATP extends this by adding a cryptographically signed trust proof to the card, so an agent receiving a task delegation can verify the sender's trust before accepting work.
 
 **Flow:**
 1. Agent A publishes its agent card with an embedded ATP trust proof
@@ -142,7 +142,7 @@ def verify_a2a_agent(
 
 # --- Usage ---
 
-result = verify_a2a_agent("https://weather.example.com/.well-known/agent.json")
+result = verify_a2a_agent("https://weather.example.com/.well-known/agent-card.json")
 
 if result["trusted"]:
     print(f"Agent trusted (level {result['trustLevel']}, score {result['score']})")
@@ -240,7 +240,7 @@ async function verifyA2AAgent(
 // --- Usage ---
 
 const result = await verifyA2AAgent(
-  "https://weather.example.com/.well-known/agent.json"
+  "https://weather.example.com/.well-known/agent-card.json"
 );
 
 if (result.trusted) {
@@ -260,10 +260,10 @@ For quick manual checks or shell scripts:
 
 ```bash
 # Fetch the agent card
-curl -s https://weather.example.com/.well-known/agent.json | jq '.atp'
+curl -s https://weather.example.com/.well-known/agent-card.json | jq '.atp'
 
 # Extract and verify the trust proof
-curl -s https://weather.example.com/.well-known/agent.json \
+curl -s https://weather.example.com/.well-known/agent-card.json \
   | jq '.atp.trustProof' \
   | curl -s -X POST https://api.oa2a.org/api/v1/trust/verify \
     -H "Content-Type: application/json" \

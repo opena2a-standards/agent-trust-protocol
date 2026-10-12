@@ -38,6 +38,10 @@ Every command in a README.md code block that requests a well-known URI
 requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 `/.well-known/opena2a` may be named in a comment only.
 
+ATP-SPEC.md, README.md and every examples/*.md place the A2A agent card at
+`/.well-known/agent-card.json`, the path the A2A specification names; the
+retired `/.well-known/agent.json` fails in prose and in code alike.
+
 The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
 is the second signature of the optional hybrid mode, so a README sentence that
 names ML-DSA-65 also names hybrid mode. A prose sentence may wrap across lines;
@@ -284,6 +288,33 @@ def discovery_path_errors(text: str) -> list[str]:
                 errors.append(
                     f"README.md:{number} requests /.well-known/{name}; "
                     "Section 7.1 makes /.well-known/atp the discovery path"
+                )
+    return errors
+
+
+# The A2A specification places the agent card at /.well-known/agent-card.json
+# and no longer names /.well-known/agent.json.
+A2A_AGENT_CARD = "agent-card.json"
+RETIRED_A2A_AGENT_CARD = "agent.json"
+
+
+def agent_card_documents() -> list[pathlib.Path]:
+    """The documents a reader copies an A2A agent card path from."""
+    return [ROOT / "ATP-SPEC.md", ROOT / "README.md", *sorted((ROOT / "examples").glob("*.md"))]
+
+
+def agent_card_path_errors(name: str, text: str) -> list[str]:
+    """Section 3.4: an A2A agent card is at the path the A2A specification
+    names. The retired path fails wherever a document names it, in prose as in
+    a code block, since a reader copies either."""
+    errors = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        for found in WELL_KNOWN.findall(line):
+            # The name pattern takes the full stop of a sentence the path ends.
+            if found.rstrip(".") == RETIRED_A2A_AGENT_CARD:
+                errors.append(
+                    f"{name}:{number} names /.well-known/{RETIRED_A2A_AGENT_CARD}; the A2A "
+                    f"specification places the agent card at /.well-known/{A2A_AGENT_CARD}"
                 )
     return errors
 
@@ -971,6 +1002,21 @@ def main() -> int:
             failures += 1
         else:
             print(f"federation OK  {doc} vs Section 6")
+
+    card_errors = [
+        err
+        for doc in agent_card_documents()
+        for err in agent_card_path_errors(
+            doc.relative_to(ROOT).as_posix(), doc.read_text(encoding="utf-8")
+        )
+    ]
+    if card_errors:
+        print("card FAIL      ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
+        for err in card_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("card OK        ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
 
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = json.loads(map_path.read_text(encoding="utf-8")) if map_path.exists() else []

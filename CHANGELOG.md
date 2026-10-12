@@ -206,6 +206,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   mandatory second signature; it now states Section 4.3: Ed25519 is required and ML-DSA-65 is
   the second signature of the optional hybrid mode. `scripts/validate_examples.py` fails on a
   README sentence that names ML-DSA-65 without hybrid mode.
+- Section 3.4 and the A2A integration guide placed the A2A agent card at
+  `/.well-known/agent.json`, a path the A2A specification no longer names. Both now name
+  `/.well-known/agent-card.json`, in the Section 3.4 sentence and in the guide's overview and
+  its Python, TypeScript and cURL examples, and `scripts/check_guides.py` serves the recorded
+  card at that path. `scripts/validate_examples.py` fails when ATP-SPEC.md, README.md or a
+  guide under `examples/` names the retired path.
 - `scripts/check_license.py` reads LICENSE byte for byte, so a copy with CRLF line endings
   fails, and reports a path it cannot read in one line with exit 1 instead of a traceback.
 - `scripts/validate_examples.py` README checks: a sentence wrapped across lines is checked

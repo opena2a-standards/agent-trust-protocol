@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, threat model, signed timestamp, ATX
-status and fixture coverage checks in validate_examples.py, check_guides.py,
-the conformance scripts (run against fixture_authority.py; needs bash, curl and
-jq), the registry generation and --check mode of gen_registries.py, and the
-test-suite sentences of the .pre-push-review-not-required marker. Run:
-python3 scripts/test_checks.py
+status, fixture coverage and A2A agent card path checks in validate_examples.py,
+check_guides.py, the conformance scripts (run against fixture_authority.py;
+needs bash, curl and jq), the registry generation and --check mode of
+gen_registries.py, and the test-suite sentences of the
+.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -427,6 +427,64 @@ class SpecClaimsTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("claims FAIL", out.getvalue())
         self.assertIn("type unused", out.getvalue())
+
+
+class AgentCardPathTest(unittest.TestCase):
+    def errors(self, text):
+        return validate_examples.agent_card_path_errors("guide.md", text)
+
+    def test_repository_documents_name_the_a2a_path(self):
+        documents = validate_examples.agent_card_documents()
+        for name in ("ATP-SPEC.md", "examples/a2a-integration.md"):
+            with self.subTest(name):
+                self.assertIn(ROOT / name, documents)
+                text = (ROOT / name).read_text(encoding="utf-8")
+                self.assertTrue(
+                    "/.well-known/agent-card.json" in text,
+                    f"{name} does not name /.well-known/agent-card.json",
+                )
+        for doc in documents:
+            name = doc.relative_to(ROOT).as_posix()
+            with self.subTest(name):
+                text = doc.read_text(encoding="utf-8")
+                self.assertEqual(validate_examples.agent_card_path_errors(name, text), [])
+
+    def test_retired_path_fails_in_prose_and_in_code(self):
+        text = (
+            "Agent cards are served at `/.well-known/agent.json`.\n"
+            "\n"
+            "```bash\n"
+            "curl -s https://weather.example.com/.well-known/agent.json | jq '.atp'\n"
+            "```\n"
+        )
+        errors = self.errors(text)
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(errors[0].startswith("guide.md:1 "), errors[0])
+        self.assertTrue(errors[1].startswith("guide.md:4 "), errors[1])
+        self.assertIn("/.well-known/agent-card.json", errors[0])
+
+    def test_retired_path_ending_a_sentence_fails(self):
+        self.assertEqual(len(self.errors("The card is at /.well-known/agent.json.\n")), 1)
+
+    def test_a2a_path_and_other_well_known_names_pass(self):
+        text = (
+            "The card is at /.well-known/agent-card.json.\n"
+            "\n"
+            "```bash\n"
+            "curl -s https://weather.example.com/.well-known/agent-card.json | jq '.atp'\n"
+            "curl https://api.oa2a.org/.well-known/atp\n"
+            "```\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def test_main_fails_on_agent_card_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "agent_card_path_errors", return_value=["retired path named"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("card FAIL", out.getvalue())
+        self.assertIn("retired path named", out.getvalue())
 
 
 class RevocationIndexTest(unittest.TestCase):
