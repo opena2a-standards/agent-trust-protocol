@@ -453,7 +453,7 @@ A verifier MUST perform the following checks in order:
 1. **Expiry:** `expiresAt` MUST be in the future. Expired proofs MUST be rejected.
 2. **Issuer:** `issuerDid` MUST resolve to a known trust authority.
 3. **Key lookup:** `signatures[*].keyId` MUST resolve to a valid, non-revoked public key. A Sigstore entry is checked by Section 4.3.1 rules 3 and 4 instead.
-4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload (a Sigstore entry under the Section 4.3.1 rules), and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4).
+4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload (a Sigstore entry under the Section 4.3.1 rules), and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4). Every proof MUST carry a verifying Ed25519 entry whose `keyId` resolves to a key of `issuerDid` (Section 4.3). A Sigstore entry never satisfies this, so a proof whose only signatures are Sigstore entries is rejected.
 5. **Semantic validation:**
    - `trustLevel` MUST be 0-4
    - `trustScore` MUST be on the Section 4.1 scale (0.0-1.0)

@@ -744,6 +744,15 @@ class SigstoreCoSignatureTest(unittest.TestCase):
         errors = validate_examples.sigstore_cosignature_errors(schema)
         self.assertIn("the Section 4.3.1 co-signature entry is refused", errors)
 
+    def test_schema_without_a_required_key_signature_fails(self):
+        schema = self.schema()
+        del schema["properties"]["signatures"]["contains"]
+        errors = validate_examples.sigstore_cosignature_errors(schema)
+        self.assertEqual(errors, [
+            "a proof whose only signature is the Sigstore entry is accepted",
+            "a proof whose only signatures are two Sigstore entries is accepted",
+        ])
+
     def test_open_entry_fails(self):
         errors = self.errors("sigstoreCoSignature", lambda entry: entry.pop("additionalProperties"))
         self.assertEqual(errors, ["a co-signature with a value beside its bundle is accepted"])
@@ -1382,6 +1391,7 @@ class ConformanceScriptTest(unittest.TestCase):
             ("string signatures", [T1[9]], {"proof": put(signatures="FAKE")}),
             ("no signatures", [T1[9]], {"proof": put(signatures=[])}),
             ("Sigstore co-signature", [], {"proof": put(signatures=COSIGNED)}),
+            ("only a Sigstore co-signature", [T1[9]], {"proof": put(signatures=COSIGNED[1:])}),
             ("Sigstore entry without a bundle", [T1[9]],
              {"proof": put(signatures=[COSIGNED[0], {**COSIGNED[1], "bundle": "FAKE"}])}),
             ("no proof served", LEVEL1[6:], {"proof": 404}),
@@ -1531,7 +1541,7 @@ class SchemaCheckTest(unittest.TestCase):
     }
     SUPPORTED = {
         "type", "const", "enum", "anyOf", "pattern", "minLength", "format", "minimum",
-        "maximum", "minItems", "items", "minProperties", "required", "properties",
+        "maximum", "minItems", "items", "contains", "minProperties", "required", "properties",
         "additionalProperties", "$ref",
     }
     ANNOTATIONS = {"$schema", "$id", "title", "description", "$defs"}
@@ -1571,7 +1581,7 @@ class SchemaCheckTest(unittest.TestCase):
                 yield from self.keywords(sub)
         for sub in schema.get("anyOf", []):
             yield from self.keywords(sub)
-        for key in ("items", "additionalProperties"):
+        for key in ("items", "additionalProperties", "contains"):
             if isinstance(schema.get(key), dict):
                 yield from self.keywords(schema[key])
 

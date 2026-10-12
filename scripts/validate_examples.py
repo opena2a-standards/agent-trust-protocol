@@ -33,8 +33,9 @@ The revocation schema admits an entry without `transparencyLogIndex` (Section
 an index that is not an integer >= 0, and requires every other entry member.
 
 The trust-proof schema admits the Section 4.3.1 Sigstore co-signature beside
-the authority's Ed25519 entry, and refuses a co-signature entry whose bundle
-the Section 4.3.1 rules cannot check or that carries a `value` as well.
+the authority's Ed25519 entry. It refuses a co-signature entry whose bundle the
+Section 4.3.1 rules cannot check or that carries a `value` as well, and a proof
+whose only signatures are co-signatures (Section 4.4 step 4).
 
 Every defense in the Section 10.1 threat model table cites the section that
 defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
@@ -413,13 +414,23 @@ NOT_A_COSIGNATURE = [
     ("with an unspecified digest algorithm", [member(DIGEST + ("algorithm",), "HASH_ALGORITHM_UNSPECIFIED")]),
 ]
 
+# Section 4.4 step 4: a co-signature never stands in for the authority's
+# Ed25519 entry, so the schema must refuse a proof whose signatures are the
+# example's Sigstore entry alone, once or twice.
+ONLY_COSIGNATURES = [
+    ("signature is the Sigstore entry", 1),
+    ("signatures are two Sigstore entries", 2),
+]
+
 
 def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     """Section 4.3.1: the trust-proof schema admits the example's Sigstore
     co-signature beside the authority's Ed25519 entry, and refuses an entry
     with no bundle, with a bundle the rules cannot check (another bundle
     version, a DSSE envelope, a key or chain in place of the certificate, no
-    hashedrekord entry with an inclusion proof) or with a value as well."""
+    hashedrekord entry with an inclusion proof) or with a value as well.
+    Section 4.4 step 4: it refuses a proof whose only signatures are
+    co-signatures."""
     if schema is None:
         schema = json.loads(
             (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
@@ -449,6 +460,9 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     for label, edits in NOT_A_COSIGNATURE:
         if accepts(edits):
             errors.append(f"a co-signature {label} is accepted")
+    for label, count in ONLY_COSIGNATURES:
+        if validator.is_valid({**proof, "signatures": [signatures[position]] * count}):
+            errors.append(f"a proof whose only {label} is accepted")
     return errors
 
 
