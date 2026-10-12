@@ -52,7 +52,7 @@ A test that names several members checks each one on its own. "Matches the schem
 | T1.4 | DID resolution returns a JSON document for the authority's own DID |
 | T1.5 | DID Document has `@context`, a non-empty string or a non-empty array |
 | T1.6 | DID Document has a non-empty `verificationMethod` array |
-| T1.7 | Trust proof endpoint returns a JSON proof whose `did` is the authority DID. The request goes to `endpoints.trustProof` appended to the authority URL (`/api/v1/trust/proof` when it is absent), and the test fails without a request when that value does not start with `/` |
+| T1.7 | Trust proof endpoint returns a JSON proof whose `did` is the authority DID. The request goes to `endpoints.trustProof` appended to the authority URL (`/api/v1/trust/proof` when it is absent, empty or not a string), and the test fails without a request when it is a non-empty string that does not start with `/`. The script reads the value with its NUL characters and trailing newlines removed |
 | T1.8 | Trust proof has all required fields (`did`, `trustLevel`, `trustScore`, `verdict`, `issuedAt`, `expiresAt`, `issuerDid`), each matching `trust-proof-v1.schema.json` |
 | T1.9 | Trust proof has at least one signature (`signatures` matches `trust-proof-v1.schema.json`) |
 | T1.10 | Trust proof is not expired: `expiresAt` is an RFC 3339 time later than now |

@@ -297,8 +297,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - Conformance scripts, follow-up: T1.5 requires `@context` to be a non-empty string or array
   (`false` passed). An RFC 3339 timestamp needs a UTC offset from 00:00 to 23:59 and nothing
   after it, so `+99:99` and a trailing newline no longer pass T1.8, T1.10, T2.2 and T2.3.
-  T1.7 fails without sending a request when `endpoints.trustProof` does not start with `/`;
-  a value such as `@other.example/api/v1/trust/proof` sent it to another host. T1.3 is
+  T1.7 fails without sending a request when `endpoints.trustProof` is a non-empty string that
+  does not start with `/` (the script reads it with its NUL characters and trailing newlines
+  removed); a value such as `@other.example/api/v1/trust/proof` sent it to another host. T1.3 is
   labelled "Conformance level is 1-3". A missing `curl`, `jq` or schema file exits 69, not 1,
   which read as one failed test. T1.11 and the `trustLevel` description in
   `schemas/trust-proof-v1.schema.json` state that `4.0` is the integer 4, which the Section
