@@ -85,9 +85,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   pinned verdict; explicit list of requirements not yet fixture-covered;
   relationship between the fixture suite and the in-repo live-endpoint scripts.
 - §7.1 legacy-path migration rule: `/.well-known/atp` is normative; the
-  reference implementation's `/.well-known/opena2a` is a legacy path that must
-  gain the normative alias before v1.0.0-final; consumer fallback and
-  identical-document requirements specified. Appendix A row updated to match.
+  reference implementation's `/.well-known/opena2a` is a legacy path it serves
+  as an optional alias of the normative one; consumer fallback until
+  v1.1.0-final and identical-document requirements specified. Appendix A row
+  updated to match.
 - This changelog.
 
 ### Changed
@@ -338,6 +339,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   missing for how the script reads `endpoints.trustProof`: `42` (not a string, so
   `/api/v1/trust/proof` is requested), a value with a trailing newline and values with a NUL
   character at the start and inside the path, each asserting the path requested.
+- The link check missed the SSH form (`git@github.com:`) and the wiki form (`.wiki`,
+  `.wiki.git`) of a link to a repository that is not public; it now reports both. The check
+  of sentences saying a section shows a member in its example took time quadratic in a line
+  that repeats "Section N.N shows" and is now linear: a claim ends with its sentence, at a
+  dot outside a code span, so a member named in a later sentence is no longer read as part
+  of the claim. `scripts/validate_examples.py` printed a traceback when a schema file was
+  not JSON or when README.md or ATP-SPEC.md was missing; each is now one failure line, and
+  the checks that read those files do not run until all of them can be read.
+  `scripts/test_checks.py` covers each of these and an ATX example that is JSON but not an
+  object, which is one error per ATX v1.1 field.
+- Section 7.1 ended the legacy-path fallback at "ATP v1.0.0-final" while the specification
+  header is 1.1.0-draft; it now ends at v1.1.0-final, the final release of the series the
+  header is on. One entry above is corrected: it said the legacy path must gain the
+  normative alias before v1.0.0-final, where Section 7.1 says the reference implementation
+  serves it as an optional alias.
 
 ## [1.0.0-rc1] - 2026-04-28
 
