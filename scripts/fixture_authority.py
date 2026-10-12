@@ -13,7 +13,8 @@ names below; a value is a function that edits the example in place, a string
 served as the body, or an integer HTTP status served with an empty body.
 `requests` lists the method and path of every request received.
 
-Run: python3 scripts/fixture_authority.py [port]
+Run: python3 scripts/fixture_authority.py [port]. When ATP-SPEC.md is not
+UTF-8 or lacks one of the examples, it exits 1 with one error line.
 """
 import copy
 import json
@@ -42,15 +43,24 @@ def timestamp(when: datetime) -> str:
     return when.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def spec_examples() -> dict:
+    """The example each endpoint serves, keyed by endpoint name. Raises
+    validate_examples.NoExample when ATP-SPEC.md is not UTF-8 or lacks one of
+    the headings or its ```json block."""
+    return {
+        name: json.loads(validate_examples.extract_block(SPEC, heading))
+        for name, heading in EXAMPLES.items()
+    }
+
+
 class FixtureAuthority(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, port: int = 0):
+        # Read first, so a specification without an example leaves no socket open.
+        examples = spec_examples()
         super().__init__(("127.0.0.1", port), Handler)
-        self.examples = {
-            name: json.loads(validate_examples.extract_block(SPEC, heading))
-            for name, heading in EXAMPLES.items()
-        }
+        self.examples = examples
         self.overrides = {}
         self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
@@ -122,6 +132,9 @@ def serve(port: int = 0) -> FixtureAuthority:
 
 
 if __name__ == "__main__":
-    authority = FixtureAuthority(int(sys.argv[1]) if len(sys.argv) > 1 else 8080)
+    try:
+        authority = FixtureAuthority(int(sys.argv[1]) if len(sys.argv) > 1 else 8080)
+    except validate_examples.NoExample as exc:
+        sys.exit(f"error: ATP-SPEC.md: {exc}")
     print(f"fixture authority at {authority.url}")
     authority.serve_forever()
