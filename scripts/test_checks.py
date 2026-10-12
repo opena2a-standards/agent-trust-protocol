@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, ATX status and fixture coverage checks
-in validate_examples.py, the conformance scripts (run against
+in validate_examples.py, check_guides.py, the conformance scripts (run against
 fixture_authority.py; needs bash, curl and jq), the registry generation and
 --check mode of gen_registries.py, and the test-suite sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
@@ -24,6 +24,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
+import check_guides  # noqa: E402
 import check_license  # noqa: E402
 import fixture_authority  # noqa: E402
 import gen_registries  # noqa: E402
@@ -752,6 +753,103 @@ class GenRegistriesTest(unittest.TestCase):
         self.assertIn("registries/trust-levels.json", err)
         self.assertIn("registries/revocation-reasons.json", err)
         self.assertNotIn("transparency-entry-types", err)
+
+
+class GuideBlocksTest(unittest.TestCase):
+    """check_guides.py runs the integration guides' blocks against recorded
+    responses; each test below puts back one defect the guides used to carry
+    and expects the check to fail on it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.texts = check_guides.guide_texts()
+
+    def edited(self, guide, old, new):
+        self.assertIn(old, self.texts[guide])
+        return {**self.texts, guide: self.texts[guide].replace(old, new, 1)}
+
+    def failing_cases(self, texts, block):
+        errors = check_guides.run(texts, select=lambda case: case.block == block)
+        return [
+            case.name
+            for case in check_guides.CASES
+            if any(error.startswith(case.name + ":") for error in errors)
+        ]
+
+    def test_repository_guides_pass(self):
+        self.assertEqual(check_guides.run(), [])
+
+    def test_gate_reading_the_top_level_fails(self):
+        texts = self.edited("ci", "jq -ce '.proof | objects'", "jq -ce '. | objects'")
+        failing = self.failing_cases(texts, check_guides.GATE)
+        self.assertIn("gate: level 2 at threshold 2 passes", failing)
+
+    def test_gate_without_expiry_check_fails(self):
+        texts = self.edited("ci", "fromdateiso8601 > now", "fromdateiso8601 > 0")
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.GATE), ["gate: expired proof refuses"]
+        )
+
+    def test_gate_without_revocation_check_fails(self):
+        texts = self.edited("ci", '  true) refuse "revoked" ;;', "  true) ;;")
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.GATE), ["gate: revoked agent refuses"]
+        )
+
+    def test_batch_loop_in_a_pipeline_subshell_fails(self):
+        texts = self.edited(
+            "ci", "while read -r DID; do", "jq -r '.[]' \"$AGENTS_FILE\" | while read -r DID; do"
+        )
+        texts["ci"] = texts["ci"].replace("done < <(jq -r '.[]' \"$AGENTS_FILE\")", "done", 1)
+        failing = self.failing_cases(texts, check_guides.BATCH)
+        self.assertIn("batch: blocked and missing agents fail", failing)
+
+    def test_quick_check_reading_the_top_level_fails(self):
+        texts = self.edited("mcp", "jq '.proof | {", "jq '{")
+        errors = check_guides.run(texts, select=lambda case: case.block == check_guides.QUICK)
+        self.assertEqual(len(errors), 1)
+        self.assertIn('"trustLevel": null', errors[0])
+
+    def test_python_check_reading_the_top_level_fails(self):
+        texts = self.edited("mcp", 'proof = resp.json().get("proof") or {}', "proof = resp.json()")
+        failing = self.failing_cases(texts, check_guides.MCP_PY)
+        self.assertIn("mcp python: listed server connects", failing)
+
+    def test_a2a_following_the_cards_verify_at_fails(self):
+        texts = self.edited(
+            "a2a",
+            "        verify_url,\n        json=proof,",
+            '        atp.get("verifyAt", verify_url),\n        json=proof,',
+        )
+        failing = self.failing_cases(texts, check_guides.A2A_PY)
+        self.assertEqual(failing, ["a2a python: the card's verifyAt is not followed"])
+
+    def test_refresh_storing_the_envelope_fails(self):
+        texts = self.edited(
+            "a2a",
+            'update_agent_card_proof(resp.json()["proof"])',
+            "update_agent_card_proof(resp.json())",
+        )
+        failing = self.failing_cases(texts, check_guides.REFRESH)
+        self.assertEqual(failing, ["a2a refresh: the stored proof is what verify accepts"])
+
+    def test_block_no_case_runs_fails(self):
+        texts = {**self.texts, "ci": self.texts["ci"] + "\n## Extra\n\n```bash\necho extra\n```\n"}
+        errors = check_guides.unchecked_blocks(texts)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'## Extra' is run by no case", errors[0])
+
+    def test_stub_refuses_hosts_other_than_the_authority_and_served_cards(self):
+        proof_url = "https://api.oa2a.org/api/v1/trust/proof?did=x"
+        self.assertIsNone(check_guides.answer({}, "GET", "https://verifier.example.net/v", ""))
+        self.assertIsNone(check_guides.answer({"unreachable": True}, "GET", proof_url, ""))
+
+    def test_stub_answers_a_since_timestamp_on_advisories_with_the_recorded_400(self):
+        status, body = check_guides.answer(
+            {}, "GET", "https://api.oa2a.org/api/v1/trust/advisories?since=2026-10-11T00:00:00Z", ""
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("YYYY-MM-DD", body)
 
 
 class TestSuiteMarkerTest(unittest.TestCase):

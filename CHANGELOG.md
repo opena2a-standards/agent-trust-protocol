@@ -147,6 +147,22 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- Integration guides (`examples/`): the samples read the trust level from the top level of
+  the `GET /api/v1/trust/proof` response, where it is absent; the fields sit under `proof`.
+  For a server at level 2 under threshold 3, the CI gate printed `Trust level: null`, then
+  `Trust gate passed.`, and exited 0. Every sample now reads `proof` and refuses an agent
+  whose level is not an integer 0-4. The CI guide's checks live in one gate script,
+  `atp-trust-gate.sh`, that every workflow runs: it also refuses an expired proof and an
+  agent on the Section 8.1 revocation list, and exits with the documented codes (0 passed,
+  1 refused, 2 authority unreachable; no script returned 2 before). The batch script keeps
+  its failure flag out of a pipeline subshell, matches answers by DID and exits 2 when the
+  authority rejects the request. The trust monitor sends `since` as a date, the format the
+  advisories endpoint takes. The A2A samples read the level from the signed proof, not the
+  card's unsigned copy, and verify against the authority the verifier is configured with,
+  not the card's own `verifyAt`. The proof refresh helper stores the proof, not the
+  response envelope that verify rejects. `scripts/check_guides.py` runs every guide block
+  against responses recorded from the reference authority (`scripts/guide_responses.json`)
+  and fails on a block that no case runs; `scripts/test_checks.py` covers it.
 - Section 4.2: the example trust proof declared a validity window of more than 26,000 days
   (`expiresAt` 2099-12-31), which Section 4.4 step 5 rejects under the Section 10.2 24-hour
   maximum. It now carries the current `trust-proof-baseline` fixture bytes: issued

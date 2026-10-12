@@ -1,0 +1,70 @@
+{
+  "_about": "Responses of the reference authority (https://api.oa2a.org) recorded 2026-10-12 UTC, served by scripts/check_guides.py to the code blocks of the guides in examples/. Signature and public key values are replaced with placeholders (the guide blocks read the trust fields, and signature checking is the verify endpoint's job), and the advisory keeps only the fields shown. The batch answer under batchAnswerShape has no recording, because the authority rejects the Section 7.2 request body (batchRejection); it is the shape the guides read.",
+  "proof": {
+    "status": 200,
+    "body": {
+      "algorithm": "ed25519",
+      "proof": {
+        "did": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+        "trustLevel": 2,
+        "trustScore": 0.7432,
+        "verdict": "listed",
+        "issuedAt": "2026-10-12T02:57:21.581346834Z",
+        "expiresAt": "2026-10-13T02:57:21.581346834Z",
+        "issuerDid": "did:opena2a:registry:opena2a.org",
+        "signatures": [
+          {"keyVersion": 1, "algorithm": "ed25519", "value": "recorded-signature-placeholder"},
+          {"keyVersion": 1, "algorithm": "ML-DSA-65", "value": "recorded-signature-placeholder"}
+        ],
+        "signature": "recorded-signature-placeholder"
+      },
+      "publicKey": "recorded-public-key-placeholder"
+    }
+  },
+  "proofNotFound": {
+    "status": 404,
+    "body": {"error": "package not found: registry package not found"}
+  },
+  "verifyAccepted": {
+    "status": 200,
+    "body": {"valid": true, "expired": false, "issuerOk": true, "signatureOk": true}
+  },
+  "verifyRejected": {
+    "status": 400,
+    "body": {"error": "did and at least one signature are required"}
+  },
+  "batchRejection": {
+    "status": 400,
+    "body": {"error": "packages array is required"}
+  },
+  "batchAnswerShape": {
+    "status": 200,
+    "body": {"results": [], "total": 0}
+  },
+  "revocations": {
+    "status": 200,
+    "body": {"revocations": []}
+  },
+  "advisories": {
+    "status": 200,
+    "body": {
+      "advisories": [
+        {
+          "id": "OA2A-2026-0002",
+          "modified": "2026-03-24T03:37:26.110548Z",
+          "published": "2026-03-24T03:37:26.110548Z",
+          "aliases": ["CVE-2026-25253"],
+          "summary": "NeMo Guardrails: 10 Vulnerabilities Including 3 Critical (NemoClaw Audit)",
+          "severity": [{"type": "ADVISORY", "score": "CRITICAL"}],
+          "affected": [{"package": {"name": "nemoguardrails", "ecosystem": ""}}]
+        }
+      ],
+      "format": "osv",
+      "total": 1
+    }
+  },
+  "advisoriesBadSince": {
+    "status": 400,
+    "body": {"error": "Invalid since parameter. Use YYYY-MM-DD format."}
+  }
+}
