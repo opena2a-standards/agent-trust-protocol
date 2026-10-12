@@ -2859,8 +2859,9 @@ class InputFileTest(unittest.TestCase):
                 self.assertEqual(lines[-1], "1 failure(s)")
 
     def test_mapped_file_that_is_not_utf8_is_one_failure(self):
-        """A mapped file that is not UTF-8, with or without a heading, is one
-        counted failure line, as a heading that is not in its file is."""
+        """A map entry whose file is not UTF-8 and is read by no other check,
+        with or without a heading, is one counted failure line, as a heading
+        that is not in its file is."""
         def json_file(root):
             path = root / "examples" / "atx-vc-example.json"
             path.write_bytes(b"\xe9" + path.read_bytes())
