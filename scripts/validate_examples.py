@@ -33,9 +33,13 @@ The revocation schema admits an entry without `transparencyLogIndex` (Section
 an index that is not an integer >= 0, and requires every other entry member.
 
 The trust-proof schema admits the Section 4.3.1 Sigstore co-signature beside
-the authority's Ed25519 entry. It refuses a co-signature entry whose bundle the
+the authority's Ed25519 entry, and a bundle holding log entries of other kinds
+beside its hashedrekord entry. It refuses a co-signature entry whose bundle the
 Section 4.3.1 rules cannot check or that carries a `value` as well, and a proof
-whose only signatures are co-signatures (Section 4.4 step 4).
+with no Ed25519 entry, whose only signatures are co-signatures or an ML-DSA-65
+entry (Section 4.4 step 4). A Section 4.3.1 example that is not JSON, or not an
+object with a signatures list, is the examples map's failure; the co-signature
+check is then reported as not compared, not as a second failure.
 
 Every defense in the Section 10.1 threat model table cites the section that
 defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
@@ -166,9 +170,10 @@ NO_ATX_MEMBER = "(none)"
 
 
 class SourceUnusable(Exception):
-    """The file an example is compared with is missing or not a JSON object.
-    The check that owns that file fails on it, so the comparison is skipped
-    instead of failing a second time for the same cause."""
+    """The file or specification example a check reads is missing, not JSON or
+    not the shape the check needs. The check that owns that file or example
+    fails on it, so the comparison is skipped instead of failing a second time
+    for the same cause."""
 
 
 def atx_example() -> dict:
@@ -352,8 +357,16 @@ SIGSTORE_HEADING = "#### 4.3.1 Sigstore co-signature"
 
 def sigstore_example() -> dict:
     """The Section 4.3.1 example: the Section 4.2 proof with a Sigstore
-    co-signature added to its signatures."""
-    return json.loads(extract_block(ROOT / "ATP-SPEC.md", SIGSTORE_HEADING))
+    co-signature added to its signatures. A block that is not JSON, or not an
+    object with a signatures list, raises SourceUnusable: the examples map
+    validates the block against the trust-proof schema, which reports it."""
+    try:
+        proof = json.loads(extract_block(ROOT / "ATP-SPEC.md", SIGSTORE_HEADING))
+    except json.JSONDecodeError:
+        raise SourceUnusable(f"the {SIGSTORE_HEADING!r} example is not JSON") from None
+    if not isinstance(proof, dict) or not isinstance(proof.get("signatures"), list):
+        raise SourceUnusable(f"the {SIGSTORE_HEADING!r} example has no signatures list")
+    return proof
 
 
 def member(path, value=...):
@@ -375,7 +388,22 @@ def member(path, value=...):
 BUNDLE = ("bundle",)
 MATERIAL = BUNDLE + ("verificationMaterial",)
 LOG_ENTRY = MATERIAL + ("tlogEntries", 0)
+ADDED_LOG_ENTRY = MATERIAL + ("tlogEntries", 1)
 DIGEST = BUNDLE + ("messageSignature", "messageDigest")
+
+
+def log_entry_added(kind):
+    """An edit of a co-signature entry that adds a second log entry, a copy of
+    the first with kind in place of its kind."""
+
+    def edit(entry):
+        entries = entry["bundle"]["verificationMaterial"]["tlogEntries"]
+        added = copy.deepcopy(entries[0])
+        added["kindVersion"]["kind"] = kind
+        entries.append(added)
+
+    return edit
+
 
 # Section 4.3.1: co-signatures the schema must also admit. A Rekor v2 entry
 # carries no integratedTime or inclusion promise and takes its signing time
@@ -390,6 +418,11 @@ ALSO_A_COSIGNATURE = [
     ]),
     ("whose log entry has no logIndex", [member(LOG_ENTRY + ("logIndex",))]),
     ("with a SHA2_384 message digest", [member(DIGEST + ("algorithm",), "SHA2_384")]),
+    # Rule 2 needs one hashedrekord entry with an inclusion proof, not every entry.
+    ("with a second log entry of another kind and no inclusionProof", [
+        log_entry_added("dsse"),
+        member(ADDED_LOG_ENTRY + ("inclusionProof",)),
+    ]),
 ]
 
 # Section 4.3.1: co-signatures the schema must refuse. Each is the example
@@ -407,6 +440,9 @@ NOT_A_COSIGNATURE = [
         member(BUNDLE + ("messageSignature",)),
         member(BUNDLE + ("dsseEnvelope",), {"payload": "Ym9keQ==", "payloadType": "x", "signatures": []}),
     ]),
+    ("with a DSSE envelope beside its message signature", [
+        member(BUNDLE + ("dsseEnvelope",), {"payload": "Ym9keQ==", "payloadType": "x", "signatures": []}),
+    ]),
     ("without a certificate", [member(MATERIAL + ("certificate",))]),
     ("with a public key in place of a certificate", [
         member(MATERIAL + ("certificate",)),
@@ -420,16 +456,29 @@ NOT_A_COSIGNATURE = [
     ("with no log entry", [member(MATERIAL + ("tlogEntries",), [])]),
     ("whose log entry has no inclusionProof", [member(LOG_ENTRY + ("inclusionProof",))]),
     ("whose log entry is not hashedrekord", [member(LOG_ENTRY + ("kindVersion", "kind"), "dsse")]),
+    ("whose hashedrekord entry has no inclusionProof and whose other log entry is another kind", [
+        log_entry_added("dsse"),
+        member(LOG_ENTRY + ("inclusionProof",)),
+    ]),
     ("without a message digest", [member(DIGEST)]),
     ("with an unspecified digest algorithm", [member(DIGEST + ("algorithm",), "HASH_ALGORITHM_UNSPECIFIED")]),
 ]
 
-# Section 4.4 step 4: a co-signature never stands in for the authority's
-# Ed25519 entry, so the schema must refuse a proof whose signatures are the
-# example's Sigstore entry alone, once or twice.
-ONLY_COSIGNATURES = [
-    ("signature is the Sigstore entry", 1),
-    ("signatures are two Sigstore entries", 2),
+# Section 4.3: the second signature of hybrid mode, beside an Ed25519 entry.
+ML_DSA_SIGNATURE = {
+    "keyId": "did:opena2a:authority:opena2a.org#pqc-v1",
+    "algorithm": "ML-DSA-65",
+    "value": "bWxkc2E=",
+}
+
+# Section 4.4 step 4: every proof carries an Ed25519 entry. The schema must
+# refuse a proof whose signatures are the example's Sigstore entry alone, once
+# or twice, or an ML-DSA-65 entry alone. Each signatures list is built from the
+# example's Sigstore entry.
+WITHOUT_ED25519 = [
+    ("signature is the Sigstore entry", lambda cosignature: [cosignature]),
+    ("signatures are two Sigstore entries", lambda cosignature: [cosignature, cosignature]),
+    ("signature is an ML-DSA-65 entry", lambda cosignature: [ML_DSA_SIGNATURE]),
 ]
 
 
@@ -438,18 +487,25 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     co-signature beside the authority's Ed25519 entry, and refuses an entry
     with no bundle, with a bundle the rules cannot check (another bundle
     version, a DSSE envelope, a key or chain in place of the certificate, no
-    hashedrekord entry with an inclusion proof) or with a value as well.
-    Section 4.4 step 4: it refuses a proof whose only signatures are
-    co-signatures."""
+    hashedrekord entry with an inclusion proof) or with a value as well. A
+    bundle may hold log entries of other kinds beside that hashedrekord entry.
+    Section 4.4 step 4: it refuses a proof with no Ed25519 entry, one whose
+    only signatures are co-signatures or an ML-DSA-65 entry. Raises
+    SourceUnusable when sigstore_example() does."""
     if schema is None:
         schema = json.loads(
             (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
         )
     validator = Draft202012Validator(schema)
     proof = sigstore_example()
-    signatures = proof.get("signatures", [])
+    signatures = proof["signatures"]
     position = next(
-        (i for i, entry in enumerate(signatures) if entry.get("algorithm") == "Sigstore"), None
+        (
+            i
+            for i, entry in enumerate(signatures)
+            if isinstance(entry, dict) and entry.get("algorithm") == "Sigstore"
+        ),
+        None,
     )
     if position is None:
         return [f"the {SIGSTORE_HEADING!r} example carries no Sigstore entry"]
@@ -470,8 +526,8 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     for label, edits in NOT_A_COSIGNATURE:
         if accepts(edits):
             errors.append(f"a co-signature {label} is accepted")
-    for label, count in ONLY_COSIGNATURES:
-        if validator.is_valid({**proof, "signatures": [signatures[position]] * count}):
+    for label, without_ed25519 in WITHOUT_ED25519:
+        if validator.is_valid({**proof, "signatures": without_ed25519(signatures[position])}):
             errors.append(f"a proof whose only {label} is accepted")
     return errors
 
@@ -1241,13 +1297,26 @@ def main() -> int:
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
 
-    cosignature_errors = sigstore_cosignature_errors()
+    try:
+        cosignature_errors = sigstore_cosignature_errors()
+    except SourceUnusable as exc:
+        cosignature_errors = [str(exc)]
+        if any(
+            entry["file"] == "ATP-SPEC.md" and entry.get("heading") == SIGSTORE_HEADING
+            for entry in entries
+        ):
+            # The examples map validates the block, so it fails there, once.
+            print(
+                "cosign SKIP    schemas/trust-proof-v1.schema.json vs Section 4.3.1: "
+                f"not compared, {exc}"
+            )
+            cosignature_errors = None
     if cosignature_errors:
         print("cosign FAIL    schemas/trust-proof-v1.schema.json vs Section 4.3.1")
         for err in cosignature_errors:
             print(f"    {err}")
         failures += 1
-    else:
+    elif cosignature_errors is not None:
         print("cosign OK      schemas/trust-proof-v1.schema.json vs Section 4.3.1")
 
     timestamp_errors = signed_timestamp_errors(spec)

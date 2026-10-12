@@ -10,10 +10,13 @@ for tool in curl jq; do
   command -v "$tool" > /dev/null || { echo "error: $tool is required" >&2; exit "$SETUP_ERROR"; }
 done
 # Every request has a time limit in seconds: ATP_CONNECT_TIMEOUT to connect and
-# ATP_MAX_TIME in all.
+# ATP_MAX_TIME in all. curl counts a limit in whole milliseconds and reads 0 as
+# no limit (--max-time) or as its own default (--connect-timeout), so a limit is
+# at least 0.001: a digit other than 0 before the point or in the first three
+# places after it.
 for limit in ATP_CONNECT_TIMEOUT ATP_MAX_TIME; do
-  [[ "${!limit:-1}" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
-    echo "error: $limit must be a number of seconds" >&2
+  [[ "${!limit:-1}" =~ ^[0-9]+([.][0-9]+)?$ && "${!limit:-1}" =~ ^0*[1-9]|[.][0-9]{0,2}[1-9] ]] || {
+    echo "error: $limit must be a number of seconds, at least 0.001" >&2
     exit "$SETUP_ERROR"
   }
 done

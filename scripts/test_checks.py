@@ -398,6 +398,18 @@ class SpecClaimsTest(unittest.TestCase):
         self.assertIn("transparencyLogIndex", example)
         self.assertNotIn("scanSummary", example)
 
+    def test_no_line_says_sigstore_enters_the_trust_score(self):
+        """Section 4.3.1 counts a co-signature toward neither step 7 nor Section
+        6, and Section 4.1 defines the score without it."""
+        for name in ("ATP-SPEC.md", "README.md"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(name):
+                self.assertEqual(
+                    [line for line in text.splitlines()
+                     if "Sigstore" in line and "trust score" in line.lower()],
+                    [],
+                )
+
     def test_member_the_example_shows_passes(self):
         self.assertEqual(validate_examples.example_claim_errors(self.spec()), [])
 
@@ -801,11 +813,36 @@ class SigstoreCoSignatureTest(unittest.TestCase):
         self.assertEqual(errors, [
             "a proof whose only signature is the Sigstore entry is accepted",
             "a proof whose only signatures are two Sigstore entries is accepted",
+            "a proof whose only signature is an ML-DSA-65 entry is accepted",
         ])
+
+    def test_schema_requiring_any_key_signature_fails(self):
+        """Section 4.4 step 4 needs an Ed25519 entry; an ML-DSA-65 entry is a
+        key signature too, and never stands alone."""
+        schema = self.schema()
+        schema["properties"]["signatures"]["contains"] = {"$ref": "#/$defs/keySignature"}
+        errors = validate_examples.sigstore_cosignature_errors(schema)
+        self.assertEqual(errors, ["a proof whose only signature is an ML-DSA-65 entry is accepted"])
+
+    def test_two_entry_probe_holds_two_sigstore_entries(self):
+        """A schema that refuses one Sigstore-only entry and accepts two fails
+        the two-entry probe alone, so that probe holds two entries."""
+        schema = self.schema()
+        signatures = schema["properties"]["signatures"]
+        del signatures["contains"]
+        signatures["minItems"] = 2
+        errors = validate_examples.sigstore_cosignature_errors(schema)
+        self.assertEqual(errors, ["a proof whose only signatures are two Sigstore entries is accepted"])
 
     def test_open_entry_fails(self):
         errors = self.errors("sigstoreCoSignature", lambda entry: entry.pop("additionalProperties"))
         self.assertEqual(errors, ["a co-signature with a value beside its bundle is accepted"])
+
+    def test_open_bundle_fails(self):
+        errors = self.errors("sigstoreBundle", lambda bundle: bundle.pop("additionalProperties"))
+        self.assertEqual(
+            errors, ["a co-signature with a DSSE envelope beside its message signature is accepted"]
+        )
 
     def test_key_signature_admitting_a_bundle_fails(self):
         def edit(entry):
@@ -822,31 +859,111 @@ class SigstoreCoSignatureTest(unittest.TestCase):
         self.assertEqual(errors, ["a co-signature in a version 0.1 bundle is accepted"])
 
     def test_empty_log_fails(self):
-        errors = self.errors("sigstoreBundle", lambda bundle: self.log_entry(bundle).pop("minItems"))
-        self.assertEqual(errors, ["a co-signature with no log entry is accepted"])
+        def edit(bundle):
+            self.log_entry(bundle).pop("minItems")
+            self.log_entry(bundle).pop("contains")
+
+        self.assertIn("a co-signature with no log entry is accepted", self.errors("sigstoreBundle", edit))
+
+    def test_log_without_a_required_hashedrekord_entry_fails(self):
+        errors = self.errors("sigstoreBundle", lambda bundle: self.log_entry(bundle).pop("contains"))
+        self.assertEqual(errors, [
+            "a co-signature whose log entry has no inclusionProof is accepted",
+            "a co-signature whose log entry is not hashedrekord is accepted",
+            "a co-signature whose hashedrekord entry has no inclusionProof and whose other log "
+            "entry is another kind is accepted",
+        ])
 
     def test_log_entry_without_inclusion_proof_fails(self):
-        errors = self.errors(
-            "sigstoreBundle",
-            lambda bundle: self.log_entry(bundle)["items"]["required"].remove("inclusionProof"),
-        )
-        self.assertEqual(errors, ["a co-signature whose log entry has no inclusionProof is accepted"])
+        errors = self.errors("hashedrekordEntry", lambda entry: entry["required"].remove("inclusionProof"))
+        self.assertEqual(errors, [
+            "a co-signature whose log entry has no inclusionProof is accepted",
+            "a co-signature whose hashedrekord entry has no inclusionProof and whose other log "
+            "entry is another kind is accepted",
+        ])
+
+    def test_schema_requiring_every_log_entry_to_be_a_hashedrekord_entry_fails(self):
+        """Section 4.3.1 rule 2 needs one hashedrekord entry with an inclusion
+        proof; a bundle may hold other entries beside it."""
+        for label, edit in (
+            ("hashedrekord kind", lambda entry: entry["properties"]["kindVersion"]["properties"]
+             .update(kind={"const": "hashedrekord"})),
+            ("inclusionProof", lambda entry: entry["required"].append("inclusionProof")),
+        ):
+            with self.subTest(label):
+                self.assertEqual(self.errors("tlogEntry", edit), [
+                    "a co-signature with a second log entry of another kind and no inclusionProof "
+                    "is refused",
+                ])
 
     def test_schema_requiring_integrated_time_fails(self):
-        errors = self.errors(
-            "sigstoreBundle",
-            lambda bundle: self.log_entry(bundle)["items"]["required"].append("integratedTime"),
-        )
-        self.assertEqual(
-            errors, ["a co-signature from a Rekor v2 log, timed by an RFC 3161 timestamp is refused"]
-        )
+        for definition in ("tlogEntry", "hashedrekordEntry"):
+            with self.subTest(definition):
+                errors = self.errors(definition, lambda entry: entry["required"].append("integratedTime"))
+                self.assertEqual(
+                    errors,
+                    ["a co-signature from a Rekor v2 log, timed by an RFC 3161 timestamp is refused"],
+                )
 
     def test_schema_requiring_log_index_fails(self):
-        errors = self.errors(
-            "sigstoreBundle",
-            lambda bundle: self.log_entry(bundle)["items"]["required"].append("logIndex"),
-        )
-        self.assertEqual(errors, ["a co-signature whose log entry has no logIndex is refused"])
+        for definition in ("tlogEntry", "hashedrekordEntry"):
+            with self.subTest(definition):
+                errors = self.errors(definition, lambda entry: entry["required"].append("logIndex"))
+                self.assertEqual(errors, ["a co-signature whose log entry has no logIndex is refused"])
+
+    def main_with_cosignature_example(self, block, mapped=True):
+        """Run main() in a copy of the repository whose Section 4.3.1 example
+        block is `block`, with or without its examples map entry. Returns the
+        exit code, the output lines and those of them that report a failure."""
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        heading = validate_examples.SIGSTORE_HEADING
+        start = spec.index("```json\n", spec.index(heading)) + len("```json\n")
+        end = spec.index("\n```\n", start)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(ROOT / "README.md", root / "README.md")
+            (root / "ATP-SPEC.md").write_text(spec[:start] + block + spec[end:], encoding="utf-8")
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            if not mapped:
+                map_path = root / "schemas" / "examples-map.json"
+                entries = json.loads(map_path.read_text(encoding="utf-8"))
+                kept = [entry for entry in entries if entry.get("heading") != heading]
+                self.assertEqual(len(kept), len(entries) - 1)
+                map_path.write_text(json.dumps(kept), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_a_cosignature_example_it_cannot_read_once(self):
+        """The examples map validates the block and reports it; the co-signature
+        check is not compared, not failed a second time."""
+        cosign = "cosign SKIP    schemas/trust-proof-v1.schema.json vs Section 4.3.1: not compared, "
+        label = f"ATP-SPEC.md @ {validate_examples.SIGSTORE_HEADING!r}"
+        example = validate_examples.sigstore_example()
+        for state, block, failure in (
+            ("is not JSON", json.dumps(example, indent=2)[:-1], f"example INVALID JSON  {label}: "),
+            ("has no signatures list", "[]",
+             f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"),
+            ("has no signatures list", json.dumps({**example, "signatures": "FAKE"}),
+             f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"),
+        ):
+            with self.subTest(block[:20]):
+                code, lines, failed = self.main_with_cosignature_example(block)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(failure), failed)
+                self.assertIn(f"{cosign}the {validate_examples.SIGSTORE_HEADING!r} example {state}", lines)
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_fails_the_cosignature_check_on_an_unmapped_example_it_cannot_read(self):
+        code, lines, failed = self.main_with_cosignature_example("[]", mapped=False)
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, ["cosign FAIL    schemas/trust-proof-v1.schema.json vs Section 4.3.1"])
+        self.assertIn(f"    the {validate_examples.SIGSTORE_HEADING!r} example has no signatures list", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
 
     def test_main_fails_on_cosignature_errors(self):
         out = io.StringIO()
@@ -1090,6 +1207,7 @@ class VerifiableCredentialFormTest(unittest.TestCase):
                     f"examples/atx-example.json {state}",
                     lines,
                 )
+                self.assertEqual(lines[-1], "1 failure(s)")
 
     def test_main_reports_two_missing_example_files_as_two_failures(self):
         code, lines, failed = self.main_in_tree({})
@@ -1124,7 +1242,7 @@ LEVEL1 = [
     "DID Document has verificationMethod",
     "Trust proof endpoint returns proof",
     "Trust proof has all required fields",
-    "Trust proof has at least one signature",
+    "Trust proof has an Ed25519 authority signature",
     "Trust proof not expired",
     "Trust level is 0-4",
     "Trust score is 0.0-1.0",
@@ -1139,6 +1257,44 @@ LEVEL2 = [
 T1 = dict(zip(range(1, 15), LEVEL1))
 T2 = dict(zip(range(1, 4), LEVEL2))
 COSIGNED = validate_examples.sigstore_example()["signatures"]
+SHARED_CURL_OPTIONS = ("--path-as-is", "--connect-timeout", "--max-time")
+
+
+def without_comment(line):
+    """line up to a comment: a # that starts a word, outside quotes."""
+    quote = None
+    escaped = False
+    for at, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            quote = None if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (at == 0 or line[at - 1] in " \t;&|()"):
+            return line[:at]
+    return line
+
+
+def curl_calls(text):
+    """The text after each curl word of a shell script, read with continued
+    lines joined, that is outside comments and the word list of a for loop."""
+    calls = []
+    for line in text.replace("\\\n", " ").splitlines():
+        code = re.sub(r"(?:^|(?<=[;&|(]))[ \t]*for[ \t]+\w+[ \t]+in\b[^;]*", "", without_comment(line))
+        calls += [code[word.end():] for word in re.finditer(r"(?<![\w.-])curl(?![\w.-])", code)]
+    return calls
+
+
+def missing_curl_options(call):
+    """The shared options the text after a curl word does not pass."""
+    options = call.split()
+    missing = [option for option in SHARED_CURL_OPTIONS if option not in options]
+    if not any(re.fullmatch(r"-[A-Za-z]*g[A-Za-z]*|--globoff", option) for option in options):
+        missing.insert(0, "-g")
+    return missing
 
 
 def pop(*names):
@@ -1155,6 +1311,18 @@ def first(member, edit):
 
 def inside(member, edit):
     return lambda body: edit(body[member])
+
+
+def with_log_entry(cosignature, kind, at=None):
+    """A copy of cosignature whose bundle's log entry at index `at` is of kind
+    `kind`, or, with no index, that has a second log entry of that kind."""
+    edited = copy.deepcopy(cosignature)
+    if at is None:
+        validate_examples.log_entry_added(kind)(edited)
+    else:
+        path = validate_examples.MATERIAL + ("tlogEntries", at, "kindVersion", "kind")
+        validate_examples.member(path, kind)(edited)
+    return edited
 
 
 def at_offset(hours_from_now, utc_offset_hours):
@@ -1385,18 +1553,32 @@ class ConformanceScriptTest(unittest.TestCase):
         and has both time limits."""
         calls = []
         for script in ("lib.sh", "level1.sh", "level2.sh"):
-            text = (CONFORMANCE / script).read_text(encoding="utf-8")
-            calls += re.findall(r"(?:^[ \t]*|\$\(|[;&|][ \t]*)curl[ \t]+([^\n]*)", text, re.M)
+            calls += curl_calls((CONFORMANCE / script).read_text(encoding="utf-8"))
         self.assertTrue(calls)
         for call in calls:
             with self.subTest(call):
-                options = call.split()
-                self.assertTrue(
-                    any(re.fullmatch(r"-[A-Za-z]*g[A-Za-z]*|--globoff", option)
-                        for option in options)
-                )
-                for option in ("--path-as-is", "--connect-timeout", "--max-time"):
-                    self.assertIn(option, options)
+                self.assertEqual(missing_curl_options(call), [])
+
+    def test_curl_calls_are_every_curl_word_outside_comments(self):
+        """A call in any position of a command is read, and so is a call whose
+        options continue on the next line; a comment and the for-loop word list
+        of the tool check are not calls."""
+        script = (
+            'if curl -s "$BASE_URL" > /dev/null; then :; fi\n'
+            "body=$(curl -g --max-time 1 \\\n  --url u)\n"
+            "! curl -s a && { curl -s b; }\n"
+            "printf '%s' x | /usr/bin/curl -s c\n"
+            "# curl -s in a comment line\n"
+            'echo "a #, b" # curl -s in a trailing comment\n'
+            "for tool in curl jq; do :; done\n"
+        )
+        self.assertEqual(
+            [call.split()[:2] for call in curl_calls(script)],
+            [["-s", '"$BASE_URL"'], ["-g", "--max-time"], ["-s", "a"], ["-s", "b;"], ["-s", "c"]],
+        )
+        level1 = (CONFORMANCE / "level1.sh").read_text(encoding="utf-8")
+        appended = curl_calls(level1 + 'if curl -s "$BASE_URL" > /dev/null; then :; fi\n')
+        self.assertEqual(missing_curl_options(appended[-1]), ["-g", *SHARED_CURL_OPTIONS])
 
     def test_did_document_probes(self):
         self.probes([
@@ -1442,6 +1624,14 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no signatures", [T1[9]], {"proof": put(signatures=[])}),
             ("Sigstore co-signature", [], {"proof": put(signatures=COSIGNED)}),
             ("only a Sigstore co-signature", [T1[9]], {"proof": put(signatures=COSIGNED[1:])}),
+            ("Ed25519 and ML-DSA-65 signatures", [],
+             {"proof": put(signatures=[COSIGNED[0], validate_examples.ML_DSA_SIGNATURE])}),
+            ("only an ML-DSA-65 signature", [T1[9]],
+             {"proof": put(signatures=[validate_examples.ML_DSA_SIGNATURE])}),
+            ("Sigstore bundle with a second log entry of another kind", [],
+             {"proof": put(signatures=[COSIGNED[0], with_log_entry(COSIGNED[1], "dsse")])}),
+            ("Sigstore bundle whose only log entry is another kind", [T1[9]],
+             {"proof": put(signatures=[COSIGNED[0], with_log_entry(COSIGNED[1], "dsse", 0)])}),
             ("Sigstore entry without a bundle", [T1[9]],
              {"proof": put(signatures=[COSIGNED[0], {**COSIGNED[1], "bundle": "FAKE"}])}),
             ("no proof served", LEVEL1[6:], {"proof": 404}),
@@ -1533,6 +1723,31 @@ class SetupErrorTest(unittest.TestCase):
                 self.assert_setup_error(CONFORMANCE, os.environ.get("PATH", ""),
                                         f"error: {name} must be a number of seconds",
                                         env={name: value})
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_time_limit_under_a_millisecond_exits_69(self):
+        """curl counts a limit in whole milliseconds and reads 0 as no limit."""
+        for name, value in (("ATP_MAX_TIME", "0"), ("ATP_MAX_TIME", "0.0004"),
+                            ("ATP_CONNECT_TIMEOUT", "0.0"), ("ATP_CONNECT_TIMEOUT", "000")):
+            with self.subTest(name=name, value=value):
+                self.assert_setup_error(CONFORMANCE, os.environ.get("PATH", ""),
+                                        f"error: {name} must be a number of seconds, at least 0.001",
+                                        env={name: value})
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_time_limit_of_a_millisecond_or_more_runs_the_tests(self):
+        for value in ("0.001", "0.05", "007", "1.0"):
+            with self.subTest(value):
+                run = subprocess.run(
+                    [shutil.which("bash"), str(CONFORMANCE / "level1.sh"), "http://127.0.0.1:9"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={"PATH": os.environ.get("PATH", ""), "ATP_MAX_TIME": value,
+                         "ATP_CONNECT_TIMEOUT": value},
+                )
+                self.assertEqual(run.stderr, "")
+                self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
 
 
 # Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
@@ -1654,6 +1869,23 @@ class SchemaCheckTest(unittest.TestCase):
             with self.subTest(name):
                 unknown = set(self.keywords(self.schema(name))) - self.SUPPORTED - self.ANNOTATIONS
                 self.assertEqual(unknown, set())
+
+    def test_no_keyword_sits_beside_a_ref(self):
+        """schema_ok follows a $ref and reads nothing beside it, so a schema that
+        narrows the target of a $ref writes the narrowed schema out in full."""
+        for name in sorted(set(self.EXAMPLES.values())):
+            with self.subTest(name):
+                schema = self.schema(name)
+                beside = []
+                for path in self.members(schema):
+                    if path[-1] != "$ref":
+                        continue
+                    node = schema
+                    for step in path[:-1]:
+                        node = node[step]
+                    beside += [path[:-1] + (key,) for key in node
+                               if key != "$ref" and key not in self.ANNOTATIONS]
+                self.assertEqual(beside, [])
 
     def test_schema_ok_agrees_with_a_json_schema_validator(self):
         cases = []
@@ -2127,6 +2359,20 @@ class FixtureCoverageTest(unittest.TestCase):
 
     def test_repository_files_pass(self):
         self.assertEqual(validate_examples.fixture_coverage_errors(**self.files()), [])
+
+    def test_coverage_list_names_the_section_4_4_rejections_no_fixture_has(self):
+        """No fixture carries a proof signed by a revoked key (step 3) or one
+        whose only Ed25519 entry is a key of another DID (step 4)."""
+        coverage = next(
+            line for line in self.files()["spec"].splitlines()
+            if line.startswith(validate_examples.COVERAGE_LIST)
+        )
+        self.assertIn("§4.4 step 3 rejection of a proof signed by a revoked authority key", coverage)
+        self.assertIn(
+            "§4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID "
+            "other than its `issuerDid`",
+            coverage,
+        )
 
     def test_readme_citing_fixture_without_8_1_1_fails(self):
         # (appended paragraph, offset of the offending sentence's first line

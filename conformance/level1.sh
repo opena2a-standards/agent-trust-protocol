@@ -78,9 +78,11 @@ test_case "Trust proof endpoint returns proof" "$?"
 check "$PROOF" 'members_ok($proof_schema; ["did", "trustLevel", "trustScore", "verdict", "issuedAt", "expiresAt", "issuerDid"])'
 test_case "Trust proof has all required fields" "$?"
 
-# T1.9: Trust proof has signature
+# T1.9: Trust proof has the Ed25519 authority signature Section 4.4 step 4
+# requires; neither an ML-DSA-65 signature nor a Sigstore co-signature stands in
+# for it.
 check "$PROOF" 'members_ok($proof_schema; ["signatures"])'
-test_case "Trust proof has at least one signature" "$?"
+test_case "Trust proof has an Ed25519 authority signature" "$?"
 
 # T1.10: Trust proof not expired, compared as a time
 check "$PROOF" '{"expiresAt is an RFC 3339 time after now": (type == "object" and (.expiresAt | rfc3339 | . != null and . > now))}'
