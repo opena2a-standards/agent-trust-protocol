@@ -69,10 +69,11 @@ A README line that links ATP-SPEC.md and names a version names the version in
 the specification's `**Version:**` header.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
-link to no repository an anonymous reader cannot open, by its web, SSH, wiki, API
-or raw-content address or a `gh repo` command, and every Appendix A row maps its
-component to a public endpoint of the reference authority (an `/api/` or
-`/.well-known/` path) instead of a source file.
+link to no repository an anonymous reader cannot open, by its web, SSH, wiki, API,
+raw-content or github.dev address or a `gh repo` or `gh api` command, and every
+Appendix A row maps its component to a public endpoint of the reference authority
+(an `/api/` or `/.well-known/` path) instead of a source file. A `gh api` endpoint
+is read on the line of its command; one on a continuation line is not read.
 
 A sentence of ATP-SPEC.md saying "Section N shows `field` in its example" names
 only members of that section's JSON example, and every media type Section 11
@@ -108,12 +109,15 @@ names Section 8.1.1.
 
 Each unusable input is one failure line: a schema file that is not UTF-8 JSON,
 is not a JSON object or fails the metaschema check; a missing schema the checks
-read by name; an examples map that is not UTF-8 JSON or not a list of entries
-(string `file` and `schema`, and a string `heading` when it has one); and an
-ATP-SPEC.md or README.md that is missing or not UTF-8. Each other check reads
-one or more of these files, so none of them runs until all of them can be used.
-A map entry naming a schema that is not there, or a heading in a file that is
-not there, is one failure.
+read by name; an examples map that is missing, is not UTF-8 JSON, is not a list
+of entries (string `file` and `schema`, and a string `heading` when it has one)
+or lists no entry; and an ATP-SPEC.md or README.md that is missing or not
+UTF-8. Each other check reads one or more of these files, so none of them runs
+until all of them can be used.
+A map entry naming a schema that is not there, a heading in a file that is not
+there, a heading that is not in its file, or a heading with no closed ```json
+block before the next heading, is one failure, and the other entries are still
+validated.
 
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
@@ -473,8 +477,8 @@ ML_DSA_SIGNATURE = {
 
 # Section 4.4 step 4: every proof carries an Ed25519 entry. The schema must
 # refuse a proof whose signatures are the example's Sigstore entry alone, once
-# or twice, or an ML-DSA-65 entry alone. Each signatures list is built from the
-# example's Sigstore entry.
+# or twice, or an ML-DSA-65 entry alone. Each case receives the example's
+# Sigstore entry; the ML-DSA-65 case ignores it.
 WITHOUT_ED25519 = [
     ("signature is the Sigstore entry", lambda cosignature: [cosignature]),
     ("signatures are two Sigstore entries", lambda cosignature: [cosignature, cosignature]),
@@ -490,14 +494,21 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     hashedrekord entry with an inclusion proof) or with a value as well. A
     bundle may hold log entries of other kinds beside that hashedrekord entry.
     Section 4.4 step 4: it refuses a proof with no Ed25519 entry, one whose
-    only signatures are co-signatures or an ML-DSA-65 entry. Raises
-    SourceUnusable when sigstore_example() does."""
+    only signatures are co-signatures or an ML-DSA-65 entry. A specification
+    without the Section 4.3.1 heading or its ```json block is one error.
+    Raises SourceUnusable when sigstore_example() does, and when the example's
+    Sigstore entry lacks a member the probes edit and the schema refuses the
+    example: the examples map reports that example. An entry the schema admits
+    that lacks one is an error here, as nothing else reports it."""
     if schema is None:
         schema = json.loads(
             (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
         )
     validator = Draft202012Validator(schema)
-    proof = sigstore_example()
+    try:
+        proof = sigstore_example()
+    except NoExample as exc:
+        return [f"ATP-SPEC.md: {exc}"]
     signatures = proof["signatures"]
     position = next(
         (
@@ -510,21 +521,33 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     if position is None:
         return [f"the {SIGSTORE_HEADING!r} example carries no Sigstore entry"]
 
-    def accepts(edits) -> bool:
+    def edited(edits) -> dict:
         cosignature = copy.deepcopy(signatures[position])
         for edit in edits:
             edit(cosignature)
-        edited = signatures[:position] + [cosignature] + signatures[position + 1:]
-        return validator.is_valid({**proof, "signatures": edited})
+        return {**proof, "signatures": signatures[:position] + [cosignature] + signatures[position + 1:]}
+
+    # The probes walk to and remove members of the entry: a bundle that is not
+    # an object, or a log entry with no inclusionProof, leaves one nothing to edit.
+    try:
+        also = [(label, edited(edits)) for label, edits in ALSO_A_COSIGNATURE]
+        refused = [(label, edited(edits)) for label, edits in NOT_A_COSIGNATURE]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        unusable = (
+            f"the {SIGSTORE_HEADING!r} example has a Sigstore entry without the members the probes edit"
+        )
+        if not validator.is_valid(proof):
+            raise SourceUnusable(unusable) from None
+        return [unusable]
 
     errors = []
-    if not accepts([]):
+    if not validator.is_valid(proof):
         errors.append("the Section 4.3.1 co-signature entry is refused")
-    for label, edits in ALSO_A_COSIGNATURE:
-        if not accepts(edits):
+    for label, probe in also:
+        if not validator.is_valid(probe):
             errors.append(f"a co-signature {label} is refused")
-    for label, edits in NOT_A_COSIGNATURE:
-        if accepts(edits):
+    for label, probe in refused:
+        if validator.is_valid(probe):
             errors.append(f"a co-signature {label} is accepted")
     for label, without_ed25519 in WITHOUT_ED25519:
         if validator.is_valid({**proof, "signatures": without_ed25519(signatures[position])}):
@@ -835,25 +858,45 @@ def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
 NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
 # The name follows an address of the repository: `github.com/`, `github.com:`
 # in the SSH form, a port allowed after the host; `api.github.com/repos/`;
-# `raw.githubusercontent.com/`, with `wiki/` for the wiki's files; or a
-# `gh repo` command. The host starts the line or follows a character that is
-# neither a word character nor `-`, so `notgithub.com` is another host. The
-# name may carry `.wiki` (the repository's wiki) and `.git` and may end a
-# sentence; any other dot followed by a word character continues it into
-# another repository's name.
+# `raw.githubusercontent.com/`, with `wiki/` for the wiki's files;
+# `github.dev/`, the web editor; or a `gh repo` command. The host starts the
+# line or follows a character that is neither a word character nor `-`, so
+# `notgithub.com` is another host. The name may carry `.wiki` (the
+# repository's wiki) and `.git` and may end a sentence; any other dot followed
+# by a word character continues it into another repository's name.
 REPOSITORY_ADDRESS = (
     r"api\.github\.com(?::\d+)?/repos/",
     r"raw\.githubusercontent\.com(?::\d+)?/(?:wiki/)?",
     r"github\.com(?::\d+)?[/:]",
+    r"github\.dev/",
     r"gh\s+repo\s+[a-z-]+\s+",
 )
-NOT_PUBLIC_LINK = re.compile(
-    r"(?<![\w-])(?:" + "|".join(REPOSITORY_ADDRESS) + r")("
-    + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
-    + r")(?:\.wiki)?(?:\.git)?(?![\w-]|\.\w)",
-    re.IGNORECASE,
+NOT_PUBLIC_NAME = (
+    "(" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
+    + r")(?:\.wiki)?(?:\.git)?(?![\w-]|\.\w)"
 )
+NOT_PUBLIC_LINK = re.compile(
+    r"(?<![\w-])(?:" + "|".join(REPOSITORY_ADDRESS) + ")" + NOT_PUBLIC_NAME, re.IGNORECASE
+)
+# A `gh api` command names the repository in its endpoint, `repos/<name>`,
+# which is an argument of its own: it follows whitespace or an opening quote,
+# anywhere after the command on its line (flags may come first), and may
+# start with a slash. A full URL as the endpoint is an address above.
+GH_API = re.compile(r"(?<![\w-])gh\s+api\s", re.IGNORECASE)
+GH_API_ENDPOINT = re.compile(r"""(?<=[\s"'])/?repos/""" + NOT_PUBLIC_NAME, re.IGNORECASE)
 APPENDIX_A = "## Appendix A: Reference Implementation"
+
+
+def unpublished_links(line: str):
+    """Yield the repository each link on the line names: once per address in
+    REPOSITORY_ADDRESS, and once per endpoint of a `gh api` command."""
+    for match in NOT_PUBLIC_LINK.finditer(line):
+        yield match.group(1)
+    command = GH_API.search(line)
+    if command:
+        # The search starts on the whitespace that ends the command.
+        for match in GH_API_ENDPOINT.finditer(line, command.end() - 1):
+            yield match.group(1)
 
 
 def unpublished_link_errors(text: str, name: str) -> list[str]:
@@ -861,10 +904,10 @@ def unpublished_link_errors(text: str, name: str) -> list[str]:
     the reference implementation is shown through its public endpoints
     (Appendix A) instead."""
     return [
-        f"{name}:{number} links to github.com/{match.group(1)}, which is not public; "
+        f"{name}:{number} links to github.com/{repository}, which is not public; "
         "cite the reference authority's public endpoints (ATP-SPEC Appendix A)"
         for number, line in enumerate(text.splitlines(), start=1)
-        for match in NOT_PUBLIC_LINK.finditer(line)
+        for repository in unpublished_links(line)
     ]
 
 
@@ -1170,12 +1213,21 @@ def local_registry() -> Registry:
     return Registry().with_resources(resources)
 
 
+class NoExample(Exception):
+    """The heading is not in the file, or no closed ```json block follows it
+    before the next heading. The message names the heading and not the file;
+    the check that reads the heading reports it as one failure and names the
+    file as the examples map does, not by its path on disk."""
+
+
 def extract_block(md_path: pathlib.Path, heading: str) -> str:
+    """The text of the first ```json block between the heading and the next
+    heading. Raises NoExample when there is no such heading or block."""
     lines = md_path.read_text(encoding="utf-8").splitlines()
     try:
         start = next(i for i, line in enumerate(lines) if line.strip() == heading)
     except StopIteration:
-        raise SystemExit(f"error: heading {heading!r} not found in {md_path}")
+        raise NoExample(f"heading {heading!r} not found") from None
     in_block = False
     block: list[str] = []
     for line in lines[start + 1:]:
@@ -1187,10 +1239,10 @@ def extract_block(md_path: pathlib.Path, heading: str) -> str:
                 return "\n".join(block)
             block.append(line)
         elif line.startswith("#") and not block:
-            raise SystemExit(
-                f"error: no ```json block between {heading!r} and the next heading in {md_path}"
-            )
-    raise SystemExit(f"error: unterminated ```json block after {heading!r} in {md_path}")
+            raise NoExample(f"no ```json block between {heading!r} and the next heading")
+    if in_block:
+        raise NoExample(f"unterminated ```json block after {heading!r}")
+    raise NoExample(f"no ```json block after {heading!r}")
 
 
 # Schemas the checks read by name; the examples map names the others.
@@ -1246,9 +1298,14 @@ def main() -> int:
             print(f"schema FAIL    {name}: missing")
             unusable += 1
 
+    # Without the map, or with a map that lists nothing, no example would be
+    # validated and the run would still end as a pass.
     map_path = ROOT / "schemas" / "examples-map.json"
     entries = []
-    if map_path.is_file():
+    if not map_path.is_file():
+        print("map FAIL       schemas/examples-map.json: missing")
+        unusable += 1
+    else:
         try:
             entries = json.loads(map_path.read_text(encoding="utf-8"))
         except ValueError as exc:
@@ -1260,6 +1317,9 @@ def main() -> int:
                     "map INVALID    schemas/examples-map.json: not a list of objects "
                     "with string file and schema members and, if present, a string heading"
                 )
+                unusable += 1
+            elif not entries:
+                print("map INVALID    schemas/examples-map.json: lists no example")
                 unusable += 1
 
     documents = {}
@@ -1469,7 +1529,12 @@ def main() -> int:
             raw = source.read_text(encoding="utf-8")
         else:
             label = f"{entry['file']} @ {heading!r}"
-            raw = extract_block(source, heading)
+            try:
+                raw = extract_block(source, heading)
+            except NoExample as exc:
+                print(f"example FAIL   {entry['file']}: {exc}")
+                failures += 1
+                continue
         try:
             instance = json.loads(raw)
         except json.JSONDecodeError as exc:

@@ -456,6 +456,33 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   from the one-entry probe, pins the failure count when the ATX example cannot be read,
   reads every `curl` word outside comments for the shared options, and checks that no
   schema keyword sits beside a `$ref`.
+- `scripts/validate_examples.py` passed with no example validated when
+  `schemas/examples-map.json` was missing; a missing map, and a map that lists no entry, is
+  now one failure line, and no check runs. A map heading that is not in its file ended the
+  run with an `error:` line that carried the file's path on disk and no failure count. That
+  heading, and a heading with no closed `json` code block before the next heading, is now
+  one `example FAIL` line that names the file as the map does; the other entries are still
+  validated and the run ends with its count. A Section 4.3.1 heading that is not in the
+  specification is one failure of the co-signature check too. The link check also reports
+  the web-editor address (`github.dev/`) of a repository that is not public and a `gh api`
+  command whose endpoint (`repos/<name>`) names one, with or without a leading slash, quotes
+  or flags before the endpoint; an endpoint on a continuation line is not read.
+  `scripts/test_checks.py` covers each case and an examples map that is not UTF-8, fails
+  when a section's example is no longer its first `json` code block or a heading label no
+  longer keeps its first section, and bounds the two linear-time checks by the ratio of CPU
+  time between two input sizes instead of by one second of elapsed time, which a loaded
+  machine could exceed.
+- Section 4.3.1 co-signature, second follow-up: `scripts/validate_examples.py` printed a
+  traceback when the example's Sigstore entry lacked a member its probes edit, such as a
+  `bundle` that is not an object. When the schema refuses the example, the examples map
+  reports it as one failure and the co-signature check reports it as not compared; when the
+  schema admits it (a log entry without `logIndex`, for one), the co-signature check fails
+  with one line. `conformance/level2.sh` printed a setup error twice, once from `level1.sh`
+  and once from its own setup checks; it now runs the setup checks first, prints the error
+  once and exits 69 before running `level1.sh`. `scripts/test_checks.py` checks that each
+  setup error is one line, that a co-signature check it does not compare prints no
+  `cosign OK` line, and that the schema's `ed25519Signature` is `keySignature` with
+  `algorithm` fixed to Ed25519.
 
 ## [1.0.0-rc1] - 2026-04-28
 
