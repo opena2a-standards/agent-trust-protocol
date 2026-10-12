@@ -3,13 +3,16 @@
 CONFORMANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCHEMAS_DIR="$CONFORMANCE_DIR/../schemas"
 
+# A missing tool or schema exits SETUP_ERROR, outside the range of failed-test
+# counts the scripts exit with (69 is EX_UNAVAILABLE in sysexits.h).
+SETUP_ERROR=69
 for tool in curl jq; do
-  command -v "$tool" > /dev/null || { echo "error: $tool is required" >&2; exit 1; }
+  command -v "$tool" > /dev/null || { echo "error: $tool is required" >&2; exit "$SETUP_ERROR"; }
 done
 for schema in discovery-v1 trust-proof-v1 revocation-list-v1; do
   [ -r "$SCHEMAS_DIR/$schema.schema.json" ] || {
     echo "error: $SCHEMAS_DIR/$schema.schema.json not found; run the script from a checkout of the repository" >&2
-    exit 1
+    exit "$SETUP_ERROR"
   }
 done
 DISCOVERY_SCHEMA=$(cat "$SCHEMAS_DIR/discovery-v1.schema.json")

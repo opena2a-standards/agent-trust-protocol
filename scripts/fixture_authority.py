@@ -11,6 +11,7 @@ revocation response.
 one member and expect the test that checks it to fail. Keys are the endpoint
 names below; a value is a function that edits the example in place, a string
 served as the body, or an integer HTTP status served with an empty body.
+`requests` lists the method and path of every request received.
 
 Run: python3 scripts/fixture_authority.py [port]
 """
@@ -51,6 +52,7 @@ class FixtureAuthority(ThreadingHTTPServer):
             for name, heading in EXAMPLES.items()
         }
         self.overrides = {}
+        self.requests = []
         self.url = f"http://127.0.0.1:{self.server_address[1]}"
 
     def body(self, endpoint: str, query: dict):
@@ -84,6 +86,7 @@ class Handler(BaseHTTPRequestHandler):
     }
 
     def respond(self, endpoint):
+        self.server.requests.append(f"{self.command} {self.path}")
         if endpoint is None:
             status, body = 404, ""
         else:

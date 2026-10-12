@@ -1,10 +1,11 @@
 # jq definitions shared by level1.sh and level2.sh, loaded with `include "checks";`.
 
 # Epoch seconds of an RFC 3339 timestamp (fractional seconds dropped), or null
-# when the input is not one.
+# when the input is not one. The UTC offset is 00:00 to 23:59, and the pattern
+# ends with \z because $ also matches before a final newline.
 def rfc3339:
   if type == "string"
-     and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$")
+     and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-]([01][0-9]|2[0-3]):[0-5][0-9])\\z")
   then
     (.[0:10] + "T" + .[11:19] + "Z") as $base
     | (try ($base | fromdateiso8601) catch null) as $t

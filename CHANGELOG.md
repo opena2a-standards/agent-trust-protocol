@@ -294,6 +294,19 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   Section 4.4 step 3) and the 24-hour proof validity maximum (Section 10.2). Every other
   defense in the table now cites its section too. `scripts/validate_examples.py` fails when a
   defense cites no section or cites one that is not a heading of the specification.
+- Conformance scripts, follow-up: T1.5 requires `@context` to be a non-empty string or array
+  (`false` passed). An RFC 3339 timestamp needs a UTC offset from 00:00 to 23:59 and nothing
+  after it, so `+99:99` and a trailing newline no longer pass T1.8, T1.10, T2.2 and T2.3.
+  T1.7 fails without sending a request when `endpoints.trustProof` does not start with `/`;
+  a value such as `@other.example/api/v1/trust/proof` sent it to another host. T1.3 is
+  labelled "Conformance level is 1-3". A missing `curl`, `jq` or schema file exits 69, not 1,
+  which read as one failed test. T1.11 and the `trustLevel` description in
+  `schemas/trust-proof-v1.schema.json` state that `4.0` is the integer 4, which the Section
+  4.3 canonical string writes as `4`. `scripts/test_checks.py` adds probes for `issuerDid`,
+  `entryType`, an empty `verificationMethod`, an extra top-level revocations member, an
+  `expiresAt` of February 30, an empty endpoint string and a body holding two JSON values,
+  and its date-time check, written apart from `checks.jq`, now rejects what `checks.jq`
+  rejects. The conformance README describes the schema agreement edits as they are.
 
 ## [1.0.0-rc1] - 2026-04-28
 

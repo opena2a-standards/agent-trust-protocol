@@ -11,6 +11,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -592,7 +593,7 @@ HAS_SCRIPT_TOOLS = HAS_JQ and all(shutil.which(tool) for tool in ("bash", "curl"
 LEVEL1 = [
     "Discovery endpoint returns JSON",
     "Discovery has authorityDid, version, endpoints",
-    "Conformance level >= 1",
+    "Conformance level is 1-3",
     "DID resolution returns document",
     "DID Document has @context",
     "DID Document has verificationMethod",
@@ -624,6 +625,10 @@ def put(**members):
 
 def first(member, edit):
     return lambda body: edit(body[member][0])
+
+
+def inside(member, edit):
+    return lambda body: edit(body[member])
 
 
 def at_offset(hours_from_now, utc_offset_hours):
@@ -698,14 +703,33 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no version", [T1[2]], {"discovery": pop("version")}),
             ("version 2.0", [T1[2]], {"discovery": put(version="2.0")}),
             ("empty endpoints", [T1[2]], {"discovery": put(endpoints={})}),
+            ("empty endpoint string", [T1[2]],
+             {"discovery": inside("endpoints", put(trustProof=""))}),
             ("no conformanceLevel", [T1[3]], {"discovery": pop("conformanceLevel")}),
             ("string conformanceLevel", [T1[3]], {"discovery": put(conformanceLevel="3")}),
+            ("conformanceLevel 0", [T1[3]], {"discovery": put(conformanceLevel=0)}),
+            ("conformanceLevel 4", [T1[3]], {"discovery": put(conformanceLevel=4)}),
         ])
+
+    def test_trust_proof_endpoint_must_be_a_path(self):
+        other = fixture_authority.serve()
+        self.addCleanup(other.server_close)
+        self.addCleanup(other.shutdown)
+        userinfo = "@" + other.url.split("//", 1)[1] + "/api/v1/trust/proof"
+        run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=userinfo)))
+        self.assertIn("(endpoints.trustProof does not start with /)", run.stdout)
+        self.assertEqual(other.requests, [])
 
     def test_did_document_probes(self):
         self.probes([
             ("no @context", [T1[5]], {"did": pop("@context")}),
+            ("false @context", [T1[5]], {"did": put(**{"@context": False})}),
+            ("empty @context array", [T1[5]], {"did": put(**{"@context": []})}),
+            ("empty @context string", [T1[5]], {"did": put(**{"@context": ""})}),
+            ("object @context", [T1[5]], {"did": put(**{"@context": {}})}),
+            ("string @context", [], {"did": put(**{"@context": "https://www.w3.org/ns/did/v1"})}),
             ("string verificationMethod", [T1[6]], {"did": put(verificationMethod="key-1")}),
+            ("empty verificationMethod", [T1[6]], {"did": put(verificationMethod=[])}),
             ("not found", [T1[4], T1[5], T1[6]], {"did": 404}),
         ])
 
@@ -716,12 +740,24 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no verdict", [T1[8]], {"proof": pop("verdict")}),
             ("unknown verdict", [T1[8]], {"proof": put(verdict="trusted")}),
             ("no issuedAt", [T1[8]], {"proof": pop("issuedAt")}),
+            ("no issuerDid", [T1[8]], {"proof": pop("issuerDid")}),
+            ("issuedAt offset +99:99", [T1[8]],
+             {"proof": put(issuedAt="2026-01-01T00:00:00+99:99")}),
+            ("issuedAt offset +24:00", [T1[8]],
+             {"proof": put(issuedAt="2026-01-01T00:00:00+24:00")}),
+            ("issuedAt followed by a newline", [T1[8]],
+             {"proof": put(issuedAt="2026-01-01T00:00:00Z\n")}),
             ("no trustLevel", [T1[8], T1[11]], {"proof": pop("trustLevel")}),
+            ("trustLevel 4.0", [], {"proof": put(trustLevel=4.0)}),
             ("fractional trustLevel", [T1[8], T1[11]], {"proof": put(trustLevel=2.5)}),
             ("string trustLevel", [T1[8], T1[11]], {"proof": put(trustLevel="3")}),
             ("trustLevel 5", [T1[8], T1[11]], {"proof": put(trustLevel=5)}),
             ("string trustScore", [T1[8], T1[12]], {"proof": put(trustScore="0.5")}),
             ("expiresAt never", [T1[8], T1[10]], {"proof": put(expiresAt="never")}),
+            ("expiresAt February 30", [T1[8], T1[10]],
+             {"proof": put(expiresAt="2099-02-30T00:00:00Z")}),
+            ("unexpired expiresAt followed by a newline", [T1[8], T1[10]],
+             {"proof": put(expiresAt=at_offset(1, 0) + "\n")}),
             ("expired, written at +05:00", [T1[10]], {"proof": put(expiresAt=at_offset(-1, 5))}),
             ("unexpired, written at -05:00", [], {"proof": put(expiresAt=at_offset(1, -5))}),
             ("string signatures", [T1[9]], {"proof": put(signatures="FAKE")}),
@@ -743,6 +779,7 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no entries", [T2[2]], {"log": '{"entries": []}'}),
             ("string entry", [T2[2]], {"log": '{"entries": ["FAKE"]}'}),
             ("entry without timestamp", [T2[2]], {"log": first("entries", pop("timestamp"))}),
+            ("entry without entryType", [T2[2]], {"log": first("entries", pop("entryType"))}),
             ("negative logIndex", [T2[2]], {"log": first("entries", put(logIndex=-1))}),
         ])
 
@@ -758,10 +795,61 @@ class ConformanceScriptTest(unittest.TestCase):
              {"revocations": first("revocations", put(reason="key leaked"))}),
             ("malformed revokedAt", [T2[3]],
              {"revocations": first("revocations", put(revokedAt="2026-03-22 15:00"))}),
+            ("extra top-level member", [T2[3]], {"revocations": put(unexpected=1)}),
         ])
 
+    def test_body_with_two_json_values_fails(self):
+        body = json.dumps(self.authority.examples["revocations"])
+        run = self.probe([T2[3]], revocations=body + "\n" + body)
+        self.assertIn("(more than one JSON value)", run.stdout)
 
-RFC3339 = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$")
+
+@unittest.skipUnless(all(shutil.which(tool) for tool in ("bash", "curl", "dirname")),
+                     "the conformance scripts need bash, curl and dirname")
+class SetupErrorTest(unittest.TestCase):
+    """A missing tool or schema stops both scripts with exit code 69, which no
+    count of failed tests reaches, before any test runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def assert_setup_error(self, conformance, path, message):
+        for script in ("level1.sh", "level2.sh"):
+            with self.subTest(script):
+                run = subprocess.run(
+                    [shutil.which("bash"), str(conformance / script), "http://127.0.0.1:9"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={"PATH": path},
+                )
+                self.assertEqual(run.returncode, 69, run.stderr)
+                self.assertIn(message, run.stderr)
+                self.assertEqual(run.stdout, "")
+
+    def test_missing_jq_exits_69(self):
+        bin_dir = self.dir / "bin"
+        bin_dir.mkdir()
+        for tool in ("bash", "curl", "dirname"):
+            (bin_dir / tool).symlink_to(shutil.which(tool))
+        self.assert_setup_error(CONFORMANCE, str(bin_dir), "error: jq is required")
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_missing_schema_exits_69(self):
+        copied = self.dir / "conformance"
+        shutil.copytree(CONFORMANCE, copied)
+        self.assert_setup_error(copied, os.environ.get("PATH", ""), "schema.json not found")
+
+
+# Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
+# offset bounded by number), so the agreement tests can catch a mistake in either.
+RFC3339 = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))"
+)
 DATE_TIME = FormatChecker(formats=())
 
 
@@ -769,7 +857,11 @@ DATE_TIME = FormatChecker(formats=())
 def is_date_time(value):
     if not isinstance(value, str):
         return True
-    if not RFC3339.match(value):
+    match = RFC3339.fullmatch(value)
+    if not match:
+        return False
+    offset_hours, offset_minutes = match.group(2, 3)
+    if offset_hours is not None and (int(offset_hours) > 23 or int(offset_minutes) > 59):
         return False
     try:
         datetime.fromisoformat(value[:10] + "T" + value[11:19])
@@ -781,15 +873,31 @@ def is_date_time(value):
 @unittest.skipUnless(HAS_JQ, "checks.jq needs jq")
 class SchemaCheckTest(unittest.TestCase):
     """checks.jq's schema_ok, which the scripts validate bodies with, agrees
-    with a JSON Schema validator on the spec examples and on every edit that
-    removes or replaces one of their members."""
+    with a JSON Schema validator on the spec examples, on each edit that
+    removes one of their members or replaces it with one of REPLACEMENTS, and
+    on each example with one extra top-level member."""
 
     EXAMPLES = {
         "### 7.1 Well-Known Endpoint": "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
-    REPLACEMENTS = (None, True, -1, 1.5, "x", [], {})
+    REPLACEMENTS = (
+        None, True, -1, 1.5, "x", [], {},
+        "2026-01-01T00:00:00+24:00", "2026-01-01T00:00:00Z\n", "2099-02-30T00:00:00Z",
+    )
+    TIMESTAMPS = {
+        "2026-01-01T00:00:00Z": True,
+        "2026-01-01t00:00:00.5z": True,
+        "2026-01-01T00:00:00+23:59": True,
+        "2026-01-01T00:00:00-00:00": True,
+        "2026-01-01T00:00:00+99:99": False,
+        "2026-01-01T00:00:00+24:00": False,
+        "2026-01-01T00:00:00-00:60": False,
+        "2026-01-01T00:00:00Z\n": False,
+        "\n2026-01-01T00:00:00Z": False,
+        "2099-02-30T00:00:00Z": False,
+    }
     SUPPORTED = {
         "type", "const", "enum", "anyOf", "pattern", "minLength", "format", "minimum",
         "maximum", "minItems", "items", "minProperties", "required", "properties",
@@ -835,6 +943,20 @@ class SchemaCheckTest(unittest.TestCase):
         for key in ("items", "additionalProperties"):
             if isinstance(schema.get(key), dict):
                 yield from self.keywords(schema[key])
+
+    def test_rfc3339_bounds_the_offset_and_rejects_a_trailing_newline(self):
+        timestamps = list(self.TIMESTAMPS)
+        run = subprocess.run(
+            ["jq", "-c", "-L", str(CONFORMANCE), 'include "checks"; map(rfc3339 != null)'],
+            input=json.dumps(timestamps),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        expected = list(self.TIMESTAMPS.values())
+        self.assertEqual(dict(zip(timestamps, json.loads(run.stdout))), self.TIMESTAMPS)
+        self.assertEqual([is_date_time(value) for value in timestamps], expected)
 
     def test_schemas_use_only_keywords_checks_jq_implements(self):
         for name in self.EXAMPLES.values():

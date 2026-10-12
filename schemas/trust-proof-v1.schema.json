@@ -16,7 +16,12 @@
   ],
   "properties": {
     "did": { "$ref": "#/$defs/did" },
-    "trustLevel": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "trustLevel": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "description": "Section 4.1 level. A value written with a zero fraction (4.0) is the integer 4 and is accepted; the section 4.3 canonical string writes the integer in decimal digits (4), never with a fraction."
+    },
     "trustScore": {
       "type": "number",
       "minimum": 0,
