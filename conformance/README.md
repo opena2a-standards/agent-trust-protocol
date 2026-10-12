@@ -42,6 +42,8 @@ FAIL: Trust proof has all required fields (not met: verdict, issuedAt)
 
 A test that names several members checks each one on its own. "Matches the schema" means the member's value is valid against its property in the named file under `schemas/`; timestamps must be RFC 3339 (a UTC offset from 00:00 to 23:59, and nothing after the timestamp, not even a newline) and are compared as times, whatever their UTC offset.
 
+The scripts send every URL as written: `curl` runs with URL globbing off (`-g`), so `{a,b}` or `[x-y]` in the authority URL, in `authorityDid` or in `endpoints.trustProof` is one request to that literal URL, not one request per expansion.
+
 ### Level 1: Basic Trust (14 tests)
 
 | ID | Test |
@@ -77,7 +79,7 @@ Tests T1.4 to T1.14 fail when there is nothing to check: no `authorityDid` in th
 python3 scripts/test_checks.py
 ```
 
-Runs both scripts against `scripts/fixture_authority.py`, a local authority that serves the specification's own examples, and expects all 17 tests to pass. It then removes or corrupts one member at a time (an HTML discovery body, a proof without `verdict`, an `expiresAt` of `"never"`, a log entry that is a string, a revocation `reason` in free text, and others) and expects exactly the tests that check that member to fail, and that a missing `jq` or schema file exits 69. It also checks that `checks.jq` agrees with a JSON Schema validator on the specification's examples and on edits of them: each member removed, each member replaced by one of a fixed set of values (`null`, `true`, `-1`, `1.5`, `"x"`, `[]`, `{}` and a few malformed timestamps), and one extra top-level member added. Needs `bash`, `curl`, `jq` and the Python `jsonschema` package.
+Runs both scripts against `scripts/fixture_authority.py`, a local authority that serves the specification's own examples, and expects all 17 tests to pass. It then removes or corrupts one member at a time (an HTML discovery body, a proof without `verdict`, an `expiresAt` of `"never"`, a log entry that is a string, a revocation `reason` in free text, and others) and expects exactly the tests that check that member to fail, and that a missing `jq` or schema file exits 69. It reads the requests the fixture authority received to check which path T1.7 requested for an `endpoints.trustProof` that is a number, ends in a newline or holds a NUL character, and that a bracketed `endpoints.trustProof` or `authorityDid` and braces in the authority URL each arrive as written, in one request. It also checks that `checks.jq` agrees with a JSON Schema validator on the specification's examples and on edits of them: each member removed, each member replaced by one of a fixed set of values (`null`, `true`, `-1`, `1.5`, `"x"`, `[]`, `{}` and a few malformed timestamps), and one extra top-level member added. Needs `bash`, `curl`, `jq` and the Python `jsonschema` package.
 
 ## Adding Tests
 

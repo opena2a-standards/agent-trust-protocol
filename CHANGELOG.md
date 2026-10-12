@@ -324,6 +324,19 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `/.well-known/opena2a`, and the discovery schema said the reference implementation serves
   endpoints its discovery document does not list; the schema now names the endpoints the
   Section 7.1 example names.
+- Conformance scripts: `curl` expanded URL patterns in values the authority serves. An
+  `endpoints.trustProof` of `/api/v1/trust/proo[e-f]` sent two requests (`.../prooe` and
+  `.../proof`) and T1.7 passed, although the declared path is not served; an `authorityDid`
+  ending in `or[f-g]` sent two requests for T1.4 and for T1.7, and both failed with "more than
+  one JSON value". Every `curl` call in `conformance/level1.sh` and `conformance/level2.sh`
+  now passes `-g` (`--globoff`), so `{a,b}` and `[x-y]` in the authority URL or in a served
+  value are one request to the literal URL, and the conformance README says so.
+  `scripts/test_checks.py` asserts the requests the fixture authority received for a bracketed
+  `endpoints.trustProof`, a bracketed `authorityDid` and braces in the authority URL, and that
+  every `curl` call in both scripts passes the option. It also adds the T1.7 probes that were
+  missing for how the script reads `endpoints.trustProof`: `42` (not a string, so
+  `/api/v1/trust/proof` is requested), a value with a trailing newline and values with a NUL
+  character at the start and inside the path, each asserting the path requested.
 
 ## [1.0.0-rc1] - 2026-04-28
 

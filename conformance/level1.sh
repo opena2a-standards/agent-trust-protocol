@@ -14,8 +14,11 @@ VERIFY=""
 # Test 1: Discovery endpoint exists
 echo "=== Level 1: Basic Trust ==="
 
-# T1.1: /.well-known/atp returns valid JSON
-DISCOVERY=$(curl -sf "$BASE_URL/.well-known/atp") || DISCOVERY=""
+# T1.1: /.well-known/atp returns valid JSON. Every curl call passes -g
+# (--globoff): a URL holds the authority URL and values the authority serves,
+# and curl would otherwise read {a,b} and [x-y] in it as patterns and send one
+# request per expansion.
+DISCOVERY=$(curl -gsf "$BASE_URL/.well-known/atp") || DISCOVERY=""
 check "$DISCOVERY" '{"body is a JSON object": (type == "object")}'
 test_case "Discovery endpoint returns JSON" "$?"
 
@@ -30,7 +33,7 @@ test_case "Conformance level is 1-3" "$?"
 # T1.4: DID resolution works for the registry's own DID
 AUTHORITY_DID=$(field "$DISCOVERY" '.authorityDid')
 if [ -n "$AUTHORITY_DID" ]; then
-  DID_DOC=$(curl -sf "$BASE_URL/api/v1/did/$AUTHORITY_DID") || DID_DOC=""
+  DID_DOC=$(curl -gsf "$BASE_URL/api/v1/did/$AUTHORITY_DID") || DID_DOC=""
   check "$DID_DOC" '{"body is a JSON object": (type == "object")}'
 else
   unmet "discovery has no authorityDid"
@@ -55,7 +58,7 @@ if [ -z "$AUTHORITY_DID" ]; then
 elif [ -n "$PROOF_ENDPOINT" ] && [ "${PROOF_ENDPOINT:0:1}" != "/" ]; then
   unmet "endpoints.trustProof does not start with /"
 else
-  PROOF=$(curl -sf "$BASE_URL${PROOF_ENDPOINT:-/api/v1/trust/proof}?did=$AUTHORITY_DID") || PROOF=""
+  PROOF=$(curl -gsf "$BASE_URL${PROOF_ENDPOINT:-/api/v1/trust/proof}?did=$AUTHORITY_DID") || PROOF=""
   check "$PROOF" '{"body is a JSON object": (type == "object"), "did is the authority DID": (type == "object" and .did == $did)}' \
     --arg did "$AUTHORITY_DID"
 fi
@@ -84,7 +87,7 @@ test_case "Trust score is 0.0-1.0" "$?"
 
 # T1.13: Verify endpoint works
 if check "$PROOF" '{"a trust proof to send": (type == "object")}'; then
-  VERIFY=$(curl -sf -X POST "$BASE_URL/api/v1/trust/verify" \
+  VERIFY=$(curl -gsf -X POST "$BASE_URL/api/v1/trust/verify" \
     -H "Content-Type: application/json" \
     -d "$PROOF") || VERIFY=""
   check "$VERIFY" '{"body is a JSON object": (type == "object")}'
