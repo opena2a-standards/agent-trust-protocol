@@ -114,8 +114,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   2.1 lists index-less entries as not yet fixture-covered.
 - Section 4.6: the five agent-specific claims (`capabilities`, `buildAttestation`,
   `behavioralProfile`, `scanSummary`, `declaredPurpose`) are no longer "Proposed (v1.1)";
-  their status is "ATX v1.1 (signed in the ATX TBS)", which is what the reference issuer
-  signs (atx-spec core.md Section 1.3a.2, field for field). The Section 4.2 note and the
+  their status is "ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2)", which is
+  what the reference issuer signs (atx-spec core.md Section 1.3a.2, field for field). The Section 4.2 note and the
   trust-proof schema description say the same; `slsaLevel` is illustrative and signed nowhere.
   A trust proof and an ATX credential are two signed artifacts with two canonical forms.
 - Section 4.4 step 4: every declared signature entry verifies, and an ML-DSA-65 entry
@@ -243,8 +243,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - README ATX table, `examples/atx-example.json` and `schemas/trust-proof-v1.schema.json`
   still labelled the ATX v1.1 fields "Proposed (v1.1)", the status Section 4.6 retired, and
   the README table left out `declaredPurpose`. The README table now lists all five fields
-  with the Section 4.6 status "ATX v1.1 (signed in the ATX TBS)", the example comment and the
-  schema's `scanSummary` description say the same, and the schema describes `slsaLevel` as
+  with the Section 4.6 status "ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2)", the
+  example comment and the schema's `scanSummary` description say the same, and the schema describes `slsaLevel` as
   illustrative and signed nowhere, as Section 4.2 does. `scripts/validate_examples.py` fails
   when a README ATX row is missing, extra or differs in status from the Section 4.6 table,
   when the example lacks an ATX v1.1 field, when the schema describes one as anything but
@@ -309,6 +309,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   and its date-time check, written apart from `checks.jq`, now also rejects an out-of-range
   UTC offset and a trailing newline, as `checks.jq` does. The conformance README describes the
   schema agreement edits as they are.
+- The link check missed a link to a repository that is not public when it ended a sentence
+  or carried `.git`; it now reports both and still passes a longer repository name. The
+  "Proposed v1.1" check took time quadratic in a run of whitespace after "proposed" and is
+  now linear. `scripts/validate_examples.py` printed a traceback when
+  `examples/atx-example.json` was missing; it now reports one `atx` failure, and an example
+  that is not JSON is one error instead of one per ATX v1.1 field.
+  `scripts/test_checks.py` covers each of these, the README and ATP-SPEC.md link scans
+  `main()` runs, the three remaining ATX status error branches, and the line a later
+  sentence citing the revocation fixture is reported at.
+- Appendix A cited Section 6.4 for `/api/v1/federation/sync`, a path that section does not
+  define; the row now says the path is the reference authority's own. Section 7.1 said the
+  reference implementation must add `/.well-known/atp`, which it now serves alongside
+  `/.well-known/opena2a`, and the discovery schema said the reference implementation serves
+  endpoints its discovery document does not list; the schema now names the endpoints the
+  Section 7.1 example names.
 
 ## [1.0.0-rc1] - 2026-04-28
 

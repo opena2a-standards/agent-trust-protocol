@@ -757,7 +757,7 @@ A trust authority MUST serve a discovery document at:
 GET /.well-known/atp
 ```
 
-**Legacy path migration.** `/.well-known/atp` is the normative discovery path. The reference implementation predates it and currently serves the same document at `/.well-known/opena2a`; it MUST add the normative path before ATP v1.0.0-final, after which the legacy path becomes an optional alias. Until then, consumers SHOULD request `/.well-known/atp` and fall back to `/.well-known/opena2a` on 404. An authority MAY serve both; the two MUST return identical documents.
+**Legacy path migration.** `/.well-known/atp` is the normative discovery path. The reference implementation predates it and first served the document only at `/.well-known/opena2a`; it now serves the identical document at both paths (Appendix A), and the legacy path is an optional alias. Until ATP v1.0.0-final, consumers SHOULD request `/.well-known/atp` and fall back to `/.well-known/opena2a` on 404. An authority MAY serve both; the two MUST return identical documents.
 
 ```json
 {
@@ -1053,7 +1053,7 @@ The OpenA2A Registry is the reference implementation of ATP at Conformance Level
 | DID resolution | `GET /api/v1/did/{did}` (§3.3) | 200: a DID document with an Ed25519 verification method |
 | Trust proof signing | `GET /api/v1/trust/proof?did={did}` (§4.3, §4.5) | 200: a trust proof signed with Ed25519, verifiable against `publicKeys` in the discovery document |
 | Transparency log | `GET /api/v1/transparency/trust-proofs`, `/api/v1/transparency/sth` and `/api/v1/transparency/proof/{index}` (§5) | 404: not yet served publicly; the log's Signed Tree Head, inclusion proof and consistency proof formats are demonstrated by the [atp-conformance](https://github.com/opena2a-standards/atp-conformance) fixtures |
-| Federation domain | `/api/v1/federation/sync`, listed as `endpoints.federation` in the discovery document (§6.4) | 401 without federation peer credentials |
+| Federation domain | `/api/v1/federation/sync`, listed as `endpoints.federation` in the discovery document; the path is the reference authority's own, not one §6.4 defines (`GET /federation/v1/deltas`, `POST /federation/v1/revocations`) | 401 without federation peer credentials |
 | Discovery endpoint | `GET /.well-known/atp` (§7.1); the legacy path `/.well-known/opena2a` returns the identical document, as the §7.1 migration rule requires of an authority serving both | 200 at both paths |
 | Hybrid PQC signatures | the `signatures` array of the `GET /api/v1/trust/proof?did={did}` response (§4.3) | 200: an `ed25519` and an `ML-DSA-65` signature; the ML-DSA-65 key is `pqcPublicKey` in the discovery document |
 

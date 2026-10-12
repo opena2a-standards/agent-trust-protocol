@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -237,8 +238,21 @@ class ReferenceImplementationTest(unittest.TestCase):
     def test_link_match_ignores_case_and_stops_at_the_repository_name(self):
         upper = "See `GitHub.com/OpenA2A-org/OpenA2A-Registry`.\n"
         self.assertEqual(len(validate_examples.unpublished_link_errors(upper, "ATP-SPEC.md")), 1)
-        longer = "See https://github.com/opena2a-org/opena2a-registry-web.\n"
-        self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
+        for text in (
+            "The source is at https://github.com/opena2a-org/opena2a-registry.\n",
+            "git clone https://github.com/opena2a-org/opena2a-registry.git\n",
+            "Clone https://github.com/opena2a-org/opena2a-registry.git.\n",
+        ):
+            with self.subTest(text=text):
+                errors = validate_examples.unpublished_link_errors(text, "README.md")
+                self.assertEqual(len(errors), 1, errors)
+        for longer in (
+            "See https://github.com/opena2a-org/opena2a-registry-web.\n",
+            "See https://github.com/opena2a-org/opena2a-registry.v2 for the fork.\n",
+            "See https://github.com/opena2a-org/opena2a-registry.github.io.\n",
+        ):
+            with self.subTest(longer=longer):
+                self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
 
     def test_endpoint_rows_pass(self):
         rows = (
@@ -274,6 +288,21 @@ class ReferenceImplementationTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("reference FAIL", out.getvalue())
         self.assertIn("row names a file", out.getvalue())
+
+    def test_main_scans_readme_and_spec_for_links(self):
+        for name in ("README.md", "ATP-SPEC.md"):
+            content = (ROOT / name).read_text(encoding="utf-8")
+
+            def link_errors(text, file_name, name=name, content=content):
+                return [f"{file_name}:1 links to a private repository"] if (file_name, text) == (name, content) else []
+
+            out = io.StringIO()
+            with self.subTest(name=name), mock.patch.object(
+                validate_examples, "unpublished_link_errors", side_effect=link_errors
+            ), contextlib.redirect_stdout(out):
+                self.assertEqual(validate_examples.main(), 1)
+                self.assertIn("reference FAIL", out.getvalue())
+                self.assertIn(f"{name}:1 links to a private repository", out.getvalue())
 
 
 class SpecClaimsTest(unittest.TestCase):
@@ -1312,6 +1341,84 @@ class AtxStatusTest(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("no schema table", errors[0])
 
+    def test_spec_table_without_a_v1_1_row_fails(self):
+        files = self.files()
+        files["spec"] = files["spec"].replace("| ATX v1.1 (", "| Draft (")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(errors, ["ATP-SPEC.md: the Section 4.6 schema table has no ATX v1.1 row"])
+
+    def test_readme_without_the_atx_table_fails(self):
+        files = self.files()
+        files["readme"] = files["readme"].replace(validate_examples.README_ATX_HEADING, "## ATX")
+        errors = validate_examples.atx_status_errors(**files)
+        fields = validate_examples.status_table(files["spec"], validate_examples.SPEC_ATX_HEADING)
+        self.assertEqual(len(errors), 1 + len(fields), errors)
+        self.assertEqual(errors[0], f"README.md: no ATX table under {validate_examples.README_ATX_HEADING!r}")
+        for field, error in zip(fields, errors[1:]):
+            self.assertIn(f"the ATX table has no {field} row", error)
+
+    def test_example_that_is_not_json_is_one_error(self):
+        files = self.files()
+        files["example"] = files["example"].rstrip().rstrip("}")
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("examples/atx-example.json: not JSON: "), errors[0])
+
+    def test_missing_example_is_one_error(self):
+        files = self.files()
+        files["example"] = None
+        errors = validate_examples.atx_status_errors(**files)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("examples/atx-example.json: missing;"), errors[0])
+
+    def test_main_reports_a_missing_example_as_one_atx_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("README.md", "ATP-SPEC.md"):
+                shutil.copy(ROOT / name, root / name)
+            for directory in ("schemas", "registries"):
+                shutil.copytree(ROOT / directory, root / directory)
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                self.assertEqual(validate_examples.main(), 1)
+        lines = out.getvalue().splitlines()
+        self.assertEqual([line for line in lines if "FAIL" in line or "INVALID" in line],
+                         ["atx FAIL       README.md, example and schema vs Section 4.6"])
+        failed = lines.index("atx FAIL       README.md, example and schema vs Section 4.6")
+        self.assertTrue(lines[failed + 1].startswith("    examples/atx-example.json: missing;"), lines)
+        self.assertFalse(lines[failed + 2].startswith("    "), lines)
+
+    def test_retired_status_matches_each_spacing(self):
+        for text in ("Proposed (v1.1)", "Proposed v1.1", "proposed( v1.1", "PROPOSED ( v1.1", "Proposed(v1.1)"):
+            with self.subTest(text=text):
+                self.assertTrue(validate_examples.RETIRED_STATUS.search(text))
+        for text in ("Proposed v1.10", "Proposed (v1.2)", "Proposed ((v1.1)", "unproposed v1.1"):
+            with self.subTest(text=text):
+                self.assertFalse(validate_examples.RETIRED_STATUS.search(text))
+
+    def test_long_whitespace_run_after_proposed_is_scanned_in_linear_time(self):
+        # The earlier pattern took about 7 s on this line and grew with the
+        # square of the run's length.
+        files = self.files()
+        files["readme"] += "\nproposed" + " " * 50000 + "v1.2\n"
+        started = time.perf_counter()
+        self.assertEqual(validate_examples.atx_status_errors(**files), [])
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_changelog_quotes_the_section_4_6_status_in_full(self):
+        statuses = {
+            status
+            for _, status in validate_examples.status_table(
+                self.files()["spec"], validate_examples.SPEC_ATX_HEADING
+            ).values()
+        }
+        changelog = " ".join((ROOT / "CHANGELOG.md").read_text(encoding="utf-8").split())
+        quoted = re.findall(r'"(ATX v1\.1 \([^"]*\))"', changelog)
+        self.assertTrue(quoted)
+        for status in quoted:
+            with self.subTest(status=status):
+                self.assertIn(status, statuses)
+
     def test_main_fails_on_atx_errors(self):
         out = io.StringIO()
         with mock.patch.object(
@@ -1336,15 +1443,32 @@ class FixtureCoverageTest(unittest.TestCase):
         self.assertEqual(validate_examples.fixture_coverage_errors(**self.files()), [])
 
     def test_readme_citing_fixture_without_8_1_1_fails(self):
-        files = self.files()
-        files["readme"] += (
-            "\nThe conformance suite pins the Section 8.1 body\n"
-            "(`fixtures/revocation-list-valid.json`) and the malformed-timestamp rejection.\n"
-        )
-        line = len(files["readme"].splitlines()) - 1
-        errors = validate_examples.fixture_coverage_errors(**files)
-        self.assertEqual(len(errors), 1, errors)
-        self.assertTrue(errors[0].startswith(f"README.md:{line}: cites revocation-list-valid"), errors[0])
+        # (appended paragraph, offset of the offending sentence's first line
+        # from the paragraph's last line). A later sentence naming Section
+        # 8.1.1 does not excuse an earlier one, and an offending sentence that
+        # starts on a later line is reported at that line.
+        cases = {
+            "8.1.1 in the next sentence": (
+                "\nThe conformance suite pins the Section 8.1 body\n"
+                "(`fixtures/revocation-list-valid.json`) and the malformed-timestamp rejection. Its\n"
+                "free-text reason predates the Section 8.1.1 codes.\n",
+                2,
+            ),
+            "offending sentence on a later line": (
+                "\nNo fixture pins the Section 8.1.1 reason codes\n"
+                "yet. The conformance suite pins\n"
+                "`fixtures/revocation-list-valid.json` as well.\n",
+                1,
+            ),
+        }
+        for label, (paragraph, back) in cases.items():
+            with self.subTest(label):
+                files = self.files()
+                files["readme"] += paragraph
+                line = len(files["readme"].splitlines()) - back
+                errors = validate_examples.fixture_coverage_errors(**files)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith(f"README.md:{line}: cites revocation-list-valid"), errors[0])
 
     def test_spec_table_row_without_8_1_1_fails(self):
         files = self.files()
