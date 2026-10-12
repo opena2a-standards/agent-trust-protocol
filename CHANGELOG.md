@@ -472,6 +472,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   longer keeps its first section, and bounds the two linear-time checks by the ratio of CPU
   time between two input sizes instead of by one second of elapsed time, which a loaded
   machine could exceed.
+- Section 4.3.1 co-signature, second follow-up: `scripts/validate_examples.py` printed a
+  traceback when the example's Sigstore entry lacked a member its probes edit, such as a
+  `bundle` that is not an object. When the schema refuses the example, the examples map
+  reports it as one failure and the co-signature check reports it as not compared; when the
+  schema admits it (a log entry without `logIndex`, for one), the co-signature check fails
+  with one line. `conformance/level2.sh` printed a setup error twice, once from `level1.sh`
+  and once from its own setup checks; it now runs the setup checks first, prints the error
+  once and exits 69 before running `level1.sh`. `scripts/test_checks.py` checks that each
+  setup error is one line, that a co-signature check it does not compare prints no
+  `cosign OK` line, and that the schema's `ed25519Signature` is `keySignature` with
+  `algorithm` fixed to Ed25519.
 
 ## [1.0.0-rc1] - 2026-04-28
 

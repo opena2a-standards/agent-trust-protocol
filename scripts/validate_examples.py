@@ -477,8 +477,8 @@ ML_DSA_SIGNATURE = {
 
 # Section 4.4 step 4: every proof carries an Ed25519 entry. The schema must
 # refuse a proof whose signatures are the example's Sigstore entry alone, once
-# or twice, or an ML-DSA-65 entry alone. Each signatures list is built from the
-# example's Sigstore entry.
+# or twice, or an ML-DSA-65 entry alone. Each case receives the example's
+# Sigstore entry; the ML-DSA-65 case ignores it.
 WITHOUT_ED25519 = [
     ("signature is the Sigstore entry", lambda cosignature: [cosignature]),
     ("signatures are two Sigstore entries", lambda cosignature: [cosignature, cosignature]),
@@ -496,7 +496,10 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     Section 4.4 step 4: it refuses a proof with no Ed25519 entry, one whose
     only signatures are co-signatures or an ML-DSA-65 entry. A specification
     without the Section 4.3.1 heading or its ```json block is one error.
-    Raises SourceUnusable when sigstore_example() does."""
+    Raises SourceUnusable when sigstore_example() does, and when the example's
+    Sigstore entry lacks a member the probes edit and the schema refuses the
+    example: the examples map reports that example. An entry the schema admits
+    that lacks one is an error here, as nothing else reports it."""
     if schema is None:
         schema = json.loads(
             (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
@@ -518,21 +521,33 @@ def sigstore_cosignature_errors(schema: dict | None = None) -> list[str]:
     if position is None:
         return [f"the {SIGSTORE_HEADING!r} example carries no Sigstore entry"]
 
-    def accepts(edits) -> bool:
+    def edited(edits) -> dict:
         cosignature = copy.deepcopy(signatures[position])
         for edit in edits:
             edit(cosignature)
-        edited = signatures[:position] + [cosignature] + signatures[position + 1:]
-        return validator.is_valid({**proof, "signatures": edited})
+        return {**proof, "signatures": signatures[:position] + [cosignature] + signatures[position + 1:]}
+
+    # The probes walk to and remove members of the entry: a bundle that is not
+    # an object, or a log entry with no inclusionProof, leaves one nothing to edit.
+    try:
+        also = [(label, edited(edits)) for label, edits in ALSO_A_COSIGNATURE]
+        refused = [(label, edited(edits)) for label, edits in NOT_A_COSIGNATURE]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        unusable = (
+            f"the {SIGSTORE_HEADING!r} example has a Sigstore entry without the members the probes edit"
+        )
+        if not validator.is_valid(proof):
+            raise SourceUnusable(unusable) from None
+        return [unusable]
 
     errors = []
-    if not accepts([]):
+    if not validator.is_valid(proof):
         errors.append("the Section 4.3.1 co-signature entry is refused")
-    for label, edits in ALSO_A_COSIGNATURE:
-        if not accepts(edits):
+    for label, probe in also:
+        if not validator.is_valid(probe):
             errors.append(f"a co-signature {label} is refused")
-    for label, edits in NOT_A_COSIGNATURE:
-        if accepts(edits):
+    for label, probe in refused:
+        if validator.is_valid(probe):
             errors.append(f"a co-signature {label} is accepted")
     for label, without_ed25519 in WITHOUT_ED25519:
         if validator.is_valid({**proof, "signatures": without_ed25519(signatures[position])}):

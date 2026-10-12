@@ -1003,6 +1003,59 @@ class SigstoreCoSignatureTest(unittest.TestCase):
                 errors = self.errors(definition, lambda entry: entry["required"].append("logIndex"))
                 self.assertEqual(errors, ["a co-signature whose log entry has no logIndex is refused"])
 
+    @staticmethod
+    def errors_for_example(edit):
+        """sigstore_cosignature_errors() on the Section 4.3.1 example with edit
+        applied to its Sigstore entry."""
+        example = validate_examples.sigstore_example()
+        edit(example["signatures"][1])
+        with mock.patch.object(validate_examples, "sigstore_example", return_value=example):
+            return validate_examples.sigstore_cosignature_errors()
+
+    UNEDITABLE = (f"the {validate_examples.SIGSTORE_HEADING!r} example has a Sigstore entry "
+                  "without the members the probes edit")
+
+    def test_refused_entry_the_probes_cannot_edit_is_unusable(self):
+        """The examples map reports an example the schema refuses, so the
+        co-signature check raises SourceUnusable, not a Python exception."""
+        for label, edit in (
+            ("bundle that is not an object", lambda entry: entry.update(bundle="x")),
+            ("bundle without verificationMaterial", lambda entry: entry["bundle"].pop("verificationMaterial")),
+            ("tlogEntries that is an object",
+             lambda entry: entry["bundle"]["verificationMaterial"].update(tlogEntries={})),
+            ("no log entry", lambda entry: entry["bundle"]["verificationMaterial"].update(tlogEntries=[])),
+            ("messageSignature that is a list", lambda entry: entry["bundle"].update(messageSignature=[])),
+        ):
+            with self.subTest(label):
+                with self.assertRaises(validate_examples.SourceUnusable) as raised:
+                    self.errors_for_example(edit)
+                self.assertEqual(str(raised.exception), self.UNEDITABLE)
+
+    def test_admitted_entry_the_probes_cannot_edit_fails(self):
+        """Nothing else reports an example the schema admits, so the check fails
+        with one error instead of a Python exception or a silent skip."""
+        log_entry = ("bundle", "verificationMaterial", "tlogEntries", 0)
+        for name in ("inclusionPromise", "integratedTime", "logIndex"):
+            with self.subTest(name):
+                errors = self.errors_for_example(validate_examples.member(log_entry + (name,)))
+                self.assertEqual(errors, [self.UNEDITABLE])
+
+    def test_ed25519_signature_is_the_key_signature_restricted_to_ed25519(self):
+        """The schema writes ed25519Signature out in full beside keySignature;
+        apart from descriptions it is keySignature with algorithm fixed to Ed25519."""
+        definitions = self.schema()["$defs"]
+
+        def without_descriptions(value):
+            if isinstance(value, dict):
+                return {key: without_descriptions(item) for key, item in value.items() if key != "description"}
+            if isinstance(value, list):
+                return [without_descriptions(item) for item in value]
+            return value
+
+        expected = copy.deepcopy(definitions["keySignature"])
+        expected["properties"]["algorithm"] = {"const": "Ed25519"}
+        self.assertEqual(without_descriptions(definitions["ed25519Signature"]), without_descriptions(expected))
+
     def main_with_cosignature_example(self, block, mapped=True):
         """Run main() in a copy of the repository whose Section 4.3.1 example
         block is `block`, with or without its examples map entry. Returns the
@@ -1035,19 +1088,24 @@ class SigstoreCoSignatureTest(unittest.TestCase):
         cosign = "cosign SKIP    schemas/trust-proof-v1.schema.json vs Section 4.3.1: not compared, "
         label = f"ATP-SPEC.md @ {validate_examples.SIGSTORE_HEADING!r}"
         example = validate_examples.sigstore_example()
+        unbundled = copy.deepcopy(example)
+        unbundled["signatures"][1]["bundle"] = "x"
         for state, block, failure in (
             ("is not JSON", json.dumps(example, indent=2)[:-1], f"example INVALID JSON  {label}: "),
             ("has no signatures list", "[]",
              f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"),
             ("has no signatures list", json.dumps({**example, "signatures": "FAKE"}),
              f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"),
+            ("has a Sigstore entry without the members the probes edit", json.dumps(unbundled),
+             f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"),
         ):
-            with self.subTest(block[:20]):
+            with self.subTest(state=state, block=block[:20]):
                 code, lines, failed = self.main_with_cosignature_example(block)
                 self.assertEqual(code, 1)
                 self.assertEqual(len(failed), 1, lines)
                 self.assertTrue(failed[0].startswith(failure), failed)
                 self.assertIn(f"{cosign}the {validate_examples.SIGSTORE_HEADING!r} example {state}", lines)
+                self.assertEqual([line for line in lines if line.startswith("cosign OK")], [])
                 self.assertEqual(lines[-1], "1 failure(s)")
 
     def test_main_fails_the_cosignature_check_on_an_unmapped_example_it_cannot_read(self):
@@ -1772,7 +1830,7 @@ class ConformanceScriptTest(unittest.TestCase):
                      "the conformance scripts need bash, curl and dirname")
 class SetupErrorTest(unittest.TestCase):
     """A missing tool or schema stops both scripts with exit code 69, which no
-    count of failed tests reaches, before any test runs."""
+    count of failed tests reaches, before any test runs, with one error line."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1793,6 +1851,8 @@ class SetupErrorTest(unittest.TestCase):
                 )
                 self.assertEqual(run.returncode, 69, run.stderr)
                 self.assertIn(message, run.stderr)
+                # level2.sh runs level1.sh, which must not print the error a second time.
+                self.assertEqual(len(run.stderr.splitlines()), 1, run.stderr)
                 self.assertEqual(run.stdout, "")
 
     def test_missing_jq_exits_69(self):

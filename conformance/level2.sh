@@ -4,13 +4,15 @@
 
 BASE_URL="${1:?Usage: $0 <authority-url>}"
 
-# Run Level 1 first
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-"$SCRIPT_DIR/level1.sh" "$BASE_URL"
-L1_RESULT=$?
-
+# lib.sh's setup checks run before Level 1, so a setup error is printed once and
+# exits SETUP_ERROR before any test runs.
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
+
+# Run Level 1 first
+"$SCRIPT_DIR/level1.sh" "$BASE_URL"
+L1_RESULT=$?
 
 echo ""
 echo "=== Level 2: Auditable Trust ==="
