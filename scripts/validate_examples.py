@@ -49,9 +49,9 @@ A README line that links ATP-SPEC.md and names a version names the version in
 the specification's `**Version:**` header.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
-link to no repository an anonymous reader cannot open, and every Appendix A row
-maps its component to a public endpoint of the reference authority (an `/api/` or
-`/.well-known/` path) instead of a source file.
+link to no repository an anonymous reader cannot open, by its web, SSH or wiki
+address, and every Appendix A row maps its component to a public endpoint of the
+reference authority (an `/api/` or `/.well-known/` path) instead of a source file.
 
 A sentence of ATP-SPEC.md saying "Section N shows `field` in its example" names
 only members of that section's JSON example, and every media type Section 11
@@ -80,6 +80,10 @@ Section 8.1.1 codes, which the revocation schema refuses and a client processes
 as `unspecified`, so every prose sentence in ATP-SPEC.md or the README, and
 every sentence of the revocation schema's description, that cites the fixture
 names Section 8.1.1.
+
+A schema file that is not JSON, or a missing ATP-SPEC.md or README.md, is one
+failure line each. Every other check reads those files, so none of them runs
+until all of them can be read.
 
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
@@ -486,11 +490,13 @@ def fixture_coverage_errors(spec: str, readme: str, schema: str) -> list[str]:
 
 # Repositories an anonymous reader cannot open: GitHub answers 404 for them.
 NOT_PUBLIC_REPOSITORIES = ("opena2a-org/opena2a-registry",)
-# The name may carry `.git` and may end a sentence; a dot followed by a word
-# character continues it into another repository's name.
+# The name follows `github.com/` or, in the SSH form, `github.com:`. It may
+# carry `.wiki` (the repository's wiki) and `.git` and may end a sentence; any
+# other dot followed by a word character continues it into another
+# repository's name.
 NOT_PUBLIC_LINK = re.compile(
-    r"github\.com/(" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
-    + r")(?:\.git)?(?![\w-]|\.\w)",
+    r"github\.com[/:](" + "|".join(re.escape(repo) for repo in NOT_PUBLIC_REPOSITORIES)
+    + r")(?:\.wiki)?(?:\.git)?(?![\w-]|\.\w)",
     re.IGNORECASE,
 )
 APPENDIX_A = "## Appendix A: Reference Implementation"
@@ -538,7 +544,11 @@ def reference_endpoint_errors(text: str) -> list[str]:
     return errors
 
 
-SHOWN_IN_EXAMPLE = re.compile(r"Section (\d+(?:\.\d+)+) shows (.+?) in its example")
+# The claim stays inside one sentence: a dot outside a code span ends it, so a
+# line that repeats "Section N.N shows" is scanned once, not once per repeat.
+SHOWN_IN_EXAMPLE = re.compile(
+    r"Section (\d+(?:\.\d+)+) shows ((?:`[^`]*`|[^.`])+?) in its example"
+)
 CODE_SPAN = re.compile(r"`([^`]+)`")
 
 
@@ -811,14 +821,33 @@ def main() -> int:
     if not schema_files:
         print("error: no schemas/*.schema.json found")
         return 1
+    unusable = 0
     for sf in schema_files:
-        schema = json.loads(sf.read_text(encoding="utf-8"))
+        try:
+            schema = json.loads(sf.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"schema INVALID {sf.relative_to(ROOT)}: not JSON: {exc}")
+            unusable += 1
+            continue
         try:
             Draft202012Validator.check_schema(schema)
             print(f"schema OK      {sf.relative_to(ROOT)}")
         except Exception as exc:  # noqa: BLE001 - report and fail
             print(f"schema INVALID {sf.relative_to(ROOT)}: {exc}")
             failures += 1
+
+    documents = {}
+    for name in ("ATP-SPEC.md", "README.md"):
+        if (ROOT / name).is_file():
+            documents[name] = (ROOT / name).read_text(encoding="utf-8")
+        else:
+            print(f"document FAIL  {name}: missing")
+            unusable += 1
+    if unusable:
+        # Every check below reads the schemas or one of the two documents.
+        print(f"\n{failures + unusable} failure(s); the checks that read these files did not run")
+        return 1
+    spec, readme = documents["ATP-SPEC.md"], documents["README.md"]
 
     reason_errors = revocation_reason_errors()
     if reason_errors:
@@ -838,7 +867,6 @@ def main() -> int:
     else:
         print("index OK       schemas/revocation-list-v1.schema.json vs Section 8.1")
 
-    spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
     timestamp_errors = signed_timestamp_errors(spec)
     if timestamp_errors:
         print("timestamp FAIL ATP-SPEC.md Section 4.3 served vs signed timestamps")
@@ -857,7 +885,6 @@ def main() -> int:
     else:
         print("threats OK     ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
 
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     discovery_errors = discovery_path_errors(readme)
     if discovery_errors:
         print("discovery FAIL README.md vs Section 7.1")
@@ -876,7 +903,6 @@ def main() -> int:
     else:
         print("signing OK     README.md vs Section 4.3")
 
-    spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
     example_path = ROOT / "examples" / "atx-example.json"
     atx_errors = atx_status_errors(
         spec,
@@ -937,7 +963,7 @@ def main() -> int:
         print("version OK     README.md vs ATP-SPEC.md header")
 
     for doc in ("README.md", "ATP-SPEC.md"):
-        federation_errors = federation_claim_errors((ROOT / doc).read_text(encoding="utf-8"), doc)
+        federation_errors = federation_claim_errors(documents[doc], doc)
         if federation_errors:
             print(f"federation FAIL {doc} vs Section 6")
             for err in federation_errors:

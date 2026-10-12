@@ -254,6 +254,26 @@ class ReferenceImplementationTest(unittest.TestCase):
             with self.subTest(longer=longer):
                 self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
 
+    def test_ssh_and_wiki_forms_of_the_link_fail(self):
+        for text in (
+            "git clone git@github.com:opena2a-org/opena2a-registry.git\n",
+            "Clone `git@github.com:opena2a-org/opena2a-registry`.\n",
+            "git clone https://github.com/opena2a-org/opena2a-registry.wiki.git\n",
+            "git clone git@github.com:opena2a-org/opena2a-registry.wiki.git\n",
+            "The pages are at https://github.com/opena2a-org/opena2a-registry.wiki.\n",
+        ):
+            with self.subTest(text=text):
+                errors = validate_examples.unpublished_link_errors(text, "README.md")
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("links to github.com/opena2a-org/opena2a-registry, which", errors[0])
+        for longer in (
+            "git clone git@github.com:opena2a-org/opena2a-registry-web.git\n",
+            "See https://github.com/opena2a-org/opena2a-registry.wikis.\n",
+            "See https://github.com/opena2a-org/opena2a-registry.wiki-archive.\n",
+        ):
+            with self.subTest(longer=longer):
+                self.assertEqual(validate_examples.unpublished_link_errors(longer, "README.md"), [])
+
     def test_endpoint_rows_pass(self):
         rows = (
             "| DID resolution | `GET /api/v1/did/{did}` | 200 |\n"
@@ -365,6 +385,24 @@ class SpecClaimsTest(unittest.TestCase):
         errors = validate_examples.example_claim_errors(self.spec(note=note))
         self.assertEqual(len(errors), 1)
         self.assertIn("Section 4.5 has no JSON object example", errors[0])
+
+    def test_claim_ends_with_its_sentence(self):
+        note = "Section 4.2 shows the base proof. Section 4.6 lists `scanSummary` in its example file."
+        self.assertEqual(validate_examples.example_claim_errors(self.spec(note=note)), [])
+
+    def test_dotted_name_in_a_code_span_is_checked(self):
+        note = "Note: Section 4.2 shows `signatures.ed25519` in its example."
+        errors = validate_examples.example_claim_errors(self.spec(note=note))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("`signatures.ed25519`", errors[0])
+
+    def test_repeated_claim_opening_is_scanned_in_linear_time(self):
+        # The earlier pattern took about 8 s on this line and grew with the
+        # square of its length.
+        line = "Section 1.1 shows " * 11000 + "\n"
+        started = time.perf_counter()
+        self.assertEqual(validate_examples.example_claim_errors(line), [])
+        self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_media_type_the_spec_carries_passes(self):
         self.assertEqual(validate_examples.media_type_errors(self.spec()), [])
@@ -1416,6 +1454,27 @@ class AtxStatusTest(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertTrue(errors[0].startswith("examples/atx-example.json: not JSON: "), errors[0])
 
+    def test_example_that_is_json_but_not_an_object_is_one_error_per_v1_1_field(self):
+        files = self.files()
+        fields = [
+            field
+            for field, (_, status) in validate_examples.status_table(
+                files["spec"], validate_examples.SPEC_ATX_HEADING
+            ).items()
+            if status.startswith(validate_examples.ATX_V11_STATUS)
+        ]
+        self.assertTrue(fields)
+        # An array or string naming every field is still an example with no members.
+        for example in ("[]", json.dumps(fields), json.dumps(" ".join(fields))):
+            with self.subTest(example=example):
+                files["example"] = example
+                errors = validate_examples.atx_status_errors(**files)
+                self.assertEqual(len(errors), len(fields), errors)
+                for field, error in zip(fields, errors):
+                    self.assertTrue(
+                        error.startswith(f"examples/atx-example.json: no {field} member;"), error
+                    )
+
     def test_missing_example_is_one_error(self):
         files = self.files()
         files["example"] = None
@@ -1575,6 +1634,99 @@ class FixtureCoverageTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("fixtures FAIL", out.getvalue())
         self.assertIn("coverage differs", out.getvalue())
+
+
+class InputFileTest(unittest.TestCase):
+    """A file every check reads that is missing or not JSON is one failure
+    line, and main() returns without running the checks that read it."""
+
+    NOT_RUN = "the checks that read these files did not run"
+
+    def run_main(self, damage):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("README.md", "ATP-SPEC.md"):
+                shutil.copy(ROOT / name, root / name)
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            damage(root)
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_copied_repository_passes(self):
+        code, lines, failed = self.run_main(lambda root: None)
+        self.assertEqual((code, failed), (0, []), lines)
+        self.assertNotIn(self.NOT_RUN, lines[-1])
+
+    def test_schema_that_is_not_json_is_one_failure_line(self):
+        for name in ("discovery-v1", "revocation-list-v1", "trust-proof-v1"):
+            path = f"schemas/{name}.schema.json"
+            with self.subTest(path=path):
+                code, lines, failed = self.run_main(
+                    lambda root, path=path: (root / path).write_text("{", encoding="utf-8")
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(f"schema INVALID {path}: not JSON: "), failed[0])
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_missing_document_is_one_failure_line(self):
+        for name in ("README.md", "ATP-SPEC.md"):
+            with self.subTest(name=name):
+                code, lines, failed = self.run_main(lambda root, name=name: (root / name).unlink())
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"document FAIL  {name}: missing"], lines)
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_unusable_files_and_an_invalid_schema_are_counted_together(self):
+        def damage(root):
+            (root / "README.md").unlink()
+            (root / "schemas" / "discovery-v1.schema.json").write_text("{", encoding="utf-8")
+            (root / "schemas" / "trust-proof-v1.schema.json").write_text('{"type": 7}', encoding="utf-8")
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(failed), 3, lines)
+        self.assertEqual(lines[-1], f"3 failure(s); {self.NOT_RUN}")
+
+
+class LegacyPathMilestoneTest(unittest.TestCase):
+    """Section 7.1 ends the consumer fallback to the legacy discovery path at a
+    release of the series the specification's header is on, and the changelog
+    describes the rule as Section 7.1 states it."""
+
+    FINAL = re.compile(r"\bv(\d+)\.(\d+)\.(\d+)-final\b")
+    ENTRY = "- §7.1 legacy-path migration rule:"
+
+    def setUp(self):
+        self.spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.rule = next(
+            line for line in self.spec.splitlines() if line.startswith("**Legacy path migration.**")
+        )
+        lines = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith(self.ENTRY))
+        entry = [lines[start]]
+        for line in lines[start + 1:]:
+            if not line.startswith("  "):
+                break
+            entry.append(line.strip())
+        self.entry = " ".join(entry)
+
+    def test_spec_names_no_final_release_behind_its_header_version(self):
+        header = validate_examples.SPEC_VERSION.search(self.spec).group(1)
+        series = tuple(int(part) for part in header.split("-")[0].split("."))
+        for release in self.FINAL.findall(self.spec):
+            with self.subTest(release=".".join(release)):
+                self.assertGreaterEqual(tuple(int(part) for part in release), series)
+
+    def test_changelog_entry_states_the_rule_as_section_7_1_does(self):
+        self.assertIn("optional alias", self.rule)
+        self.assertIn("optional alias", self.entry)
+        self.assertNotIn("must gain", self.entry)
+        self.assertEqual(self.FINAL.findall(self.entry), self.FINAL.findall(self.rule))
 
 
 if __name__ == "__main__":

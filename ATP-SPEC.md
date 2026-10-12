@@ -757,7 +757,7 @@ A trust authority MUST serve a discovery document at:
 GET /.well-known/atp
 ```
 
-**Legacy path migration.** `/.well-known/atp` is the normative discovery path. The reference implementation predates it and first served the document only at `/.well-known/opena2a`; it now serves the identical document at both paths (Appendix A), and the legacy path is an optional alias. Until ATP v1.0.0-final, consumers SHOULD request `/.well-known/atp` and fall back to `/.well-known/opena2a` on 404. An authority MAY serve both; the two MUST return identical documents.
+**Legacy path migration.** `/.well-known/atp` is the normative discovery path. The reference implementation predates it and first served the document only at `/.well-known/opena2a`; it now serves the identical document at both paths (Appendix A), and the legacy path is an optional alias. Until ATP v1.1.0-final, consumers SHOULD request `/.well-known/atp` and fall back to `/.well-known/opena2a` on 404. An authority MAY serve both; the two MUST return identical documents.
 
 ```json
 {
