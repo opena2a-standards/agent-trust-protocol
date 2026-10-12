@@ -38,7 +38,7 @@ Where it stops today: `POST /api/v1/trust/verify` asks the authority to check it
 
 After an incident you have to prove what the trust state was at the moment the agent acted. Ordinary application logs can be edited by the same incident, so a reconstruction from them is an assertion, not evidence.
 
-ATP records every trust proof issuance and revocation in an append-only Merkle tree compatible with RFC 6962. The authority publishes Signed Tree Heads, and an auditor checks inclusion proofs for single entries and consistency proofs between tree sizes, so an entry that was removed or rewritten is detectable.
+ATP records every trust proof issuance, and the revocation of every logged trust proof or credential, in an append-only Merkle tree compatible with RFC 6962. The authority publishes Signed Tree Heads, and an auditor checks inclusion proofs for single entries and consistency proofs between tree sizes, so an entry that was removed or rewritten is detectable.
 
 What you can do today: the conformance suite carries a Signed Tree Head, a valid inclusion proof, a valid consistency proof and the tampered-path rejections for both.
 

@@ -96,8 +96,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - §8.1: the revocation response body gains a machine-readable schema and a
   clients-MUST-reject-malformed-timestamps rule; documented that the body is
   unsigned (authenticity rides on transport + per-entry
-  `transparencyLogIndex`), with response signing recorded as an open
-  hardening question.
+  `transparencyLogIndex` where an entry carries one), with response signing
+  recorded as an open hardening question.
 - `schemas/inclusion-proof-v1.schema.json`,
   `schemas/consistency-proof-v1.schema.json`,
   `schemas/revocation-list-v1.schema.json`; `examples-map.json` now validates
@@ -173,6 +173,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   a fence inside a longer fence no longer swaps prose and code for the rest of the README.
   `scripts/test_checks.py` covers both scripts.
 - `.gitignore` excludes `__pycache__/`, which running the scripts leaves behind.
+- `scripts/validate_examples.py` probes `transparencyLogIndex` with a boolean, an array and an
+  object as well as a negative integer, a number, a string and null, so a schema whose index
+  type is widened to any of them fails. `scripts/test_checks.py` covers the valid-index and
+  invalid-index probes (`minimum` removed, `type` set to `number`, `minimum` set to 1, the type
+  widened) and the `index FAIL` result of the script.
+- Section 1 and the README: the transparency log was described as recording every revocation,
+  but Section 8.1 allows a revocation entry with no log record. Both now say the log records
+  the revocation of a logged trust proof or credential, and Section 1 names the exception.
 
 ## [1.0.0-rc1] - 2026-04-28
 

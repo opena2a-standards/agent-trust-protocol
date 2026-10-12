@@ -159,7 +159,9 @@ def revocation_index_errors(schema: dict | None = None) -> list[str]:
     for index in (0, 1847300):
         if not accepts({**UNLOGGED_REVOCATION, "transparencyLogIndex": index}):
             errors.append(f"an entry with transparencyLogIndex {index} is refused")
-    for index in (-1, 1.5, "1847300", None):
+    # One probe per JSON value that is not an integer >= 0: a negative integer,
+    # a number, a string, null, a boolean, an array and an object.
+    for index in (-1, 1.5, "1847300", None, True, [], {}):
         if accepts({**UNLOGGED_REVOCATION, "transparencyLogIndex": index}):
             errors.append(f"transparencyLogIndex {index!r} is accepted; it is an integer >= 0")
     for member in UNLOGGED_REVOCATION:

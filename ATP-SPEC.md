@@ -45,7 +45,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 | **Trust Authority** | A server that issues, stores, and verifies ATP trust proofs. |
 | **Trust Proof** | A signed assertion about an agent's trust level, issued by a trust authority. |
 | **Trust Level** | An integer 0-4 representing the degree of trust. |
-| **Transparency Log** | An append-only Merkle tree recording all trust proof issuances and revocations. |
+| **Transparency Log** | An append-only Merkle tree recording all trust proof issuances and the revocation of every logged trust proof or credential. A revocation of an agent the authority logged nothing for MAY have no log entry (Section 8.1). |
 | **Federation** | A network of trust authorities that co-sign trust proofs and sync trust data. |
 | **Monitor** | An independent party that audits the transparency log for inconsistencies. |
 
