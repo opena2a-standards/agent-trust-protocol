@@ -293,16 +293,25 @@ NOT_A_REASON = [
 ]
 
 
+REASON_SCHEMA_PATH = ("properties", "revocations", "items", "properties", "reason")
+
+
 def revocation_reason_errors() -> list[str]:
     """Section 8.1.1: the revocation schema's `reason` admits the registered
-    codes and the private-use grammar, and no free text. A registry file that
-    is missing, not UTF-8, not JSON or not the shape gen_registries.py writes
-    (an object whose `rows` is a list of objects, each with a string `Reason`)
-    is one error that names it."""
-    schema = json.loads(
-        (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8")
-    )
-    reason = schema["properties"]["revocations"]["items"]["properties"]["reason"]
+    codes and the private-use grammar, and no free text. A schema with no
+    object schema for an entry's `reason` is one error that names the schema
+    file. A registry file that is missing, not UTF-8, not JSON or not the shape
+    gen_registries.py writes (an object whose `rows` is a list of objects, each
+    with a string `Reason`) is one error that names it."""
+    path = ROOT / "schemas" / "revocation-list-v1.schema.json"
+    reason = json.loads(path.read_text(encoding="utf-8"))
+    for key in REASON_SCHEMA_PATH:
+        reason = reason.get(key) if isinstance(reason, dict) else None
+    if not isinstance(reason, dict):
+        return [
+            f"{path.relative_to(ROOT).as_posix()}: no object schema at "
+            f"{'.'.join(REASON_SCHEMA_PATH)}, an entry's reason"
+        ]
     validator = Draft202012Validator(reason)
     errors = [
         f"reason {value!r} is accepted; Section 8.1.1 admits no free text"
@@ -330,10 +339,20 @@ def revocation_reason_errors() -> list[str]:
             "(run scripts/gen_registries.py)"
         ]
     registered = [row["Reason"] for row in rows]
-    codes = next((branch["enum"] for branch in reason.get("anyOf", []) if "enum" in branch), [])
-    if sorted(codes) != sorted(registered):
+    # A branch may be a boolean schema, and an enum may hold values that are
+    # not strings; key=str orders those without equating 1 and "1".
+    codes = next(
+        (
+            branch["enum"]
+            for branch in reason.get("anyOf", [])
+            if isinstance(branch, dict) and "enum" in branch
+        ),
+        [],
+    )
+    if sorted(codes, key=str) != sorted(registered):
         errors.append(
-            f"schema codes {sorted(codes)} differ from the Section 8.1.1 table {sorted(registered)}"
+            f"schema codes {sorted(codes, key=str)} differ from the Section 8.1.1 table "
+            f"{sorted(registered)}"
         )
     return errors
 
@@ -656,11 +675,23 @@ A2A_AGENT_CARD = "agent-card.json"
 RETIRED_A2A_AGENT_CARD = "agent.json"
 
 
+def listed_files(directory: pathlib.Path, pattern: str) -> list[pathlib.Path]:
+    """The entries of directory whose name matches pattern that are files, and
+    the links among them whose target is not there, which the check that reads
+    them reports as one line that names them. A directory, or a link to one,
+    is not read."""
+    return sorted(
+        path
+        for path in directory.glob(pattern)
+        if path.is_file() or (path.is_symlink() and not path.exists())
+    )
+
+
 def agent_card_documents() -> list[pathlib.Path]:
     """The documents a reader copies an A2A agent card path from. A directory
-    in examples/ whose name ends in .md is not one of them."""
-    guides = sorted(path for path in (ROOT / "examples").glob("*.md") if path.is_file())
-    return [ROOT / "ATP-SPEC.md", ROOT / "README.md", *guides]
+    in examples/ whose name ends in .md is not one of them; a link of that name
+    whose target is not there is, so the check reports it."""
+    return [ROOT / "ATP-SPEC.md", ROOT / "README.md", *listed_files(ROOT / "examples", "*.md")]
 
 
 def agent_card_path_errors(name: str, text: str) -> list[str]:
@@ -1238,9 +1269,13 @@ def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
-    locally — never over the network."""
+    locally — never over the network. A directory whose name ends in
+    .schema.json is not a schema; main() reports a link whose target is not
+    there before any check reads this registry."""
     resources = []
-    for sf in sorted((ROOT / "schemas").glob("*.schema.json")):
+    for sf in listed_files(ROOT / "schemas", "*.schema.json"):
+        if not sf.is_file():
+            continue
         doc = json.loads(sf.read_text(encoding="utf-8"))
         if "$id" in doc:
             resources.append((doc["$id"], Resource.from_contents(doc)))
@@ -1308,7 +1343,9 @@ def is_entry_list(entries) -> bool:
 def main() -> int:
     failures = 0
 
-    schema_files = sorted((ROOT / "schemas").glob("*.schema.json"))
+    # A directory whose name ends in .schema.json is not listed; a link whose
+    # target is not there is, and is one line here.
+    schema_files = listed_files(ROOT / "schemas", "*.schema.json")
     if not schema_files:
         print("error: no schemas/*.schema.json found")
         return 1
@@ -1320,6 +1357,10 @@ def main() -> int:
             schema = json.loads(sf.read_text(encoding="utf-8"))
         except ValueError as exc:
             print(f"schema INVALID {name}: not JSON: {exc}")
+            unusable += 1
+            continue
+        except OSError as exc:
+            print(f"schema INVALID {name}: cannot be read: {exc.strerror}")
             unusable += 1
             continue
         if not isinstance(schema, dict):
@@ -1335,8 +1376,10 @@ def main() -> int:
             continue
         print(f"schema OK      {name}")
         schemas[name] = schema
+    listed = {sf.relative_to(ROOT).as_posix() for sf in schema_files}
     for name in SCHEMAS_READ_BY_NAME:
-        if not (ROOT / name).is_file():
+        # A listed schema has its line above; a directory in its place is not one.
+        if name not in listed:
             print(f"schema FAIL    {name}: missing")
             unusable += 1
 
@@ -1533,6 +1576,9 @@ def main() -> int:
             card_errors += agent_card_path_errors(name, doc.read_text(encoding="utf-8"))
         except UnicodeDecodeError as exc:
             card_errors.append(f"{name}: not UTF-8: {exc}")
+        except OSError as exc:
+            # A link whose target is not there: the error, not a path on disk.
+            card_errors.append(f"{name}: cannot be read: {exc.strerror}")
     if card_errors:
         print("card FAIL      ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
         for err in card_errors:

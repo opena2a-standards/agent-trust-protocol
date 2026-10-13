@@ -516,11 +516,33 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   from the Section 8.1.1 table; it is now one failure of the revocation reason check, with a
   line under it that names the file and says to run `scripts/gen_registries.py`. It also
   ended with a traceback when `examples/` held a directory whose name ends in `.md`; the A2A
-  agent card check now reads files only. `scripts/gen_registries.py --check` ended with a
-  traceback when a registry file was not UTF-8; the one `stale registries` line now lists the
-  file, marked `(not UTF-8)`. `scripts/fixture_authority.py` printed a traceback with the
-  file's path on disk when `ATP-SPEC.md` was missing, or was a directory; it now exits 1 with
-  the line `error: ATP-SPEC.md: missing`. `scripts/test_checks.py` covers each case.
+  agent card check no longer reads such a directory. `scripts/gen_registries.py --check`
+  ended with a traceback when a registry file was not UTF-8; the one `stale registries` line
+  now lists the file, marked `(not UTF-8)`. `scripts/fixture_authority.py` printed a
+  traceback with the file's path on disk when `ATP-SPEC.md` was missing, or was a directory;
+  it now exits 1 with the line `error: ATP-SPEC.md: missing`. `scripts/test_checks.py`
+  covers each case.
+- `scripts/validate_examples.py` skipped, with no message, a link in `examples/` whose name
+  ends in `.md` and whose target is not there; it is now one failure of the A2A agent card
+  check, with a line under it that names the link and says it cannot be read, not a path on
+  disk. It ended with a traceback when `schemas/` held a directory whose name ends in
+  `.schema.json`; such a directory is not read, and one in place of a schema the checks read
+  by name is that schema missing. A link in `schemas/` whose target is not there is one
+  `schema INVALID` line, and the checks do not run. It ended with a `KeyError` traceback
+  when `schemas/revocation-list-v1.schema.json` was a valid schema with no object schema for
+  an entry's `reason` at `properties.revocations.items.properties.reason` (`{"type":
+  "object"}`, for one); that is now one failure of the revocation reason check, with a line
+  under it that names the schema file, and the revocation index check, which reads the same
+  schema, still fails when the schema admits an entry Section 8.1 refuses. A `reason` schema
+  whose `anyOf` holds a boolean schema before the enum, or whose enum mixes strings with
+  other values, is compared with the Section 8.1.1 table instead of ending with a
+  `TypeError`. `scripts/gen_registries.py` ended with a traceback that printed the file's
+  path on disk when `ATP-SPEC.md` was missing or a directory, and with a
+  `UnicodeDecodeError` traceback when it was not UTF-8; in either mode it now exits 1 with
+  one line, `error: ATP-SPEC.md: missing` or `error: ATP-SPEC.md: not UTF-8: ...`.
+  `.gitignore` lists `.env`, `.env.*` (keeping `.env.example`), `secrets.json`, `*.pem` and
+  `*.key`, so a local credential file is not committed by accident. `scripts/test_checks.py`
+  covers each case.
 
 ## [1.0.0-rc1] - 2026-04-28
 
