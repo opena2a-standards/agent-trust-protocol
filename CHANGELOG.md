@@ -509,6 +509,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `error:` line that names the heading or the port, with exit status 1.
   `scripts/test_checks.py` covers each case, and fails when the fixture authority opens a
   socket before it has read its examples.
+- `scripts/validate_examples.py` ended with a traceback when
+  `registries/revocation-reasons.json` was JSON of another shape than the one
+  `scripts/gen_registries.py` writes (`{}`, `[]`, `rows` that is not a list, a row without a
+  string `Reason`); it is now one failure of the revocation reason check, with a line under
+  it that names the file and says to run `scripts/gen_registries.py`. It also ended with a
+  traceback when `examples/` held a directory whose name ends in `.md`; the A2A agent card
+  check now reads files only. `scripts/gen_registries.py --check` ended with a traceback when
+  a registry file was not UTF-8; the one `stale registries` line now lists the file, marked
+  `(not UTF-8)`. `scripts/fixture_authority.py` printed a traceback with the file's path on
+  disk when `ATP-SPEC.md` was missing, or was a directory; it now exits 1 with the line
+  `error: ATP-SPEC.md: missing`. `scripts/test_checks.py` covers each case.
 
 ## [1.0.0-rc1] - 2026-04-28
 

@@ -6,7 +6,8 @@ A table-shaped shared definition sits under a marker comment
 follows the marker is the definition, and the JSON file under registries/ is
 generated from it so consumers can pin a file by commit the way the
 conformance suites pin schemas. `--check` fails when a generated file is
-stale. python3 standard library only.
+stale, one that is missing or not UTF-8 included, with one line that names
+each such file. python3 standard library only.
 """
 from __future__ import annotations
 
@@ -82,8 +83,13 @@ def main() -> int:
         path = REGISTRIES / f"{rid}.json"
         text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
         if args.check:
-            if not path.is_file() or path.read_text(encoding="utf-8") != text:
-                stale.append(str(path.relative_to(ROOT)))
+            name = str(path.relative_to(ROOT))
+            try:
+                if not path.is_file() or path.read_text(encoding="utf-8") != text:
+                    stale.append(name)
+            except UnicodeDecodeError:
+                # No generated file holds such bytes; it is stale, and says why.
+                stale.append(f"{name} (not UTF-8)")
         else:
             REGISTRIES.mkdir(exist_ok=True)
             path.write_text(text, encoding="utf-8")

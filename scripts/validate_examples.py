@@ -296,7 +296,9 @@ NOT_A_REASON = [
 def revocation_reason_errors() -> list[str]:
     """Section 8.1.1: the revocation schema's `reason` admits the registered
     codes and the private-use grammar, and no free text. A registry file that
-    is missing, not UTF-8 or not JSON is one error that names it."""
+    is missing, not UTF-8, not JSON or not the shape gen_registries.py writes
+    (an object whose `rows` is a list of objects, each with a string `Reason`)
+    is one error that names it."""
     schema = json.loads(
         (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8")
     )
@@ -314,11 +316,19 @@ def revocation_reason_errors() -> list[str]:
     if not registry.is_file():
         return errors + [f"{name} is missing (run scripts/gen_registries.py)"]
     try:
-        rows = json.loads(registry.read_text(encoding="utf-8"))["rows"]
+        generated = json.loads(registry.read_text(encoding="utf-8"))
     except UnicodeDecodeError as exc:
         return errors + [f"{name}: not UTF-8: {exc} (run scripts/gen_registries.py)"]
     except json.JSONDecodeError as exc:
         return errors + [f"{name}: not JSON: {exc} (run scripts/gen_registries.py)"]
+    rows = generated.get("rows") if isinstance(generated, dict) else None
+    if not isinstance(rows, list) or not all(
+        isinstance(row, dict) and isinstance(row.get("Reason"), str) for row in rows
+    ):
+        return errors + [
+            f"{name}: not an object whose rows each have a string Reason "
+            "(run scripts/gen_registries.py)"
+        ]
     registered = [row["Reason"] for row in rows]
     codes = next((branch["enum"] for branch in reason.get("anyOf", []) if "enum" in branch), [])
     if sorted(codes) != sorted(registered):
@@ -647,8 +657,10 @@ RETIRED_A2A_AGENT_CARD = "agent.json"
 
 
 def agent_card_documents() -> list[pathlib.Path]:
-    """The documents a reader copies an A2A agent card path from."""
-    return [ROOT / "ATP-SPEC.md", ROOT / "README.md", *sorted((ROOT / "examples").glob("*.md"))]
+    """The documents a reader copies an A2A agent card path from. A directory
+    in examples/ whose name ends in .md is not one of them."""
+    guides = sorted(path for path in (ROOT / "examples").glob("*.md") if path.is_file())
+    return [ROOT / "ATP-SPEC.md", ROOT / "README.md", *guides]
 
 
 def agent_card_path_errors(name: str, text: str) -> list[str]:
@@ -1236,17 +1248,20 @@ def local_registry() -> Registry:
 
 
 class NoExample(Exception):
-    """The file is not UTF-8, the heading is not in it, or no closed ```json
-    block follows the heading before the next heading. The message names the
-    heading, or the decoding error, and not the file; the check that reads the
-    heading reports it as one failure and names the file as the examples map
-    does, not by its path on disk."""
+    """The file is missing or not UTF-8, the heading is not in it, or no closed
+    ```json block follows the heading before the next heading. The message
+    says the file is missing, or names the heading or the decoding error, and
+    not the file; the check that reads the heading reports it as one failure
+    and names the file as the examples map does, not by its path on disk."""
 
 
 def extract_block(md_path: pathlib.Path, heading: str) -> str:
     """The text of the first ```json block between the heading and the next
-    heading. Raises NoExample when the file is not UTF-8 or there is no such
-    heading or block."""
+    heading. Raises NoExample when the file is missing (a directory in its
+    place is not the file) or not UTF-8, or there is no such heading or
+    block."""
+    if not md_path.is_file():
+        raise NoExample("missing")
     try:
         lines = md_path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError as exc:
