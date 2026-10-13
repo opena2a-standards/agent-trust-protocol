@@ -14,9 +14,9 @@ served as the body, or an integer HTTP status served with an empty body.
 `requests` lists the method and path of every request received.
 
 Run: python3 scripts/fixture_authority.py [port]. It exits 1 with one error
-line when ATP-SPEC.md is not UTF-8, lacks one of the examples or holds one
-that is not JSON, when the port is not a number from 0 to 65535, and when it
-cannot listen on the port, as when another process holds it.
+line when ATP-SPEC.md is missing, is not UTF-8, lacks one of the examples or
+holds one that is not JSON, when the port is not a number from 0 to 65535,
+and when it cannot listen on the port, as when another process holds it.
 """
 import copy
 import json
@@ -47,15 +47,15 @@ def timestamp(when: datetime) -> str:
 
 class CannotServe(Exception):
     """The fixture authority cannot start. The message is one line that names
-    what stops it: ATP-SPEC.md and the example it lacks or holds as a block
-    that is not JSON, or the port, which is not a number from 0 to 65535 or
-    which it cannot listen on."""
+    what stops it: ATP-SPEC.md, which is missing, is not UTF-8, lacks an
+    example or holds one as a block that is not JSON, or the port, which is
+    not a number from 0 to 65535 or which it cannot listen on."""
 
 
 def spec_examples() -> dict:
     """The example each endpoint serves, keyed by endpoint name. Raises
-    CannotServe when ATP-SPEC.md is not UTF-8, lacks one of the headings or
-    its ```json block, or holds a block that is not JSON."""
+    CannotServe when ATP-SPEC.md is missing, is not UTF-8, lacks one of the
+    headings or its ```json block, or holds a block that is not JSON."""
     examples = {}
     for name, heading in EXAMPLES.items():
         try:

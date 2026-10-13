@@ -6,9 +6,8 @@ Verifiable Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the error fixture_authority.py stops with when it cannot read an example
 it serves or listen on its port, the registry generation and --check mode of
-gen_registries.py, and the
-test-suite sentences of the .pre-push-review-not-required marker. Run:
-python3 scripts/test_checks.py
+gen_registries.py, and the test-suite sentences of the
+.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import contextlib
 import copy
@@ -1934,21 +1933,26 @@ class FixtureAuthorityTest(unittest.TestCase):
     """fixture_authority.py serves examples it reads from ATP-SPEC.md. A
     specification without one of their headings, with an example that is not
     JSON, or that is not UTF-8, stops it with one error line that names the
-    file and the heading or the decoding error, not a traceback. A port that
-    is not a number from 0 to 65535, or that it cannot listen on, stops it
-    with one error line that names the port. It reads the examples before it
-    opens a socket."""
+    file and the heading or the decoding error, not a traceback. One that is
+    missing stops it with one error line that names the file and not its path
+    on disk. A port that is not a number from 0 to 65535, or that it cannot
+    listen on, stops it with one error line that names the port. It reads the
+    examples before it opens a socket."""
 
-    def run_authority(self, spec: bytes | None = None, port: str = "0"):
+    def run_authority(self, spec: bytes | None = None, port: str = "0", place=None):
         """Run fixture_authority.py on a port (a free one unless given), in a
         copy of the scripts beside an ATP-SPEC.md that holds spec (the
-        repository's unless given)."""
+        repository's unless given). When `place` is given it is called with
+        the path of ATP-SPEC.md, and no specification is written there."""
         if spec is None:
             spec = (ROOT / "ATP-SPEC.md").read_bytes()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             shutil.copytree(SCRIPTS, root / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
-            (root / "ATP-SPEC.md").write_bytes(spec)
+            if place is None:
+                (root / "ATP-SPEC.md").write_bytes(spec)
+            else:
+                place(root / "ATP-SPEC.md")
             return subprocess.run(
                 [sys.executable, "-B", str(root / "scripts" / "fixture_authority.py"), port],
                 capture_output=True,
@@ -1974,6 +1978,16 @@ class FixtureAuthorityTest(unittest.TestCase):
         self.assertTrue(run.stderr.startswith("error: ATP-SPEC.md: not UTF-8: "), run.stderr)
         self.assertIn("can't decode byte 0xe9", run.stderr)
         self.assertEqual(run.stdout, "")
+
+    def test_spec_that_is_missing_is_one_error_line(self):
+        """A specification that is not there, or a directory in its place, is
+        one line that names the file as the repository does."""
+        for name, place in (("not there", lambda path: None), ("a directory", Path.mkdir)):
+            with self.subTest(spec=name):
+                run = self.run_authority(place=place)
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(run.stderr, "error: ATP-SPEC.md: missing\n")
+                self.assertEqual(run.stdout, "")
 
     def test_example_that_is_not_json_is_one_error_line(self):
         spec = (ROOT / "ATP-SPEC.md").read_bytes()
@@ -2289,6 +2303,26 @@ class GenRegistriesTest(unittest.TestCase):
         self.assertIn("registries/trust-levels.json", err)
         self.assertIn("registries/revocation-reasons.json", err)
         self.assertNotIn("transparency-entry-types", err)
+
+    def test_check_reports_a_file_that_is_not_utf8_in_one_line(self):
+        registries = self.dir / "registries"
+        name = "registries/revocation-reasons.json"
+        with mock.patch.object(gen_registries, "ROOT", self.dir), mock.patch.object(
+            gen_registries, "REGISTRIES", registries
+        ):
+            self.assertEqual(self.run_main()[0], 0)
+            generated = (self.dir / name).read_bytes()
+            for where in ("first", "last"):
+                (self.dir / name).write_bytes(
+                    b"\xe9" + generated if where == "first" else generated + b"\xe9"
+                )
+                with self.subTest(byte=where):
+                    code, out, err = self.run_main("--check")
+                    self.assertEqual(code, 1)
+                    self.assertEqual(
+                        err, f"stale registries (run scripts/gen_registries.py): {name} (not UTF-8)\n"
+                    )
+                    self.assertEqual(out, "")
 
 
 class GuideBlocksTest(unittest.TestCase):
@@ -2782,7 +2816,9 @@ class InputFileTest(unittest.TestCase):
     entry whose schema, file, heading or ```json block is not there is one
     failure line in the count main() ends with. A Markdown file in examples/,
     the ATX example or the revocation reason registry that is not UTF-8 is one
-    failure, in the same count, of the check that reads it."""
+    failure, in the same count, of the check that reads it, as is a reason
+    registry that is not JSON or is JSON of another shape than the generated
+    one. A directory in examples/ whose name ends in .md is not read."""
 
     NOT_RUN = "the checks that read these files did not run"
     MAP = "schemas/examples-map.json"
@@ -3032,6 +3068,52 @@ class InputFileTest(unittest.TestCase):
             lambda root: (root / self.REASONS).write_text("{", encoding="utf-8"),
             self.REASONS_FAIL,
             f"{self.REASONS}: not JSON: ",
+        )
+
+    def test_revocation_reason_registry_of_another_shape_is_one_failure(self):
+        """The registry is JSON, and not an object whose `rows` is a list of
+        objects that each have a string `Reason`, as gen_registries.py writes."""
+        for content in (
+            "{}",
+            "[]",
+            "null",
+            '"rows"',
+            '{"rows": null}',
+            '{"rows": {}}',
+            '{"rows": [{}]}',
+            '{"rows": ["manual"]}',
+            '{"rows": [{"Reason": 7}]}',
+            '{"rows": [{"Reason": "manual"}, {"Since": "1.1.0"}]}',
+        ):
+            with self.subTest(content=content):
+                lines = self.assert_one_failure_naming(
+                    lambda root, content=content: (root / self.REASONS).write_text(
+                        content, encoding="utf-8"
+                    ),
+                    self.REASONS_FAIL,
+                    f"{self.REASONS}: not an object whose rows each have a string Reason ",
+                )
+                self.assertTrue(
+                    lines[lines.index(self.REASONS_FAIL) + 1].endswith("(run scripts/gen_registries.py)")
+                )
+
+    def test_directory_in_examples_named_as_a_markdown_file_is_not_read(self):
+        listed = []
+
+        def damage(root):
+            (root / "examples" / "notes.md").mkdir()
+            with mock.patch.object(validate_examples, "ROOT", root):
+                listed.extend(
+                    path.relative_to(root).as_posix()
+                    for path in validate_examples.agent_card_documents()
+                )
+
+        code, lines, failed = self.run_main(damage)
+        self.assertNotIn("examples/notes.md", listed)
+        self.assertIn("examples/a2a-integration.md", listed)
+        self.assertEqual((code, failed), (0, []), lines)
+        self.assertIn(
+            "card OK        ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path", lines
         )
 
     def test_section_4_3_1_heading_that_is_not_in_the_spec_is_one_failure(self):
