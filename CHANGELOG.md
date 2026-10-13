@@ -462,11 +462,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   run with an `error:` line that carried the file's path on disk and no failure count. That
   heading, and a heading with no closed `json` code block before the next heading, is now
   one `example FAIL` line that names the file as the map does; the other entries are still
-  validated and the run ends with its count. A Section 4.3.1 heading that is not in the
-  specification is one failure of the co-signature check too. The link check also reports
-  the web-editor address (`github.dev/`) of a repository that is not public and a `gh api`
-  command whose endpoint (`repos/<name>`) names one, with or without a leading slash, quotes
-  or flags before the endpoint; an endpoint on a continuation line is not read.
+  validated and the run ends with its count. The link check also reports the web-editor
+  address (`github.dev/`) of a repository that is not public and a `gh api` command whose
+  endpoint (`repos/<name>`) names one, with or without a leading slash, quotes or flags
+  before the endpoint; an endpoint on a continuation line is not read.
   `scripts/test_checks.py` covers each case and an examples map that is not UTF-8, fails
   when a section's example is no longer its first `json` code block or a heading label no
   longer keeps its first section, and bounds the two linear-time checks by the ratio of CPU
@@ -497,6 +496,19 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   run counts it once. The link check also reports the `vscode.dev/github/` address of a
   repository that is not public, and a `github.dev` address with a port.
   `scripts/test_checks.py` covers each case.
+- `scripts/validate_examples.py` ended with a traceback when one of these files was not
+  UTF-8: a Markdown file in `examples/` (read by the A2A agent card check),
+  `examples/atx-example.json` (the ATX check) or `registries/revocation-reasons.json` (the
+  revocation reason check). Each is now one counted failure of its check, with a line under
+  it that names the file, and the other checks run. When the ATX example is not UTF-8 the
+  Verifiable Credential form is reported as not compared. A reason registry that is not
+  JSON, which also ended the run with a traceback, is one failure of its check too.
+  `scripts/fixture_authority.py` printed a traceback when an example it serves was not
+  JSON, when its port argument was not a number from 0 to 65535 (`--help`, for one) and
+  when it could not listen on the port because another process held it; each is now one
+  `error:` line that names the heading or the port, with exit status 1.
+  `scripts/test_checks.py` covers each case, and fails when the fixture authority opens a
+  socket before it has read its examples.
 
 ## [1.0.0-rc1] - 2026-04-28
 

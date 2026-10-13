@@ -13,8 +13,10 @@ names below; a value is a function that edits the example in place, a string
 served as the body, or an integer HTTP status served with an empty body.
 `requests` lists the method and path of every request received.
 
-Run: python3 scripts/fixture_authority.py [port]. When ATP-SPEC.md is not
-UTF-8 or lacks one of the examples, it exits 1 with one error line.
+Run: python3 scripts/fixture_authority.py [port]. It exits 1 with one error
+line when ATP-SPEC.md is not UTF-8, lacks one of the examples or holds one
+that is not JSON, when the port is not a number from 0 to 65535, and when it
+cannot listen on the port, as when another process holds it.
 """
 import copy
 import json
@@ -43,14 +45,28 @@ def timestamp(when: datetime) -> str:
     return when.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+class CannotServe(Exception):
+    """The fixture authority cannot start. The message is one line that names
+    what stops it: ATP-SPEC.md and the example it lacks or holds as a block
+    that is not JSON, or the port, which is not a number from 0 to 65535 or
+    which it cannot listen on."""
+
+
 def spec_examples() -> dict:
     """The example each endpoint serves, keyed by endpoint name. Raises
-    validate_examples.NoExample when ATP-SPEC.md is not UTF-8 or lacks one of
-    the headings or its ```json block."""
-    return {
-        name: json.loads(validate_examples.extract_block(SPEC, heading))
-        for name, heading in EXAMPLES.items()
-    }
+    CannotServe when ATP-SPEC.md is not UTF-8, lacks one of the headings or
+    its ```json block, or holds a block that is not JSON."""
+    examples = {}
+    for name, heading in EXAMPLES.items():
+        try:
+            examples[name] = json.loads(validate_examples.extract_block(SPEC, heading))
+        except validate_examples.NoExample as exc:
+            raise CannotServe(f"ATP-SPEC.md: {exc}") from None
+        except json.JSONDecodeError as exc:
+            raise CannotServe(
+                f"ATP-SPEC.md: the ```json block after {heading!r} is not JSON: {exc}"
+            ) from None
+    return examples
 
 
 class FixtureAuthority(ThreadingHTTPServer):
@@ -59,7 +75,10 @@ class FixtureAuthority(ThreadingHTTPServer):
     def __init__(self, port: int = 0):
         # Read first, so a specification without an example leaves no socket open.
         examples = spec_examples()
-        super().__init__(("127.0.0.1", port), Handler)
+        try:
+            super().__init__(("127.0.0.1", port), Handler)
+        except OSError as exc:
+            raise CannotServe(f"port {port}: {exc.strerror or exc}") from None
         self.examples = examples
         self.overrides = {}
         self.requests = []
@@ -131,10 +150,26 @@ def serve(port: int = 0) -> FixtureAuthority:
     return authority
 
 
+def port_number(text: str) -> int:
+    """The port a command-line argument names. Raises CannotServe when it is
+    not a number from 0 to 65535."""
+    try:
+        port = int(text)
+    except ValueError:
+        # Not a number, or one with more digits than int() reads.
+        port = -1
+    if not 0 <= port <= 65535:
+        raise CannotServe(
+            f"port {text!r} is not a number from 0 to 65535; "
+            "run: python3 scripts/fixture_authority.py [port]"
+        )
+    return port
+
+
 if __name__ == "__main__":
     try:
-        authority = FixtureAuthority(int(sys.argv[1]) if len(sys.argv) > 1 else 8080)
-    except validate_examples.NoExample as exc:
-        sys.exit(f"error: ATP-SPEC.md: {exc}")
+        authority = FixtureAuthority(port_number(sys.argv[1] if len(sys.argv) > 1 else "8080"))
+    except CannotServe as exc:
+        sys.exit(f"error: {exc}")
     print(f"fixture authority at {authority.url}")
     authority.serve_forever()
