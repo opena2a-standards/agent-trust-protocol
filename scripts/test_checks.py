@@ -2983,6 +2983,25 @@ class InputFileTest(unittest.TestCase):
                 )
                 self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
 
+    def test_link_in_schemas_whose_target_is_missing_is_not_in_the_registry(self):
+        """listed_files() lists the link so main() can report it; local_registry()
+        is built from the schemas that are there, without the link and without
+        a traceback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(ROOT / "schemas", root / "schemas")
+            with mock.patch.object(validate_examples, "ROOT", root):
+                expected = sorted(validate_examples.local_registry())
+                link = root / "schemas" / "zz.schema.json"
+                link.symlink_to("missing.schema.json")
+                self.assertIn(link, validate_examples.listed_files(root / "schemas", "*.schema.json"))
+                registered = sorted(validate_examples.local_registry())
+        self.assertEqual(registered, expected)
+        self.assertIn(
+            json.loads((ROOT / "schemas" / "revocation-list-v1.schema.json").read_text())["$id"],
+            registered,
+        )
+
     def test_examples_map_that_is_not_a_list_of_entries_is_one_failure_line(self):
         for content, reason in (
             ("{", "not JSON: "),
