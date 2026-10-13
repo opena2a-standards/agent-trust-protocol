@@ -2324,6 +2324,42 @@ class GenRegistriesTest(unittest.TestCase):
                     )
                     self.assertEqual(out, "")
 
+    def test_spec_that_is_missing_or_not_utf8_is_one_line(self):
+        """In either mode, a specification that is not there, a directory in
+        its place, or one that is not UTF-8 is one line that names ATP-SPEC.md
+        and not its path on disk, and no registry is written."""
+        spec = (ROOT / "ATP-SPEC.md").read_bytes()
+        cases = (
+            ("not there", lambda path: None, "error: ATP-SPEC.md: missing\n"),
+            ("a directory", Path.mkdir, "error: ATP-SPEC.md: missing\n"),
+            ("not UTF-8", lambda path: path.write_bytes(spec + b"\xe9"), None),
+        )
+        for name, place, expected in cases:
+            for mode in (["--check"], []):
+                with self.subTest(spec=name, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    shutil.copytree(
+                        SCRIPTS, root / "scripts", ignore=shutil.ignore_patterns("__pycache__")
+                    )
+                    place(root / "ATP-SPEC.md")
+                    run = subprocess.run(
+                        [sys.executable, "-B", str(root / "scripts" / "gen_registries.py"), *mode],
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(run.returncode, 1, run.stderr)
+                    self.assertEqual(run.stdout, "")
+                    if expected is None:
+                        self.assertTrue(
+                            run.stderr.startswith("error: ATP-SPEC.md: not UTF-8: "), run.stderr
+                        )
+                        self.assertIn("can't decode byte 0xe9", run.stderr)
+                        self.assertEqual(len(run.stderr.splitlines()), 1, run.stderr)
+                    else:
+                        self.assertEqual(run.stderr, expected)
+                    self.assertNotIn(tmp, run.stderr)
+                    self.assertFalse((root / "registries").exists())
+
 
 class GuideBlocksTest(unittest.TestCase):
     """check_guides.py runs the blocks of the integration guides and of
@@ -2818,7 +2854,11 @@ class InputFileTest(unittest.TestCase):
     the ATX example or the revocation reason registry that is not UTF-8 is one
     failure, in the same count, of the check that reads it, as is a reason
     registry that is not JSON or is JSON of another shape than the generated
-    one. A directory in examples/ whose name ends in .md is not read."""
+    one, a link in examples/ whose name ends in .md and whose target is not
+    there, and a revocation schema with no object schema for an entry's
+    reason. A directory in examples/ whose name ends in .md, or in schemas/
+    whose name ends in .schema.json, is not read; a link in schemas/ whose
+    target is not there is one failure line."""
 
     NOT_RUN = "the checks that read these files did not run"
     MAP = "schemas/examples-map.json"
@@ -2892,6 +2932,55 @@ class InputFileTest(unittest.TestCase):
                 code, lines, failed = self.run_main(lambda root, path=path: (root / path).unlink())
                 self.assertEqual(code, 1)
                 self.assertEqual(failed, [f"schema FAIL    {path}: missing"], lines)
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_directory_in_schemas_named_as_a_schema_is_not_read(self):
+        """A directory whose name ends in .schema.json is not a schema. One in
+        place of a schema read by name is that schema missing, once."""
+        registered = []
+
+        def damage(root):
+            (root / "schemas" / "notes.schema.json").mkdir()
+            with mock.patch.object(validate_examples, "ROOT", root):
+                registered.extend(validate_examples.local_registry())
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual((code, failed), (0, []), lines)
+        self.assertEqual([line for line in lines if "notes.schema.json" in line], [])
+        self.assertIn(
+            json.loads((ROOT / "schemas" / "revocation-list-v1.schema.json").read_text())["$id"],
+            registered,
+        )
+        for path in validate_examples.SCHEMAS_READ_BY_NAME:
+            with self.subTest(path=path):
+
+                def replace(root, path=path):
+                    (root / path).unlink()
+                    (root / path).mkdir()
+
+                code, lines, failed = self.run_main(replace)
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"schema FAIL    {path}: missing"], lines)
+                self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
+
+    def test_link_in_schemas_whose_target_is_missing_is_one_failure_line(self):
+        """The link is listed with the schemas and is one line that names it,
+        not a traceback with its path on disk; a schema read by name is not
+        also reported missing."""
+        for path in ("schemas/notes.schema.json", *validate_examples.SCHEMAS_READ_BY_NAME):
+            with self.subTest(path=path):
+
+                def damage(root, path=path):
+                    (root / path).unlink(missing_ok=True)
+                    (root / path).symlink_to("missing.schema.json")
+
+                code, lines, failed = self.run_main(damage)
+                self.assertEqual(code, 1)
+                self.assertEqual(
+                    failed,
+                    [f"schema INVALID {path}: cannot be read: No such file or directory"],
+                    lines,
+                )
                 self.assertEqual(lines[-1], f"1 failure(s); {self.NOT_RUN}")
 
     def test_examples_map_that_is_not_a_list_of_entries_is_one_failure_line(self):
@@ -3114,6 +3203,78 @@ class InputFileTest(unittest.TestCase):
         self.assertEqual((code, failed), (0, []), lines)
         self.assertIn(
             "card OK        ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path", lines
+        )
+
+    def test_link_in_examples_whose_target_is_missing_is_one_failure(self):
+        """A link whose name ends in .md and whose target is not there is one
+        failure of the A2A agent card check that names it, and not its path
+        on disk."""
+        lines = self.assert_one_failure_naming(
+            lambda root: (root / "examples" / "zz.md").symlink_to("missing.md"),
+            self.CARD_FAIL,
+            "examples/zz.md: cannot be read: No such file or directory",
+        )
+        self.assertEqual([line for line in lines if "missing.md" in line], [])
+
+    REASON_SCHEMA = "schemas/revocation-list-v1.schema.json"
+    REASON_SCHEMA_PATH = "properties.revocations.items.properties.reason"
+
+    def test_revocation_schema_of_another_shape_is_one_failure_of_the_reason_check(self):
+        """A valid schema with no object schema for an entry's reason, at
+        properties.revocations.items.properties.reason, is one line under the
+        reason check that names the schema file. The index check reads the
+        same schema and fails on its own terms where the shape admits what
+        Section 8.1 refuses."""
+        schema = json.loads((ROOT / self.REASON_SCHEMA).read_text(encoding="utf-8"))
+        reason_true = copy.deepcopy(schema)
+        reason_true["properties"]["revocations"]["items"]["properties"]["reason"] = True
+        items_true = copy.deepcopy(schema)
+        items_true["properties"]["revocations"]["items"] = True
+        no_revocations = copy.deepcopy(schema)
+        del no_revocations["properties"]["revocations"]
+        for name, content in (
+            ("an object schema", {"type": "object"}),
+            ("reason is true", reason_true),
+            ("items is true", items_true),
+            ("no revocations member", no_revocations),
+        ):
+            with self.subTest(schema=name):
+                code, lines, failed = self.run_main(
+                    lambda root, content=content: (root / self.REASON_SCHEMA).write_text(
+                        json.dumps(content), encoding="utf-8"
+                    )
+                )
+                self.assertEqual(code, 1)
+                self.assertIn(self.REASONS_FAIL, failed, lines)
+                at = lines.index(self.REASONS_FAIL)
+                self.assertEqual(
+                    lines[at + 1],
+                    f"    {self.REASON_SCHEMA}: no object schema at {self.REASON_SCHEMA_PATH}, "
+                    "an entry's reason",
+                )
+                self.assertFalse(lines[at + 2].startswith("    "), lines)
+                self.assertIn("example OK     ATP-SPEC.md @ '### 4.2 Trust Proof Format'", lines)
+                if content is reason_true:
+                    # Entries keep their required members, so only the reason check fails.
+                    self.assertEqual(failed, [self.REASONS_FAIL], lines)
+
+    def test_revocation_reason_with_a_boolean_branch_is_compared(self):
+        """A `false` branch before the enum and an enum value that is not a
+        string are compared with the Section 8.1.1 table, not a traceback."""
+        schema = json.loads((ROOT / self.REASON_SCHEMA).read_text(encoding="utf-8"))
+        schema["properties"]["revocations"]["items"]["properties"]["reason"] = {
+            "anyOf": [False, {"enum": ["manual", 1]}]
+        }
+        code, lines, failed = self.run_main(
+            lambda root: (root / self.REASON_SCHEMA).write_text(json.dumps(schema), encoding="utf-8")
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(self.REASONS_FAIL, failed, lines)
+        self.assertIn("    private-use reason 'x-private_use' is refused", lines)
+        self.assertTrue(
+            any(line.startswith("    schema codes [1, 'manual'] differ from the Section 8.1.1 table ")
+                for line in lines),
+            lines,
         )
 
     def test_section_4_3_1_heading_that_is_not_in_the_spec_is_one_failure(self):

@@ -7,7 +7,9 @@ follows the marker is the definition, and the JSON file under registries/ is
 generated from it so consumers can pin a file by commit the way the
 conformance suites pin schemas. `--check` fails when a generated file is
 stale, one that is missing or not UTF-8 included, with one line that names
-each such file. python3 standard library only.
+each such file. A specification that is missing (a directory in its place
+is not the file) or not UTF-8 stops either mode with one line that names it.
+python3 standard library only.
 """
 from __future__ import annotations
 
@@ -55,7 +57,13 @@ def table_after_marker(lines: list, marker: str) -> tuple:
 
 
 def generate() -> dict:
-    lines = SPEC.read_text(encoding="utf-8").split("\n")
+    # One line that names the specification, not a traceback with its path on disk.
+    if not SPEC.is_file():
+        raise SystemExit(f"error: {SPEC.name}: missing")
+    try:
+        lines = SPEC.read_text(encoding="utf-8").split("\n")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"error: {SPEC.name}: not UTF-8: {exc}") from None
     out = {}
     for rid, cfg in TABLES.items():
         headers, rows = table_after_marker(lines, f"<!-- opena2a-definition: {rid} -->")
