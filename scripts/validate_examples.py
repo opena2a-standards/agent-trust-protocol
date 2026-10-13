@@ -22,11 +22,13 @@ step 5, the Section 10.2 24-hour maximum), and the Verifiable Credential form
 of the ATX example must be the Section 4.6 mapping table applied to
 examples/atx-example.json, member for member. The table is read from the
 specification, so the table, the example and the schema cannot drift apart. An
-ATX example that is missing or not a JSON object is the ATX check's failure
-(below); the form is then reported as not compared, not as a second failure.
+ATX example that is missing, not UTF-8 or not a JSON object is the ATX check's
+failure (below); the form is then reported as not compared, not as a second
+failure.
 
 The revocation schema's `reason` is checked against the Section 8.1.1 registry:
-its codes are the table's, and free text is refused.
+its codes are the table's, and free text is refused. A registry file that is
+missing, not UTF-8 or not JSON is one failure of this check.
 
 The revocation schema admits an entry without `transparencyLogIndex` (Section
 8.1: an identity revoked before the authority logged anything for it), refuses
@@ -56,7 +58,8 @@ requests the Section 7.1 normative path `/.well-known/atp`; the legacy
 
 ATP-SPEC.md, README.md and every examples/*.md place the A2A agent card at
 `/.well-known/agent-card.json`, the path the A2A specification names; the
-retired `/.well-known/agent.json` fails in prose and in code alike.
+retired `/.well-known/agent.json` fails in prose and in code alike. An
+examples/*.md file that is not UTF-8 is one failure of this check.
 
 The README states signing as Section 4.3 does: Ed25519 is required and ML-DSA-65
 is the second signature of the optional hybrid mode, so a README sentence that
@@ -182,13 +185,15 @@ class SourceUnusable(Exception):
 
 def atx_example() -> dict:
     """examples/atx-example.json as an object. A file that is missing, not
-    JSON or not an object raises SourceUnusable; atx_status_errors reports
-    each of those."""
+    UTF-8, not JSON or not an object raises SourceUnusable; atx_status_errors
+    reports each of those."""
     path = ROOT / ATX_EXAMPLE
     if not path.is_file():
         raise SourceUnusable(f"{ATX_EXAMPLE} is missing")
     try:
         atx = json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        raise SourceUnusable(f"{ATX_EXAMPLE} is not UTF-8") from None
     except json.JSONDecodeError:
         raise SourceUnusable(f"{ATX_EXAMPLE} is not JSON") from None
     if not isinstance(atx, dict):
@@ -290,7 +295,8 @@ NOT_A_REASON = [
 
 def revocation_reason_errors() -> list[str]:
     """Section 8.1.1: the revocation schema's `reason` admits the registered
-    codes and the private-use grammar, and no free text."""
+    codes and the private-use grammar, and no free text. A registry file that
+    is missing, not UTF-8 or not JSON is one error that names it."""
     schema = json.loads(
         (ROOT / "schemas" / "revocation-list-v1.schema.json").read_text(encoding="utf-8")
     )
@@ -304,9 +310,16 @@ def revocation_reason_errors() -> list[str]:
     if not validator.is_valid("x-private_use"):
         errors.append("private-use reason 'x-private_use' is refused")
     registry = ROOT / "registries" / "revocation-reasons.json"
+    name = registry.relative_to(ROOT).as_posix()
     if not registry.is_file():
-        return errors + [f"{registry.relative_to(ROOT)} is missing (run scripts/gen_registries.py)"]
-    registered = [row["Reason"] for row in json.loads(registry.read_text(encoding="utf-8"))["rows"]]
+        return errors + [f"{name} is missing (run scripts/gen_registries.py)"]
+    try:
+        rows = json.loads(registry.read_text(encoding="utf-8"))["rows"]
+    except UnicodeDecodeError as exc:
+        return errors + [f"{name}: not UTF-8: {exc} (run scripts/gen_registries.py)"]
+    except json.JSONDecodeError as exc:
+        return errors + [f"{name}: not JSON: {exc} (run scripts/gen_registries.py)"]
+    registered = [row["Reason"] for row in rows]
     codes = next((branch["enum"] for branch in reason.get("anyOf", []) if "enum" in branch), [])
     if sorted(codes) != sorted(registered):
         errors.append(
@@ -741,13 +754,15 @@ def status_table(text: str, heading: str) -> dict[str, tuple[int, str]] | None:
     return {cells[0]: (number, cells[1] if len(cells) > 1 else "") for number, cells in table[2:]}
 
 
-def atx_status_errors(spec: str, readme: str, example: str | None, schema: str) -> list[str]:
+def atx_status_errors(
+    spec: str, readme: str, example: str | bytes | None, schema: str
+) -> list[str]:
     """Section 4.6 is the one home of the ATX field statuses. The README table
     restates its rows with the same status, the example file shows every ATX
     v1.1 field, the trust-proof schema describes an ATX v1.1 member as ATX
     v1.1, and no file labels a v1.1 field with the retired "Proposed" status.
-    An example that is missing (None) or not JSON is one error, not one per
-    field."""
+    The example is the file's text, or its bytes as read. An example that is
+    missing (None), not UTF-8 or not JSON is one error, not one per field."""
     spec_rows = status_table(spec, SPEC_ATX_HEADING)
     if not spec_rows:
         return [f"ATP-SPEC.md: no schema table under {SPEC_ATX_HEADING!r}"]
@@ -779,8 +794,14 @@ def atx_status_errors(spec: str, readme: str, example: str | None, schema: str) 
         )
     else:
         try:
+            if isinstance(example, bytes):
+                example = example.decode("utf-8")
             example_doc = json.loads(example)
             parsed = True
+        except UnicodeDecodeError as exc:
+            errors.append(f"examples/atx-example.json: not UTF-8: {exc}")
+            # No text to read for a "Proposed" label below.
+            example = None
         except json.JSONDecodeError as exc:
             errors.append(f"examples/atx-example.json: not JSON: {exc}")
     if parsed:
@@ -1425,7 +1446,7 @@ def main() -> int:
     atx_errors = atx_status_errors(
         spec,
         readme,
-        example_path.read_text(encoding="utf-8") if example_path.is_file() else None,
+        example_path.read_bytes() if example_path.is_file() else None,
         (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8"),
     )
     if atx_errors:
@@ -1490,13 +1511,13 @@ def main() -> int:
         else:
             print(f"federation OK  {doc} vs Section 6")
 
-    card_errors = [
-        err
-        for doc in agent_card_documents()
-        for err in agent_card_path_errors(
-            doc.relative_to(ROOT).as_posix(), doc.read_text(encoding="utf-8")
-        )
-    ]
+    card_errors = []
+    for doc in agent_card_documents():
+        name = doc.relative_to(ROOT).as_posix()
+        try:
+            card_errors += agent_card_path_errors(name, doc.read_text(encoding="utf-8"))
+        except UnicodeDecodeError as exc:
+            card_errors.append(f"{name}: not UTF-8: {exc}")
     if card_errors:
         print("card FAIL      ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
         for err in card_errors:

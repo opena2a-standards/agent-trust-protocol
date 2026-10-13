@@ -5,7 +5,8 @@ signed timestamp, ATX status, fixture coverage, A2A agent card path and
 Verifiable Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the error fixture_authority.py stops with when it cannot read an example
-it serves, the registry generation and --check mode of gen_registries.py, and the
+it serves or listen on its port, the registry generation and --check mode of
+gen_registries.py, and the
 test-suite sentences of the .pre-push-review-not-required marker. Run:
 python3 scripts/test_checks.py
 """
@@ -1330,8 +1331,9 @@ class VerifiableCredentialFormTest(unittest.TestCase):
 
     def main_in_tree(self, examples):
         """Run main() in a copy of the repository whose examples directory
-        holds only `examples` (file name to text). Returns the exit code, the
-        output lines and those of them that report a failure."""
+        holds only `examples` (file name to text, or to bytes for a file that
+        is not UTF-8). Returns the exit code, the output lines and those of
+        them that report a failure."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ("README.md", "ATP-SPEC.md"):
@@ -1340,7 +1342,8 @@ class VerifiableCredentialFormTest(unittest.TestCase):
                 shutil.copytree(ROOT / directory, root / directory)
             (root / "examples").mkdir()
             for name, text in examples.items():
-                (root / "examples" / name).write_text(text, encoding="utf-8")
+                content = text if isinstance(text, bytes) else text.encode("utf-8")
+                (root / "examples" / name).write_bytes(content)
             out = io.StringIO()
             with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
                 code = validate_examples.main()
@@ -1365,6 +1368,7 @@ class VerifiableCredentialFormTest(unittest.TestCase):
         vc = (ROOT / "examples" / "atx-vc-example.json").read_text(encoding="utf-8")
         for state, text in (
             ("is missing", None),
+            ("is not UTF-8", b"\xe9" + atx.encode("utf-8")),
             ("is not JSON", atx.rstrip().rstrip("}")),
             ("is not a JSON object", "[]"),
         ):
@@ -1928,19 +1932,25 @@ class SetupErrorTest(unittest.TestCase):
 
 class FixtureAuthorityTest(unittest.TestCase):
     """fixture_authority.py serves examples it reads from ATP-SPEC.md. A
-    specification without one of their headings, or that is not UTF-8, stops
-    it with one error line that names the file and the heading or the decoding
-    error, not a traceback."""
+    specification without one of their headings, with an example that is not
+    JSON, or that is not UTF-8, stops it with one error line that names the
+    file and the heading or the decoding error, not a traceback. A port that
+    is not a number from 0 to 65535, or that it cannot listen on, stops it
+    with one error line that names the port. It reads the examples before it
+    opens a socket."""
 
-    def run_authority(self, spec: bytes):
-        """Run fixture_authority.py on a free port, in a copy of the scripts
-        beside an ATP-SPEC.md that holds spec."""
+    def run_authority(self, spec: bytes | None = None, port: str = "0"):
+        """Run fixture_authority.py on a port (a free one unless given), in a
+        copy of the scripts beside an ATP-SPEC.md that holds spec (the
+        repository's unless given)."""
+        if spec is None:
+            spec = (ROOT / "ATP-SPEC.md").read_bytes()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             shutil.copytree(SCRIPTS, root / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
             (root / "ATP-SPEC.md").write_bytes(spec)
             return subprocess.run(
-                [sys.executable, "-B", str(root / "scripts" / "fixture_authority.py"), "0"],
+                [sys.executable, "-B", str(root / "scripts" / "fixture_authority.py"), port],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -1964,6 +1974,77 @@ class FixtureAuthorityTest(unittest.TestCase):
         self.assertTrue(run.stderr.startswith("error: ATP-SPEC.md: not UTF-8: "), run.stderr)
         self.assertIn("can't decode byte 0xe9", run.stderr)
         self.assertEqual(run.stdout, "")
+
+    def test_example_that_is_not_json_is_one_error_line(self):
+        spec = (ROOT / "ATP-SPEC.md").read_bytes()
+        fence = b"```json\n"
+        for heading in fixture_authority.EXAMPLES.values():
+            # One line that is not JSON, after the fence that opens the example.
+            at = spec.index(fence, spec.index(f"\n{heading}\n".encode("utf-8"))) + len(fence)
+            with self.subTest(heading=heading):
+                run = self.run_authority(spec[:at] + b"not json,\n" + spec[at:])
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(len(run.stderr.splitlines()), 1, run.stderr)
+                self.assertTrue(
+                    run.stderr.startswith(
+                        f"error: ATP-SPEC.md: the ```json block after {heading!r} is not JSON: "
+                    ),
+                    run.stderr,
+                )
+                self.assertEqual(run.stdout, "")
+
+    def test_port_that_is_not_a_port_number_is_one_error_line(self):
+        for port in ("--help", "-h", "http", "80.5", "", "-1", "65536", "9" * 5000):
+            with self.subTest(port=port[:8]):
+                run = self.run_authority(port=port)
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(
+                    run.stderr,
+                    f"error: port {port!r} is not a number from 0 to 65535; "
+                    "run: python3 scripts/fixture_authority.py [port]\n",
+                )
+                self.assertEqual(run.stdout, "")
+
+    def test_port_another_process_holds_is_one_error_line(self):
+        with socket.socket() as holder:
+            holder.bind(("127.0.0.1", 0))
+            holder.listen()
+            port = holder.getsockname()[1]
+            run = self.run_authority(port=str(port))
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertEqual(run.stderr, f"error: port {port}: Address already in use\n")
+        self.assertEqual(run.stdout, "")
+
+    def test_spec_without_an_example_leaves_no_socket_open(self):
+        """FixtureAuthority reads the examples before it opens a socket, so a
+        specification without one of them leaves none open."""
+        opened = []
+
+        class Recorded(socket.socket):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                opened.append(self)
+
+        def close_opened():
+            for sock in opened:
+                sock.close()
+
+        self.addCleanup(close_opened)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(socket, "socket", Recorded):
+            spec = Path(tmp) / "ATP-SPEC.md"
+            spec.write_text("# A specification without an example\n", encoding="utf-8")
+            with mock.patch.object(fixture_authority, "SPEC", spec):
+                with self.assertRaises(fixture_authority.CannotServe) as raised:
+                    fixture_authority.FixtureAuthority()
+            self.assertEqual(
+                str(raised.exception),
+                f"ATP-SPEC.md: heading {fixture_authority.EXAMPLES['discovery']!r} not found",
+            )
+            self.assertEqual([sock for sock in opened if sock.fileno() != -1], [])
+            # An authority that starts opens one, so the list above reads what is opened.
+            authority = fixture_authority.FixtureAuthority()
+            self.addCleanup(authority.server_close)
+            self.assertEqual([sock.fileno() for sock in opened], [authority.fileno()])
 
 
 # Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
@@ -2474,6 +2555,25 @@ class AtxStatusTest(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertTrue(errors[0].startswith("examples/atx-example.json: not JSON: "), errors[0])
 
+    def test_example_that_is_not_utf8_is_one_error(self):
+        files = self.files()
+        for example in (
+            b"\xe9" + files["example"].encode("utf-8"),
+            files["example"].encode("utf-8") + b"\xe9",
+        ):
+            with self.subTest(example=example[:1] + example[-1:]):
+                errors = validate_examples.atx_status_errors(**{**files, "example": example})
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(
+                    errors[0].startswith("examples/atx-example.json: not UTF-8: "), errors[0]
+                )
+                self.assertIn("can't decode byte 0xe9", errors[0])
+
+    def test_example_given_as_utf8_bytes_passes(self):
+        files = self.files()
+        files["example"] = files["example"].encode("utf-8")
+        self.assertEqual(validate_examples.atx_status_errors(**files), [])
+
     def test_example_that_is_json_but_not_an_object_is_one_error_per_v1_1_field(self):
         files = self.files()
         fields = [
@@ -2680,7 +2780,9 @@ class InputFileTest(unittest.TestCase):
     failure line, and main() returns without running any check. Each of those
     checks reads one or more of these files; none reads all of them. A map
     entry whose schema, file, heading or ```json block is not there is one
-    failure line in the count main() ends with."""
+    failure line in the count main() ends with. A Markdown file in examples/,
+    the ATX example or the revocation reason registry that is not UTF-8 is one
+    failure, in the same count, of the check that reads it."""
 
     NOT_RUN = "the checks that read these files did not run"
     MAP = "schemas/examples-map.json"
@@ -2884,6 +2986,53 @@ class InputFileTest(unittest.TestCase):
                 self.assertIn("can't decode byte 0xe9", failed[0])
                 self.assertIn("example OK     ATP-SPEC.md @ '### 4.2 Trust Proof Format'", lines)
                 self.assertEqual(lines[-1], "1 failure(s)")
+
+    CARD_FAIL = "card FAIL      ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path"
+    ATX_FAIL = "atx FAIL       README.md, example and schema vs Section 4.6"
+    REASONS_FAIL = "reasons FAIL   schemas/revocation-list-v1.schema.json vs Section 8.1.1"
+    REASONS = "registries/revocation-reasons.json"
+
+    def assert_one_failure_naming(self, damage, failure, detail):
+        """main() counts one failure, the check `failure` names, and the one
+        line under it starts with `detail`. The mapped examples still pass."""
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [failure], lines)
+        at = lines.index(failure)
+        self.assertTrue(lines[at + 1].startswith(f"    {detail}"), lines[at + 1])
+        self.assertFalse(lines[at + 2].startswith("    "), lines)
+        self.assertIn("example OK     ATP-SPEC.md @ '### 4.2 Trust Proof Format'", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+        return lines
+
+    def test_file_one_check_reads_that_is_not_utf8_is_one_failure(self):
+        """A Markdown file in examples/, the ATX example and the revocation
+        reason registry are not entries of the examples map; the A2A agent
+        card check, the ATX check and the revocation reason check read them.
+        One that is not UTF-8 is one failure of its check, with a line under
+        it that names the file, and the other checks run."""
+        guides = sorted(path.name for path in (ROOT / "examples").glob("*.md"))
+        self.assertIn("a2a-integration.md", guides)
+        cases = [(f"examples/{guide}", self.CARD_FAIL) for guide in guides]
+        cases += [("examples/atx-example.json", self.ATX_FAIL), (self.REASONS, self.REASONS_FAIL)]
+        for name, failure in cases:
+            for where in ("first", "last"):
+                def damage(root, name=name, where=where):
+                    content = (root / name).read_bytes()
+                    (root / name).write_bytes(
+                        b"\xe9" + content if where == "first" else content + b"\xe9"
+                    )
+
+                with self.subTest(name=name, byte=where):
+                    lines = self.assert_one_failure_naming(damage, failure, f"{name}: not UTF-8: ")
+                    self.assertIn("can't decode byte 0xe9", lines[lines.index(failure) + 1])
+
+    def test_revocation_reason_registry_that_is_not_json_is_one_failure(self):
+        self.assert_one_failure_naming(
+            lambda root: (root / self.REASONS).write_text("{", encoding="utf-8"),
+            self.REASONS_FAIL,
+            f"{self.REASONS}: not JSON: ",
+        )
 
     def test_section_4_3_1_heading_that_is_not_in_the_spec_is_one_failure(self):
         """The examples map reports the heading, so the co-signature check is not
