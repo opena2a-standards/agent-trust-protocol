@@ -1393,10 +1393,17 @@ class VerifiableCredentialFormTest(unittest.TestCase):
 
     def test_readme_claim_points_at_the_mapping(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        claims = [line for line in readme.splitlines() if "vc-data-model-2.0" in line]
+        # The claim is in the Interoperability list, which docs/interoperability.md holds.
+        interop = (ROOT / "docs" / "interoperability.md").read_text(encoding="utf-8")
+        claims = [
+            line
+            for text in (readme, interop)
+            for line in text.splitlines()
+            if "vc-data-model-2.0" in line
+        ]
         self.assertEqual(len(claims), 1)
         self.assertNotIn("structurally compatible", claims[0])
-        self.assertIn("(#verifiable-credential-form)", claims[0])
+        self.assertIn("(../README.md#verifiable-credential-form)", claims[0])
         self.assertIn("\n### Verifiable Credential form\n", readme)
         self.assertIn("(./ATP-SPEC.md#verifiable-credential-form)", readme)
         spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
