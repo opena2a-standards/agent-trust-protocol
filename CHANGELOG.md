@@ -553,6 +553,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `.gitignore` lists `.env`, `.env.*` (keeping `.env.example`), `secrets.json`, `*.pem` and
   `*.key`, so a local credential file is not committed by accident. `scripts/test_checks.py`
   covers each case.
+- `scripts/test_checks.py` also covers `local_registry()` in `scripts/validate_examples.py`
+  when `schemas/` holds a link whose target is not there: `listed_files()` lists the link,
+  and the registry holds the same schemas as it does without the link, so a
+  `local_registry()` that reads the link fails a test.
 
 ## [1.0.0-rc1] - 2026-04-28
 
