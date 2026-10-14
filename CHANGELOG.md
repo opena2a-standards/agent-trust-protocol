@@ -185,6 +185,16 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   registered `agent` type (`a2a_agent` documented as a deprecated legacy
   alias); the type list now defers to the did-method-opena2a registry; the two
   leftover `did:atp` references from v1.0.0-draft corrected to `did:opena2a`.
+- README shortened to eight sections, with no dated observation or fixture count in its
+  text and no version beside the link in its Specification section; its reference text
+  moved, as written. The
+  Interoperability list is in `docs/interoperability.md`; the dated observations, the fixture
+  counts, the background of the revocation fixture's free-text `reason` and the full Why ATX
+  paragraph are in `docs/use-cases.md`; the recorded reference authority response is in
+  `docs/reference-implementation.md`. Related Standards joined a Documentation list that
+  links each page, and the Quick Start opens with a link to Section 4.
+  `scripts/test_checks.py` reads the Verifiable Credential claim from
+  `docs/interoperability.md`.
 
 ### Fixed
 
