@@ -199,6 +199,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   links each page, and the Quick Start opens with a link to Section 4.
   `scripts/test_checks.py` reads the Verifiable Credential claim from
   `docs/interoperability.md`.
+- README shortened to seven sections, with the ecosystem line under the title. The Use cases
+  section and the Why ATX subsection moved, as written, into `docs/use-cases.md`, which now
+  holds each use case in full; the `declaredPurpose` row's authorization caveat is a sentence
+  under the ATX table.
 
 ### Fixed
 
