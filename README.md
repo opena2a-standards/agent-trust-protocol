@@ -92,7 +92,7 @@ The Agent Trust eXtension (ATX) is the credential format defined by ATP for AI a
 
 | Field | Status | Description |
 |-------|--------|-------------|
-| did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (v1.0.0-rc1) | Base trust proof. See examples/. |
+| did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (Section 4.3 canonical string and its signatures) | Base trust proof. See examples/. |
 | capabilities | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Declared capability set the agent is authorized to perform. |
 | buildAttestation | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | SLSA-compatible build provenance digest. |
 | behavioralProfile | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Observed behavior baseline. Checksum and observation window. |

@@ -2547,6 +2547,20 @@ class AtxStatusTest(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn("ATX v1.1", self.readme_row(readme, field))
 
+    def test_status_cells_name_no_release_version(self):
+        # The README restates each Section 4.6 status, so a release version in a
+        # status cell is a version in the README; the cells say what is signed and where.
+        files = self.files()
+        for name, text, heading in (
+            ("ATP-SPEC.md", files["spec"], validate_examples.SPEC_ATX_HEADING),
+            ("README.md", files["readme"], validate_examples.README_ATX_HEADING),
+        ):
+            rows = validate_examples.status_table(text, heading)
+            self.assertTrue(rows, name)
+            for field, (number, status) in rows.items():
+                with self.subTest(file=name, line=number):
+                    self.assertIsNone(validate_examples.VERSION.search(status), f"{field}: {status!r}")
+
     def test_proposed_readme_status_fails(self):
         files = self.files()
         row = self.readme_row(files["readme"], "capabilities")

@@ -154,6 +154,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   what the reference issuer signs (atx-spec core.md Section 1.3a.2, field for field). The Section 4.2 note and the
   trust-proof schema description say the same; `slsaLevel` is illustrative and signed nowhere.
   A trust proof and an ATX credential are two signed artifacts with two canonical forms.
+- Section 4.6 schema table and the README ATX table: the base trust proof row's status is
+  "Shipped (Section 4.3 canonical string and its signatures)", saying what is signed and
+  where as the ATX v1.1 rows do; it was "Shipped (v1.0.0-rc1)". The release that shipped
+  the base trust proof stays in the Section 4.6 text above the table.
 - Section 4.4 step 4: every declared signature entry verifies, and an ML-DSA-65 entry
   requires a verifying Ed25519 entry (the family signature gate, AAP Section 9.4);
   previously "at least one signature". Step 5 cites the Section 4.1 scale.

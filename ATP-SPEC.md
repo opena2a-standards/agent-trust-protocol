@@ -498,7 +498,7 @@ The base trust proof (Section 4.2) is what ships at v1.0.0-rc1 and is what the c
 
 | Field | Status | Description |
 |-------|--------|-------------|
-| did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (v1.0.0-rc1) | Base trust proof. See Section 4.2. |
+| did, trustLevel, trustScore, verdict, issuedAt, expiresAt, issuerDid, signatures | Shipped (Section 4.3 canonical string and its signatures) | Base trust proof. See Section 4.2. |
 | capabilities | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Declared capability set the agent is authorized to perform. |
 | buildAttestation | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | SLSA-compatible build provenance digest. |
 | behavioralProfile | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Observed behavior baseline. Checksum and observation window. |
