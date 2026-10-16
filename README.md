@@ -1,6 +1,6 @@
-> **OpenA2A specs** · [did:opena2a](https://github.com/opena2a-standards/did-method-opena2a) · [AIP](https://github.com/opena2a-standards/agent-identity-protocol) · [ATX](https://github.com/opena2a-standards/atx-spec) · **ATP** · [AAP](https://github.com/opena2a-standards/agent-authorization-protocol) · [AIM](https://github.com/opena2a-org/agent-identity-management) · [all specs ↗](https://specs.opena2a.org)
-
 # Agent Trust Protocol (ATP)
+
+> **OpenA2A specs** · [did:opena2a](https://github.com/opena2a-standards/did-method-opena2a) · [AIP](https://github.com/opena2a-standards/agent-identity-protocol) · [ATX](https://github.com/opena2a-standards/atx-spec) · **ATP** · [AAP](https://github.com/opena2a-standards/agent-authorization-protocol) · [AIM](https://github.com/opena2a-org/agent-identity-management) · [all specs ↗](https://specs.opena2a.org)
 
 An open standard for verifiable trust assertions about AI agents. The agent-specific credential format defined by ATP is the Agent Trust eXtension (ATX).
 
@@ -23,54 +23,6 @@ curl -X POST https://api.oa2a.org/api/v1/trust/verify \
 # Discover the trust authority (/.well-known/opena2a is a legacy alias for the same document)
 curl https://api.oa2a.org/.well-known/atp
 ```
-
-## Use cases
-
-### Should I trust this agent right now, and who says so
-
-Before you let an agent in or install an MCP server, you want a signed statement from a party you can identify, not a star rating on a listing page. You also want to check that statement yourself, with the authority's published key, so a compromised listing cannot forge it.
-
-ATP defines the trust proof: a short-lived signed statement of an agent's trust level, score and verdict, signed with Ed25519 (and with ML-DSA-65 as well in hybrid mode), valid for at most 24 hours, and verifiable against the authority's published keys.
-
-What you can do today: the Quick Start above fetches a live proof from the reference authority and checks it. Recorded responses are in [docs/use-cases.md](docs/use-cases.md).
-
-Where it stops today: `POST /api/v1/trust/verify` asks the authority to check its own proof, which puts the authority on the verification path. The conformance verifiers check the same proof shape locally with the published key, and that is the path a relying party should build on.
-
-### Your auditor asks whether this agent was trusted at 02:14
-
-After an incident you have to prove what the trust state was at the moment the agent acted. Ordinary application logs can be edited by the same incident, so a reconstruction from them is an assertion, not evidence.
-
-ATP records every trust proof issuance, and the revocation of every logged trust proof or credential, in an append-only Merkle tree compatible with RFC 6962. The authority publishes Signed Tree Heads, and an auditor checks inclusion proofs for single entries and consistency proofs between tree sizes, so an entry that was removed or rewritten is detectable.
-
-What you can do today: the conformance suite carries a Signed Tree Head, a valid inclusion proof, a valid consistency proof and the tampered-path rejections for both.
-
-```
-git clone https://github.com/opena2a-standards/atp-conformance
-cd atp-conformance/verifiers/go
-go run . ../../fixtures
-```
-
-The verifier prints each fixture's expected and observed result, then a summary line of passes and failures.
-
-Where it stops today: the transparency-log read endpoint that ATP-SPEC names for the reference authority, `/api/v1/transparency/trust-proofs`, answers HTTP 404, so the live log cannot yet be audited from outside.
-
-### You revoke an agent once and need every verifier to stop trusting it
-
-A compromised agent holds a credential that is still valid. You need every verifier to stop honoring it, including verifiers run by other organizations that never call you.
-
-ATP Section 8.1 defines the revocation list that verifiers fetch and cache. An entry whose timestamp cannot be parsed rejects the whole response, because silently skipping one entry would keep a revoked agent trusted.
-
-What you can do today:
-
-```
-curl https://api.oa2a.org/api/v1/trust/revocations
-```
-
-The conformance suite pins the malformed-timestamp rejection and a Section 8.1 body, `fixtures/revocation-list-valid.json`, whose free-text `reason` is not a Section 8.1.1 code: the current schema refuses it, and a client processes it as `unspecified`.
-
-Where it stops today: the revocation response body is not signed; its authenticity rides on the transport. The reference authority publishes the list for polling and does not push it to federation peers. No fixture yet pins a registered reason code or an entry without `transparencyLogIndex` ([`ATP-SPEC.md`](ATP-SPEC.md) Section 2.1 lists what fixtures do not cover).
-
-Why you can check this yourself: [`ATP-SPEC.md`](ATP-SPEC.md); [atp-conformance](https://github.com/opena2a-standards/atp-conformance), byte-pinned fixtures with Go and Python verifiers; the live-endpoint scripts [`conformance/level1.sh`](conformance/level1.sh) and [`conformance/level2.sh`](conformance/level2.sh) that exercise a running authority; and the reference authority's live endpoints at `api.oa2a.org` (`/.well-known/atp`, `/api/v1/trust/proof`, `/api/v1/trust/verify`, `/api/v1/trust/revocations`).
 
 ## Specification
 
@@ -97,15 +49,11 @@ The Agent Trust eXtension (ATX) is the credential format defined by ATP for AI a
 | buildAttestation | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | SLSA-compatible build provenance digest. |
 | behavioralProfile | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Observed behavior baseline. Checksum and observation window. |
 | scanSummary | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | HackMyAgent and equivalent scanner results at issuance time. |
-| declaredPurpose | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Optional structured declaration of what the agent is for. An identity and attestation claim, never an authorization input. |
+| declaredPurpose | ATX v1.1 (signed in the ATX TBS, atx-spec Section 1.3a.2) | Optional structured declaration of what the agent is for. |
+
+`declaredPurpose` is an identity and attestation claim, never an authorization input.
 
 The ATX v1.1 fields are signed inside the ATX credential's `JCS(TBS)`, never in the trust proof's canonical string (ATP-SPEC.md Section 4.3). A trust proof and an ATX credential are two signed artifacts with two canonical forms; see ATP-SPEC.md Section 4.6.
-
-### Why ATX
-
-ATX answers what the agent is authorized to do, what its provenance is, what its observed behavior looks like, and what scanners have verified it. The W3C Verifiable Credentials Data Model 2.0 supports the issuer, subject, and claims pattern. ATX uses that pattern with agent-specific claims tuned for short TTLs, behavioral attestation, and continuous re-verification.
-
-ATX is the credential primitive the agent internet needs. ATP is the protocol that defines it.
 
 ### Verifiable Credential form
 
@@ -134,7 +82,7 @@ This hybrid proof carries both an Ed25519 signature for fast local verification 
 ## Documentation
 
 - [ATP-SPEC.md](ATP-SPEC.md): the protocol specification
-- [docs/use-cases.md](docs/use-cases.md): recorded observations behind the use cases and Why ATX above
+- [docs/use-cases.md](docs/use-cases.md): three use cases, what works today and where each stops, and why ATX
 - [docs/interoperability.md](docs/interoperability.md): the standards ATP is designed to complement
 - [docs/reference-implementation.md](docs/reference-implementation.md): a recorded reference authority response
 - [conformance/README.md](conformance/README.md): the live-endpoint conformance scripts
