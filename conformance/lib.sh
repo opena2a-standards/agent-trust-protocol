@@ -61,20 +61,46 @@ unmet() {
   return 1
 }
 
+# Section 7.1 transport rule: a request goes only under an https URL, or under
+# an http URL whose host is a loopback address literal, an IPv4 address in
+# 127.0.0.0/8 written as four decimal numbers or [::1]. The name localhost is
+# not one: a name is resolved, and can resolve to another machine.
+OCTET='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+HTTPS_URL='^[Hh][Tt][Tt][Pp][Ss]://'
+LOOPBACK_HTTP_URL='^[Hh][Tt][Tt][Pp]://(127\.'"$OCTET"'\.'"$OCTET"'\.'"$OCTET"'|\[::1\])(:[0-9]*)?([/?#]|$)'
+
+# transport_allowed URL: succeed when the Section 7.1 transport rule allows a
+# request under URL.
+transport_allowed() {
+  [[ "$1" =~ $HTTPS_URL || "$1" =~ $LOOPBACK_HTTP_URL ]]
+}
+
 # fetch NAME URL [curl options]: set NAME to the body curl receives for URL, or
 # to nothing when the request fails. Fail with a reason as the next test_case's
-# detail when curl rejects the URL or gets no answer within the time limit;
-# otherwise succeed, and the check of NAME says what the body lacks.
+# detail, without a request, when the transport rule refuses URL, and with one
+# when curl rejects the URL or gets no answer within the time limit; otherwise
+# succeed, and the check of NAME says what the body lacks.
 #
 # Every request turns URL globbing off (-g): a URL holds the authority URL and
 # values the authority serves, and curl would otherwise read {a,b} and [x-y] in
 # it as patterns and send one request per expansion. --path-as-is sends . and ..
 # segments as written instead of removing them, and --url keeps a URL that
-# starts with - from being read as an option.
+# starts with - from being read as an option. -q, which has to come first, keeps
+# curl from reading a .curlrc, which could turn off the certificate check or
+# turn on following redirects. An http URL, which names a loopback address, is
+# requested with no proxy, so the request goes to that address and not to a
+# proxy that would request it from its own machine.
 fetch() {
-  local name="$1" url="$2" body status
+  local name="$1" url="$2" body status direct=()
   shift 2
-  body=$(curl -gsf --path-as-is --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$@" --url "$url")
+  if ! transport_allowed "$url"; then
+    printf -v "$name" '%s' ""
+    unmet "the authority URL is neither https nor http to a loopback address literal (Section 7.1)"
+    return
+  fi
+  [[ "$url" =~ $HTTPS_URL ]] || direct=(--noproxy '*')
+  body=$(curl -q -gsf --path-as-is --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+    "${direct[@]}" "$@" --url "$url")
   status=$?
   [ "$status" = 0 ] || body=""
   printf -v "$name" '%s' "$body"

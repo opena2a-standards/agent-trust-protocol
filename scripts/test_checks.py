@@ -2470,6 +2470,7 @@ T1 = dict(zip(range(1, 15), LEVEL1))
 T2 = dict(zip(range(1, 4), LEVEL2))
 COSIGNED = validate_examples.sigstore_example()["signatures"]
 SHARED_CURL_OPTIONS = ("--path-as-is", "--connect-timeout", "--max-time")
+TRANSPORT_REFUSED = "the authority URL is neither https nor http to a loopback address literal (Section 7.1)"
 
 
 def without_comment(line):
@@ -2721,10 +2722,12 @@ class ConformanceScriptTest(unittest.TestCase):
 
     def test_pattern_in_the_authority_host_or_port_is_not_a_valid_url(self):
         """With URL globbing off, curl rejects a brace list or bracket range in
-        the host or port: no request is sent, and every test fails."""
+        the host or port: no request is sent, and every test fails. The URLs
+        are https ones: the Section 7.1 transport rule refuses an http URL
+        whose host is not a loopback address literal before curl reads it."""
         port = self.authority.server_address[1]
-        for url in (f"http://127.0.0.[1-1]:{port}", f"http://127.0.0.{{1}}:{port}",
-                    f"http://127.0.0.1:{{{port}}}"):
+        for url in (f"https://127.0.0.[1-1]:{port}", f"https://127.0.0.{{1}}:{port}",
+                    f"https://127.0.0.1:{{{port}}}"):
             with self.subTest(url):
                 run, failed = self.run_scripts(url=url)
                 self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
@@ -2733,6 +2736,74 @@ class ConformanceScriptTest(unittest.TestCase):
                 for name in (T1[1], T2[1], T2[3]):
                     self.assertIn(f"FAIL: {name} (the authority URL is not a valid URL)",
                                   run.stdout)
+
+    def test_transport_rule_allows_https_and_http_to_a_loopback_address_literal(self):
+        allowed = [
+            "https://api.oa2a.org", "HTTPS://api.oa2a.org", "http://127.0.0.1", "Http://127.0.0.1?x",
+            "http://127.0.0.1:8080/atp", "http://127.255.255.254:8080", "http://[::1]:8080",
+        ]
+        refused = [
+            "http://api.oa2a.org", "http://localhost:8080", "http://127.1", "http://127.0.0.01",
+            "http://127.0.0.256", "http://128.0.0.1", "http://127.0.0.1.attacker.example",
+            "http://127.0.0.1@attacker.example", "http://127.0.0.1:@attacker.example",
+            "http://[::ffff:127.0.0.1]", "http://127.0.0.[1-1]", "api.oa2a.org", "ftp://127.0.0.1",
+            " https://api.oa2a.org",
+        ]
+        script = '. "$1"; shift; for url; do transport_allowed "$url" && echo allowed || echo refused; done'
+        run = subprocess.run(
+            ["bash", "-c", script, "bash", str(CONFORMANCE / "lib.sh"), *allowed, *refused],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(
+            list(zip(allowed + refused, run.stdout.split())),
+            [(url, "allowed") for url in allowed] + [(url, "refused") for url in refused],
+            run.stderr,
+        )
+
+    def test_authority_url_the_transport_rule_refuses_gets_no_request(self):
+        """No request goes under an authority URL that is neither https nor
+        http to a loopback address literal, and each test that would send one
+        says why. curl reaches the fixture authority under each of these URLs
+        when it requests them, so the authority's empty request list shows
+        that none was sent."""
+        port = self.authority.server_address[1]
+        for url in (f"http://localhost:{port}", f"http://LOCALHOST:{port}", f"http://127.1:{port}",
+                    f"http://127.0.0.01:{port}", f"127.0.0.1:{port}"):
+            with self.subTest(url):
+                run, failed = self.run_scripts(url=url)
+                self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+                self.assertEqual(run.returncode, len(LEVEL1 + LEVEL2), run.stdout)
+                self.assertEqual(self.authority.requests, [])
+                for name in (T1[1], T2[1], T2[3]):
+                    self.assertIn(f"FAIL: {name} ({TRANSPORT_REFUSED})", run.stdout)
+
+    def test_http_authority_url_is_requested_without_a_proxy(self):
+        """A request under an http authority URL goes to its loopback address,
+        not to a proxy the environment names, which would request the URL
+        from its own machine."""
+        proxy = fixture_authority.serve()
+        self.addCleanup(proxy.server_close)
+        self.addCleanup(proxy.shutdown)
+        self.probe([], env={"http_proxy": proxy.url, "no_proxy": "", "NO_PROXY": ""})
+        self.assertEqual(proxy.requests, [])
+        self.assertTrue(self.authority.requests)
+
+    def test_curlrc_is_not_read(self):
+        """curl runs with -q, so a .curlrc, which could turn the certificate
+        check off or turn following redirects on, changes no request. This one
+        sends each request as PUT, which the fixture authority answers with
+        HTTP 501, when curl reads it."""
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        (Path(home.name) / ".curlrc").write_text('request = "PUT"\n', encoding="utf-8")
+        self.probe([], env={"CURL_HOME": home.name})
+
+    def test_every_curl_call_starts_with_q(self):
+        """curl reads -q only as the first option of a call."""
+        for script in ("lib.sh", "level1.sh", "level2.sh"):
+            for call in curl_calls((CONFORMANCE / script).read_text(encoding="utf-8")):
+                with self.subTest(script=script, call=call):
+                    self.assertEqual(call.split()[:1], ["-q"])
 
     def test_unanswered_request_fails_at_the_time_limit(self):
         """A server that accepts the connection and never answers holds each

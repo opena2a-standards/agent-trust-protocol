@@ -357,8 +357,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   is more than N seconds", and when a sentence of ATP-SPEC.md says authenticity rides or
   rests on the transport without citing Section 7.1. On the specification before the rule it
   reports four findings: the two missing rules and the sentences in Sections 7.1.1 and 8.1.
-  `scripts/test_checks.py` covers the check. `conformance/level1.sh` does not follow the rule
-  or the age yet: it checks only that it was given an authority URL.
+  `scripts/test_checks.py` covers the check.
+- The conformance scripts follow the Section 7.1 transport rule. Before, `level1.sh` checked
+  only that it was given an authority URL. In `conformance/lib.sh`, `fetch` sends no request
+  under an authority URL that is neither `https` nor `http` to a loopback address literal (an
+  IPv4 address in `127.0.0.0/8` written as four decimal numbers, or `[::1]`), so every test
+  fails and T1.1, T2.1 and T2.3 give that reason. `curl` runs with `-q`, so a `.curlrc` cannot
+  turn off its certificate check or turn on following redirects, and with no proxy under an
+  `http` authority URL. `scripts/test_checks.py` covers the URLs `transport_allowed` allows and
+  refuses, no request under `http://localhost`, `http://127.1`, `http://127.0.0.01` or a URL
+  without a scheme, the proxy and a `.curlrc`. Its test of a pattern in the authority URL's
+  host or port now uses `https` URLs, which the transport rule passes to `curl`.
 - README: the Reference Implementation section said the OpenA2A Registry implements ATP at
   Level 2 conformance. It now names the conformance tests the reference authority passes (T1.1
   to T1.6) and fails (T1.7 to T1.14 and T2.1 to T2.3), and says that its discovery document
