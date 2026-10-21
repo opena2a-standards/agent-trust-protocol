@@ -357,10 +357,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   is more than N seconds", and when a sentence of ATP-SPEC.md says authenticity rides or
   rests on the transport without citing Section 7.1. On the specification before the rule it
   reports four findings: the two missing rules and the sentences in Sections 7.1.1 and 8.1.
-  `scripts/test_checks.py` covers the check. The client in `clients/python` and
-  `conformance/level1.sh` do not follow the rule or the age yet: the client accepts an `http`
-  URL of any host and keeps the discovery document it fetched for the life of the
-  `AtpClient`, and `level1.sh` checks only that it was given an authority URL.
+  `scripts/test_checks.py` covers the check. `conformance/level1.sh` does not follow the rule
+  or the age yet: it checks only that it was given an authority URL.
 - README: the Reference Implementation section said the OpenA2A Registry implements ATP at
   Level 2 conformance. It now names the conformance tests the reference authority passes (T1.1
   to T1.6) and fails (T1.7 to T1.14 and T2.1 to T2.3), and says that its discovery document
