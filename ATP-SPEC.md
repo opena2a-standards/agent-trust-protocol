@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority; the Section 4.4.1 proof is co-signed under two RFC 8032 test keys and is not a suite fixture); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority; the Section 4.4.1 proof is co-signed under two RFC 8032 test keys and is not a suite fixture); the Section 7.1 transport rule and the maximum age of a verifier's copy of the discovery document (1.1; client behaviour over the network, which a byte-stable fixture cannot carry); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -1016,6 +1016,34 @@ appended to `https://api.oa2a.org`, `.attacker.example/x` names the host
 `api.oa2a.org.attacker.example`, and `@attacker.example/x` names the host
 `attacker.example`.
 
+The authority URL is an `https` URL. A trust authority MUST serve the discovery document,
+and every endpoint of this specification, over HTTPS, and SHOULD send a
+`Strict-Transport-Security` header (RFC 6797). A client MUST NOT send a request of this
+specification under an authority URL whose scheme is not `https`, MUST NOT follow a redirect
+to a URL whose scheme is not `https`, and MUST verify the authority's certificate as RFC 9110
+Section 4.3.4 requires: the discovery document is not signed, and it carries the keys a
+verifier resolves at Section 4.4 step 3. The one exception to this paragraph is an `http`
+authority URL whose host is a loopback address literal, an IPv4 address in `127.0.0.0/8` or
+the IPv6 address `::1`: a request to it does not leave the machine (RFC 8252 Section 8.3),
+so an authority MAY answer on one and a client MAY use one, for example to test against a
+local authority. The name `localhost` is not a loopback address literal.
+
+A verifier MUST NOT use a copy of the discovery document whose age is more than 3600 seconds
+(one hour), the maximum age, to verify a trust proof or another signature of the authority.
+The age of a copy is the time since the verifier received it plus the value of the response's
+`Age` header (RFC 9111 Section 5.1) when the response carries one, so the time a shared cache
+held the copy counts. The maximum age binds every copy obtained from the authority, however
+the verifier stores it. A verifier SHOULD obtain the document again at the Section 8.1 polling
+interval (RECOMMENDED: every 5 minutes), so that a key the authority revokes (Section 8.2)
+stops verifying as soon as a revoked agent does. A verifier that cannot obtain a copy within
+the maximum age accepts no trust proof or signature of that authority until it does: such a
+proof is unverified, which is not a Section 4.4 rejection of it. An authority SHOULD serve the
+document with a `Cache-Control` `max-age` of at most 3600, and SHOULD add a key to
+`publicKeys` at least 3600 seconds before it first signs with it, so that a verifier holding a
+copy within the maximum age does not reject what the new key signed. Keys an operator
+configures out of band (Section 7.1.1) are not a copy of the document; that operator removes a
+key the authority revokes (Section 8.2).
+
 The discovery document MAY carry `leafFormatSince` (integer, the first `logIndex` hashed
 under Section 5.2 of this revision). A log built before this revision MUST publish it;
 absent, every leaf in the log conforms to Section 5.2.
@@ -1086,7 +1114,7 @@ every proof it served in the previous 24 hours (the Section 10.2 maximum) meets 
 The one exception is a key the authority revokes (Section 8.2): it leaves `keyIds` in the
 update that removes it from `publicKeys`, since step 3 rejects the proofs it signed whatever
 the set holds. The set protects against the compromise of signing keys, not of the discovery
-document, whose authenticity rides on the transport: a verifier that configures an
+document, whose authenticity rides on the transport Section 7.1 requires: a verifier that configures an
 authority's keys out of band configures its key set the same way.
 
 ### 7.2 Batch Queries
@@ -1158,7 +1186,7 @@ a rejection of the whole response, not a skippable entry — silently dropping
 an unparseable revocation keeps a revoked agent trusted. The machine-readable
 shape is
 [`schemas/revocation-list-v1.schema.json`](./schemas/revocation-list-v1.schema.json).
-The response body itself is not signed: authenticity rides on the transport
+The response body itself is not signed: authenticity rides on the transport Section 7.1 requires
 and, for an entry that carries one, on its `transparencyLogIndex` anchoring the
 revocation in the §5 log; an entry without one rests on the transport alone.
 Signing the revocation response is an open hardening question for a
@@ -1219,7 +1247,7 @@ trigger carry the same bytes.
 When a signing key is compromised:
 
 1. The authority MUST log a `key_revoked` entry in the transparency log
-2. The authority MUST update `/.well-known/atp` to remove the revoked key
+2. The authority MUST update `/.well-known/atp` to remove the revoked key; a verifier stops using it within the Section 7.1 maximum age of its copy of the document (one hour)
 3. The authority MUST notify all federation peers
 4. All trust proofs signed exclusively by the revoked key become untrusted
 5. Trust proofs with multi-authority signatures remain valid if at least one non-revoked signature exists
@@ -1258,7 +1286,8 @@ the section it cites:
 
 | Threat | Defense | Conformance Level |
 |--------|---------|-------------------|
-| Signing key compromise | Key revocation (Section 8.2), which Section 4.4 step 3 enforces; the 24-hour proof validity maximum (Section 10.2); and, where the authority declares one, an m-of-n issuer key set (Section 7.1.1), which Section 4.4 step 4 counts | Level 1+ |
+| Signing key compromise | Key revocation (Section 8.2), which Section 4.4 step 3 enforces within the Section 7.1 maximum age of a verifier's copy of the discovery document (one hour); the 24-hour proof validity maximum (Section 10.2); and, where the authority declares one, an m-of-n issuer key set (Section 7.1.1), which Section 4.4 step 4 counts | Level 1+ |
+| Discovery document substitution in transit | HTTPS with certificate verification (Section 7.1) | Level 1+ |
 | Silent trust manipulation | Transparency log with Merkle proofs (Section 5) | Level 2+ |
 | Single point of failure | Federation consensus (Section 6.2) | Level 3 |
 | Revocation failure | Revocation API (Section 8.1) + federation propagation (Section 6.4.2) | Level 2+ |
