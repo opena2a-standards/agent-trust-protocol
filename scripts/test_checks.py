@@ -22,9 +22,11 @@ import os
 import re
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -2471,6 +2473,54 @@ T2 = dict(zip(range(1, 4), LEVEL2))
 COSIGNED = validate_examples.sigstore_example()["signatures"]
 SHARED_CURL_OPTIONS = ("--path-as-is", "--connect-timeout", "--max-time")
 TRANSPORT_REFUSED = "the authority URL is neither https nor http to a loopback address literal (Section 7.1)"
+SIZE_LIMIT = "the body is larger than the size limit: {} bytes"
+FRAMINGS = ("Content-Length", "chunked", "ended by closing")
+
+
+class BodyAnswer(socketserver.BaseRequestHandler):
+    """Reads a request and answers it as its BodyServer says."""
+
+    def handle(self):
+        request = b""
+        while b"\r\n\r\n" not in request:
+            piece = self.request.recv(65536)
+            if not piece:
+                return
+            request += piece
+        body, framing, chunked = self.server.body, self.server.framing, self.server.framing == "chunked"
+        field = {"Content-Length": b"Content-Length: %d" % len(body), "chunked": b"Transfer-Encoding: chunked",
+                 "ended by closing": b"Connection: close"}[framing]
+        count = 0
+        try:
+            self.request.sendall(b"HTTP/1.1 200 OK\r\n%s\r\n\r\n" % field)
+            for at in range(0, len(body), 65536):
+                piece = body[at:at + 65536]
+                self.request.sendall(b"%x\r\n%s\r\n" % (len(piece), piece) if chunked else piece)
+                count += len(piece)
+            if chunked:
+                self.request.sendall(b"0\r\n\r\n")
+        except OSError:
+            pass
+        self.server.sent.append(count)
+
+
+class BodyServer(socketserver.ThreadingTCPServer):
+    """A server on 127.0.0.1 that answers every request with body, framed as
+    one of FRAMINGS: with a Content-Length, in chunks of up to 65536 bytes, or
+    ended by closing the connection. sent gets, for each request, the number
+    of bytes of body it wrote before the connection broke or the body ended.
+    stop() waits for every answer to end."""
+
+    def __init__(self, body: bytes, framing: str):
+        super().__init__(("127.0.0.1", 0), BodyAnswer)
+        self.body, self.framing, self.sent = body, framing, []
+        self.url = f"http://127.0.0.1:{self.server_address[1]}"
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.shutdown()
+        # Joins the threads that answer requests (block_on_close).
+        self.server_close()
 
 
 def without_comment(line):
@@ -2823,6 +2873,48 @@ class ConformanceScriptTest(unittest.TestCase):
                 run.stdout,
             )
 
+    def test_body_larger_than_the_size_limit_fails(self):
+        """A body of the size limit passes and one of a byte more fails, sent
+        with a Content-Length, in chunks or ended by closing the connection,
+        under the default limit and under ATP_MAX_BODY_BYTES, which 010000
+        sets to 10000 bytes, not to the octal 4096. JSON allows the spaces that
+        pad the body; its last byte is a newline, which the count includes."""
+        for limit, env in ((1048576, {}), (10000, {"ATP_MAX_BODY_BYTES": "010000"})):
+            for framing in FRAMINGS:
+                for size in (limit, limit + 1):
+                    with self.subTest(limit=limit, framing=framing, size=size):
+                        server = BodyServer(b"{}".ljust(size - 1) + b"\n", framing)
+                        self.addCleanup(server.stop)
+                        run, failed = self.run_scripts(url=server.url, env=env)
+                        server.stop()
+                        self.assertEqual(server.sent, [size] * 3, run.stdout)
+                        for name in (T1[1], T2[1], T2[3]):
+                            failure = f"FAIL: {name} ({SIZE_LIMIT.format(limit)})"
+                            if size > limit:
+                                self.assertIn(failure, run.stdout)
+                            else:
+                                self.assertNotIn(failure, run.stdout)
+                        if size == limit:
+                            self.assertIn(f"PASS: {T1[1]}", run.stdout)
+                            self.assertIn(f"PASS: {T2[1]}", run.stdout)
+
+    def test_body_larger_than_the_size_limit_is_not_read_to_its_end(self):
+        """The scripts stop reading a body after one byte more than the size
+        limit, so the server cannot write all 64 MiB of one, whatever its
+        framing, and each request fails at the limit."""
+        body = b"{}".ljust(64 * 1024 * 1024)
+        for framing in FRAMINGS:
+            with self.subTest(framing):
+                server = BodyServer(body, framing)
+                self.addCleanup(server.stop)
+                run, failed = self.run_scripts(url=server.url)
+                server.stop()
+                self.assertEqual(len(server.sent), 3, run.stdout)
+                for count in server.sent:
+                    self.assertLess(count, len(body))
+                for name in (T1[1], T2[1], T2[3]):
+                    self.assertIn(f"FAIL: {name} ({SIZE_LIMIT.format(1048576)})", run.stdout)
+
     def test_bracketed_trust_proof_endpoint_is_one_request(self):
         """curl does not expand a pattern in endpoints.trustProof: the declared
         path gets one request, and T1.7 fails when it is not served."""
@@ -3071,6 +3163,35 @@ class SetupErrorTest(unittest.TestCase):
                     timeout=60,
                     env={"PATH": os.environ.get("PATH", ""), "ATP_MAX_TIME": value,
                          "ATP_CONNECT_TIMEOUT": value},
+                )
+                self.assertEqual(run.stderr, "")
+                self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_size_limit_that_is_not_a_whole_number_of_bytes_from_1_exits_69(self):
+        """0 leaves room for no body but an empty one. 18 digits keep one byte
+        more than the limit within bash's 64-bit arithmetic, which the largest
+        numbers of 19 digits exceed."""
+        for value in ("0", "000", "1.5", "-1", "+1", "1e6", "ten", " 1", "1000000000000000000"):
+            with self.subTest(value):
+                self.assert_setup_error(
+                    CONFORMANCE, os.environ.get("PATH", ""),
+                    "error: ATP_MAX_BODY_BYTES must be a whole number of bytes from 1 to 999999999999999999",
+                    env={"ATP_MAX_BODY_BYTES": value},
+                )
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_size_limit_from_1_to_999999999999999999_runs_the_tests(self):
+        """bash reads 009 as an octal number, which it cannot be, unless told
+        it is decimal."""
+        for value in ("1", "009", "999999999999999999", "0999999999999999999"):
+            with self.subTest(value):
+                run = subprocess.run(
+                    [shutil.which("bash"), str(CONFORMANCE / "level1.sh"), "http://127.0.0.1:9"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={"PATH": os.environ.get("PATH", ""), "ATP_MAX_BODY_BYTES": value},
                 )
                 self.assertEqual(run.stderr, "")
                 self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)

@@ -368,6 +368,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   refuses, no request under `http://localhost`, `http://127.1`, `http://127.0.0.01` or a URL
   without a scheme, the proxy and a `.curlrc`. Its test of a pattern in the authority URL's
   host or port now uses `https` URLs, which the transport rule passes to `curl`.
+- `conformance/lib.sh`: a limit on the size of a response body. Before, `fetch` kept the
+  whole body in a shell variable: sent a discovery document of 67,108,864 bytes with a
+  `Content-Length`, in chunks or ended by closing the connection, `level1.sh` read all of it
+  and passed T1.1, and the largest process of the run reached a maximum resident set size of
+  up to 681,525,248 bytes. `fetch` now keeps at most one byte more than `ATP_MAX_BODY_BYTES`
+  bytes of a body (1048576 unless set) and then stops reading it, which ends the request, and
+  a larger body fails its test with `the body is larger than the size limit: 1048576 bytes`.
+  On the same document the run then ended within 0.5 s, T1.1 failing, at a maximum resident
+  set size of at most 23,003,136 bytes. The scripts cut the body themselves because
+  `curl --max-filesize` stops a body sent without a `Content-Length` only from `curl` 8.4.0.
+  An `ATP_MAX_BODY_BYTES` that is not a whole number from 1 to 999999999999999999 exits 69.
+  `scripts/test_checks.py` covers a body of the limit and one of a byte more, sent with a
+  `Content-Length`, in chunks and ended by closing the connection, under the default limit
+  and under `ATP_MAX_BODY_BYTES`; a 64 MiB body, which the server cannot write to its end
+  before the scripts stop reading; and the values the variable refuses and accepts.
 - README: the Reference Implementation section said the OpenA2A Registry implements ATP at
   Level 2 conformance. It now names the conformance tests the reference authority passes (T1.1
   to T1.6) and fails (T1.7 to T1.14 and T2.1 to T2.3), and says that its discovery document

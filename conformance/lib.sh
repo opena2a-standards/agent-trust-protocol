@@ -24,6 +24,15 @@ for limit in ATP_CONNECT_TIMEOUT ATP_MAX_TIME; do
 done
 CONNECT_TIMEOUT="${ATP_CONNECT_TIMEOUT:-10}"
 MAX_TIME="${ATP_MAX_TIME:-30}"
+# Every body has a size limit, ATP_MAX_BODY_BYTES bytes, 1048576 (1 MiB) unless
+# set: a whole number of at least 1 and of at most 18 digits after any leading
+# zeros, so one byte more is still within bash's 64-bit arithmetic. 10# reads a
+# number with a leading 0 as decimal, not octal.
+[[ "${ATP_MAX_BODY_BYTES:-1}" =~ ^0*[1-9][0-9]{0,17}$ ]] || {
+  echo "error: ATP_MAX_BODY_BYTES must be a whole number of bytes from 1 to 999999999999999999" >&2
+  exit "$SETUP_ERROR"
+}
+MAX_BODY_BYTES=$((10#${ATP_MAX_BODY_BYTES:-1048576}))
 for schema in discovery-v1 trust-proof-v1 revocation-list-v1; do
   [ -r "$SCHEMAS_DIR/$schema.schema.json" ] || {
     echo "error: $SCHEMAS_DIR/$schema.schema.json not found; run the script from a checkout of the repository" >&2
@@ -75,11 +84,13 @@ transport_allowed() {
   [[ "$1" =~ $HTTPS_URL || "$1" =~ $LOOPBACK_HTTP_URL ]]
 }
 
-# fetch NAME URL [curl options]: set NAME to the body curl receives for URL, or
-# to nothing when the request fails. Fail with a reason as the next test_case's
+# fetch NAME URL [curl options]: set NAME to the body curl receives for URL,
+# without its trailing newlines, or to nothing when the request fails or the
+# body is larger than MAX_BODY_BYTES. Fail with a reason as the next test_case's
 # detail, without a request, when the transport rule refuses URL, and with one
-# when curl rejects the URL or gets no answer within the time limit; otherwise
-# succeed, and the check of NAME says what the body lacks.
+# when curl rejects the URL, gets no answer within the time limit or receives a
+# body larger than the size limit; otherwise succeed, and the check of NAME says
+# what the body lacks.
 #
 # Every request turns URL globbing off (-g): a URL holds the authority URL and
 # values the authority serves, and curl would otherwise read {a,b} and [x-y] in
@@ -90,6 +101,13 @@ transport_allowed() {
 # turn on following redirects. An http URL, which names a loopback address, is
 # requested with no proxy, so the request goes to that address and not to a
 # proxy that would request it from its own machine.
+#
+# head passes on at most one byte more than MAX_BODY_BYTES of the body and then
+# stops reading, which ends curl's transfer, so a larger body is neither read to
+# its end nor held in memory. curl's own --max-filesize stops a body sent
+# without a Content-Length only from curl 8.4.0. The "." printed after the body
+# keeps its trailing newlines, which the byte count includes, and curl's exit
+# status follows it.
 fetch() {
   local name="$1" url="$2" body status direct=()
   shift 2
@@ -100,13 +118,17 @@ fetch() {
   fi
   [[ "$url" =~ $HTTPS_URL ]] || direct=(--noproxy '*')
   body=$(curl -q -gsf --path-as-is --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-    "${direct[@]}" "$@" --url "$url")
-  status=$?
+      "${direct[@]}" "$@" --url "$url" | head -c "$((MAX_BODY_BYTES + 1))"
+    printf '.%s' "${PIPESTATUS[0]}")
+  status=${body##*.}
+  body=${body%.*}
+  (( $(printf '%s' "$body" | wc -c) <= MAX_BODY_BYTES )) || status=larger
   [ "$status" = 0 ] || body=""
-  printf -v "$name" '%s' "$body"
+  printf -v "$name" '%s' "$(printf '%s' "$body")"
   case "$status" in
     3) unmet "the authority URL is not a valid URL" ;;
     28) unmet "no answer within the time limit: $CONNECT_TIMEOUT s to connect, $MAX_TIME s in all" ;;
+    larger) unmet "the body is larger than the size limit: $MAX_BODY_BYTES bytes" ;;
   esac
 }
 
