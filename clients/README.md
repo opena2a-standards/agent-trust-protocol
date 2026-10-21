@@ -121,13 +121,20 @@ request. `getDiscovery()`, `getTrustProof(did)` and `verify(proof, { now })` ret
 `verifyTrustProof(proof, keys, trustedIssuers, { now })`, `verifyDiscovery(document,
 trustedIssuers)`, `verifySignedTreeHead(sth, keys)`, `verifyInclusionProof(proof, keys)`,
 `verifyConsistencyProof(proof, keys)` and `verifyRevocationList(body)` make the checks of the
-table above, leave the same steps unchecked and return a `VerifyResult` whose `category` is
-`null` for a valid input. `now` is a `Date` or an RFC 3339 string, and
+table above except the two named below, leave unchecked what the Python client leaves
+unchecked and return a `VerifyResult` whose `category` is `null` for a valid input. `now` is
+a `Date` or an RFC 3339 string, and
 `new AtpClient(url, { discovery, timeoutMs })` takes a stored discovery document and a
 request timeout in milliseconds (10000 when absent). Where the Python client raises
 `ValueError`, this one throws a `TypeError`; an `AtpError` carries `status`, `null` when the
 authority gave no HTTP status. One check is its own: a `did`, `verdict` or `issuerDid` that
 holds a lone surrogate, which UTF-8 cannot encode, is a `PARSE_ERROR`.
+
+Not checked by this client, though the Python client checks them: Section 4.4 step 7, since
+`verifyTrustProof` has no counterpart of `second_authorities` and so never applies it; and
+the Section 7.1 form of an `endpoints` value, since `verifyDiscovery` accepts any non-empty
+string there, where `verify_discovery` requires a path that starts with `/` and holds no
+`#`, whitespace or control character.
 
 ## Tests
 

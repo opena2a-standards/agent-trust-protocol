@@ -46,14 +46,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `npm install <path to clients/typescript>` (not published). It has the Python client's
   functions, named in camelCase (`getTrustProof`, `verify`, `verifyTrustProof` and the
   others), and no runtime dependencies: it checks Ed25519 and ML-DSA-65 signatures with the
-  Node.js `crypto` module. It writes `trustScore` into the canonical string from the number's
-  exact binary value with a tie to even, as `%.6f` does, where `toFixed(6)` rounds a tie up;
-  it counts transparency log positions with `BigInt`, so a proof from a log of more than
-  2^32 entries verifies; and it refuses a `did`, `verdict` or `issuerDid` that holds a lone
-  surrogate, which UTF-8 cannot encode, with `PARSE_ERROR`. Its tests check the 14 fixture
-  copies against their manifest and that the client gives each fixture its pinned verdict and
-  category, and each test of the Python client has a counterpart there; `npm test` builds and
-  runs them. `clients/README.md` documents both clients.
+  Node.js `crypto` module. It does not make two of the Python client's checks:
+  `verifyTrustProof` has no counterpart of `second_authorities`, so it never applies
+  Section 4.4 step 7, and `verifyDiscovery` accepts any non-empty string as an `endpoints`
+  value, where `verify_discovery` requires a Section 7.1 path. It writes `trustScore` into
+  the canonical string from the number's exact binary value with a tie to even, as `%.6f`
+  does, where `toFixed(6)` rounds a tie up; it counts transparency log positions with
+  `BigInt`, so a proof from a log of more than 2^32 entries verifies; and it refuses a `did`,
+  `verdict` or `issuerDid` that holds a lone surrogate, which UTF-8 cannot encode, with
+  `PARSE_ERROR`. Its tests check the 14 fixture copies against their manifest and that the
+  client gives each fixture its pinned verdict and category; `npm test` builds and runs them.
+  `clients/README.md` documents both clients.
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
 - Section 4.4.1: a two-authority proof for Level 3. It is the Section 4.2 proof with an
   Ed25519 entry of `did:opena2a:authority:cosigner.example` added over the same Section 4.3

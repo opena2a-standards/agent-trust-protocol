@@ -11,7 +11,10 @@
  * or the step that failed. The client does not count an issuer key set
  * (Section 7.1.1), so verifyDiscovery, and AtpClient.verify with it, refuse a
  * discovery document that declares one. Its functions are those of the Python
- * client in clients/python, named in camelCase.
+ * client in clients/python, named in camelCase, without two of that client's
+ * checks: verifyTrustProof takes no second authorities, so it never applies
+ * Section 4.4 step 7, and verifyDiscovery accepts any non-empty string as an
+ * endpoints value, not only a Section 7.1 path.
  */
 
 import { createHash, createPublicKey, verify as verifySignature, type KeyObject } from "node:crypto";
