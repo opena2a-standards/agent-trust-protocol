@@ -20,6 +20,7 @@ and when it cannot listen on the port, as when another process holds it.
 """
 import copy
 import json
+import socket
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -72,17 +73,20 @@ def spec_examples() -> dict:
 class FixtureAuthority(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port: int = 0):
+    def __init__(self, port: int = 0, host: str = "127.0.0.1"):
         # Read first, so a specification without an example leaves no socket open.
         examples = spec_examples()
+        # An IPv6 address, such as ::1, needs an IPv6 socket, and a URL writes it in brackets.
+        ipv6 = ":" in host
+        self.address_family = socket.AF_INET6 if ipv6 else socket.AF_INET
         try:
-            super().__init__(("127.0.0.1", port), Handler)
+            super().__init__((host, port), Handler)
         except OSError as exc:
             raise CannotServe(f"port {port}: {exc.strerror or exc}") from None
         self.examples = examples
         self.overrides = {}
         self.requests = []
-        self.url = f"http://127.0.0.1:{self.server_address[1]}"
+        self.url = f"http://{f'[{host}]' if ipv6 else host}:{self.server_address[1]}"
 
     def body(self, endpoint: str, query: dict):
         if endpoint == "verify":
@@ -143,9 +147,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def serve(port: int = 0) -> FixtureAuthority:
-    """Start a fixture authority on a background thread; call shutdown() when done."""
-    authority = FixtureAuthority(port)
+def serve(port: int = 0, host: str = "127.0.0.1") -> FixtureAuthority:
+    """Start a fixture authority, listening on host (127.0.0.1 unless given),
+    on a background thread; call shutdown() when done."""
+    authority = FixtureAuthority(port, host)
     threading.Thread(target=authority.serve_forever, daemon=True).start()
     return authority
 

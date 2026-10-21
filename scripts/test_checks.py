@@ -16,6 +16,7 @@ import calendar
 import contextlib
 import copy
 import io
+import ipaddress
 import itertools
 import json
 import os
@@ -2594,6 +2595,47 @@ def at_offset(hours_from_now, utc_offset_hours):
     return (datetime.now(zone) + timedelta(hours=hours_from_now)).replace(microsecond=0).isoformat()
 
 
+# ::1 written in full, with "::" in place of six zero groups, with a last group
+# of four digits, and with the last two groups as the IPv4 address 0.0.0.1.
+IPV6_LOOPBACK_FORMS = ("0:0:0:0:0:0:0:1", "0::1", "::0001", "::0.0.0.1")
+
+
+def ipv6_loopback_candidates():
+    """Strings to write in brackets as the host of an http URL: four to eight
+    zero groups, each of one to five zeros (one width for all, or widths 1,
+    2, 3 and 4 in turn), then a last group of one to five digits ending in 1,
+    another last group, or an IPv4 address in place of the last two groups
+    (0.0.0.1 or a string near it), written in full and with "::" in place of
+    each run of zero groups, the empty run included; and other strings: a
+    stray colon, a second "::", a zone, an IPv4 address alone or mapped, and
+    letters."""
+    lasts = ("1", "01", "001", "0001", "00001", "2", "10",
+             "0.0.0.1", "0.0.0.01", "00.0.0.1", "0.0.1", "0.0.0.2")
+    candidates = {
+        "", ":", "::", ":::1", "::1:", "::1::", "1::", "0::0::1", "0:::1", ":0:0:0:0:0:0:0:1",
+        "0:0:0:0:0:0:0:1:", "::1%25lo0", "::1%lo0", "::ffff:127.0.0.1", "::127.0.0.1", "127.0.0.1",
+        "v1.::1", "::a", "::0x1", "::0.0.0.1:0", "::0.0.0.1.0",
+    }
+    for zeros in range(4, 9):
+        for widths in ((1,), (2,), (3,), (4,), (5,), (1, 2, 3, 4)):
+            for last in lasts:
+                groups = ["0" * widths[at % len(widths)] for at in range(zeros)] + [last]
+                candidates.add(":".join(groups))
+                for start in range(zeros + 1):
+                    for end in range(start, zeros + 1):
+                        candidates.add(":".join(groups[:start]) + "::" + ":".join(groups[end:]))
+    return sorted(candidates)
+
+
+def is_ipv6_loopback(text):
+    """Whether Python's ipaddress module, which the Python client uses for the
+    host of an http base URL, reads text as the IPv6 address ::1."""
+    try:
+        return ipaddress.ip_address(text) == ipaddress.IPv6Address("::1")
+    except ValueError:
+        return False
+
+
 @unittest.skipUnless(HAS_SCRIPT_TOOLS, "the conformance scripts need bash, curl and jq")
 class ConformanceScriptTest(unittest.TestCase):
     """conformance/level2.sh (which runs level1.sh first) against the fixture
@@ -2609,11 +2651,12 @@ class ConformanceScriptTest(unittest.TestCase):
         cls.authority.shutdown()
         cls.authority.server_close()
 
-    def run_scripts(self, url=None, env=None, **overrides):
-        self.authority.overrides = overrides
-        self.authority.requests.clear()
+    def run_scripts(self, url=None, env=None, authority=None, **overrides):
+        authority = authority or self.authority
+        authority.overrides = overrides
+        authority.requests.clear()
         run = subprocess.run(
-            ["bash", str(CONFORMANCE / "level2.sh"), url or self.authority.url],
+            ["bash", str(CONFORMANCE / "level2.sh"), url or authority.url],
             capture_output=True,
             text=True,
             timeout=120,
@@ -2791,8 +2834,10 @@ class ConformanceScriptTest(unittest.TestCase):
         allowed = [
             "https://api.oa2a.org", "HTTPS://api.oa2a.org", "http://127.0.0.1", "Http://127.0.0.1?x",
             "http://127.0.0.1:8080/atp", "http://127.255.255.254:8080", "http://[::1]:8080",
+            *(f"http://[{form}]:8080" for form in IPV6_LOOPBACK_FORMS), "http://[0::1]/atp",
         ]
         refused = [
+            "http://[::2]:8080", "http://[0:0:0:0:0:0:0:0:1]:8080", "http://[127.0.0.1]:8080",
             "http://api.oa2a.org", "http://localhost:8080", "http://127.1", "http://127.0.0.01",
             "http://127.0.0.256", "http://128.0.0.1", "http://127.0.0.1.attacker.example",
             "http://127.0.0.1@attacker.example", "http://127.0.0.1:@attacker.example",
@@ -2809,6 +2854,48 @@ class ConformanceScriptTest(unittest.TestCase):
             [(url, "allowed") for url in allowed] + [(url, "refused") for url in refused],
             run.stderr,
         )
+
+    def test_transport_rule_reads_ipv6_loopback_as_python_ipaddress_does(self):
+        """transport_allowed allows an http URL whose host is a string in
+        brackets exactly when Python's ipaddress module, which the Python
+        client uses, reads that string as ::1, for each string
+        ipv6_loopback_candidates gives."""
+        candidates = ipv6_loopback_candidates()
+        expected = ["allowed" if is_ipv6_loopback(text) else "refused" for text in candidates]
+        self.assertTrue(set(IPV6_LOOPBACK_FORMS) <= {
+            text for text, outcome in zip(candidates, expected) if outcome == "allowed"
+        })
+        script = '. "$1"; while IFS= read -r url; do transport_allowed "$url" && echo allowed || echo refused; done'
+        run = subprocess.run(
+            ["bash", "-c", script, "bash", str(CONFORMANCE / "lib.sh")],
+            input="".join(f"http://[{text}]:8080\n" for text in candidates),
+            capture_output=True, text=True, timeout=120,
+        )
+        answers = run.stdout.split()
+        self.assertEqual(len(answers), len(candidates), run.stderr)
+        disagreements = [
+            (text, answer) for text, answer, outcome in zip(candidates, answers, expected) if answer != outcome
+        ]
+        self.assertEqual(disagreements, [])
+
+    def test_authority_on_ipv6_loopback_passes_under_each_form_of_its_address(self):
+        """An authority listening on ::1 passes every test under an http URL
+        that writes ::1 as [::1] or in one of the forms IPV6_LOOPBACK_FORMS
+        names, so the transport rule lets the requests go and curl sends them
+        to ::1."""
+        try:
+            authority = fixture_authority.serve(host="::1")
+        except fixture_authority.CannotServe as exc:
+            self.skipTest(f"cannot listen on ::1: {exc}")
+        self.addCleanup(authority.server_close)
+        self.addCleanup(authority.shutdown)
+        port = authority.server_address[1]
+        for form in ("::1", *IPV6_LOOPBACK_FORMS):
+            with self.subTest(form):
+                run = self.probe([], url=f"http://[{form}]:{port}", authority=authority)
+                self.assertIn("=== Results: 14 passed, 0 failed ===", run.stdout)
+                self.assertIn("=== Level 2 Results: 3 passed, 0 failed ===", run.stdout)
+                self.assertIn("GET /.well-known/atp", authority.requests)
 
     def test_authority_url_the_transport_rule_refuses_gets_no_request(self):
         """No request goes under an authority URL that is neither https nor
