@@ -94,6 +94,25 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   each mapped discovery example the schema accepts against the rules the schema cannot
   express, and the Section 7.1.1 example, a 2-of-3 set, is validated in CI. Section 2.1 lists
   the count as not yet covered by fixtures.
+- Section 4.4.2: a proof that meets an issuer key set, and two edits of it that the count
+  rejects. Two keys of the 2-of-3 set of the Section 7.1.1 example, `#key-1` and `#key-2`,
+  sign it over the Section 4.3 canonical string. The example's three keys are the RFC 8032
+  Section 7.1 TEST 2, TEST 3 and TEST SHA(abc) keys, and RFC 8032 publishes their secret keys,
+  so the proof shows the wire form and the count, not a key set in operation. Without its
+  `#key-2` entry, and with its `#key-1` entry in place of that entry (one `keyId` twice, which
+  counts once), one key of the set signed it, and Section 4.4 step 4 rejects it.
+  `scripts/validate_examples.py` verifies both signatures under the keys of the Section 7.1.1
+  example, and checks that the proof meets the set and that each edit breaks the count and no
+  other rule of steps 3, 4 and 7; the examples map validates the block against the
+  trust-proof schema, and `schemas/discovery-v1.schema.json` joins the schemas the checks read
+  by name, so a run without it is one failure line. `scripts/test_checks.py` covers the count
+  (a key counts once however many entries carry it, and when any one of them verifies; an
+  entry that does not verify, an entry outside the set, an ML-DSA-65 entry and a Sigstore
+  entry count toward no key; a threshold of 1 is met by one key and a threshold of 3 is not
+  met by two; no proof meets a set that breaks a Section 7.1.1 rule, and every proof meets a
+  document without a set), and its `checks.jq` agreement test runs on the proof. Sections 4.4
+  and 7.1.1 point to the proof, and Section 2.1 still lists the three cases as not yet covered
+  by suite fixtures.
 - Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
   for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
   `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,

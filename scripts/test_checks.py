@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, Sigstore co-signature, two-authority
-proof (with its Ed25519 verification), threat model, issuer key set, signed
-timestamp, ATX status, fixture coverage, A2A agent card path and Verifiable
+proof (with its Ed25519 verification), threat model, issuer key set, issuer
+key set proof (with the Section 4.4 count), signed timestamp, ATX status, fixture coverage, A2A agent card path and Verifiable
 Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the error fixture_authority.py stops with when it cannot read an example
@@ -1369,6 +1369,322 @@ class IssuerKeySetTest(unittest.TestCase):
         self.assertIn("m-of-n issuer key set (Section 7.1.1)", row)
         coverage = next(line for line in lines if line.startswith(validate_examples.COVERAGE_LIST))
         self.assertIn("issuer key set count (Section 7.1.1)", coverage)
+
+
+class IssuerKeySetProofTest(unittest.TestCase):
+    """The Section 4.4.2 proof and the Section 4.4 issuer key set count:
+    key_set_count_errors() accepts the proof under the set of the Section
+    7.1.1 example and refuses each edit that leaves fewer than `threshold`
+    distinct keys of the set, key_set_proof_check() passes and fails on the
+    edits it makes, and main() reports the check once."""
+
+    HEADING = validate_examples.KEY_SET_PROOF_HEADING
+    KEYSET = "ATP-SPEC.md Section 4.4.2 vs the Section 7.1.1 issuer key set"
+
+    def setUp(self):
+        self.spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.proof = validate_examples.key_set_proof_example()
+        self.discovery = validate_examples.key_set_discovery_example()
+        self.keys = validate_examples.discovery_keys(self.discovery)
+        self.first, self.second = self.proof["signatures"]
+        self.key_ids = self.discovery["issuerKeySet"]["keyIds"]
+
+    def count(self, signatures=None, discovery=None, **members):
+        proof = {**self.proof, **members}
+        if signatures is not None:
+            proof["signatures"] = signatures
+        return validate_examples.key_set_count_errors(
+            proof, self.discovery if discovery is None else discovery
+        )
+
+    def with_set(self, **members):
+        discovery = copy.deepcopy(self.discovery)
+        discovery["issuerKeySet"].update(members)
+        return discovery
+
+    @staticmethod
+    def fewer(count, threshold=2):
+        return (
+            f"step 4: {count} key{'' if count == 1 else 's'} of the issuer key set signed the "
+            f"proof, fewer than its threshold of {threshold}"
+        )
+
+    @staticmethod
+    def changed(entry):
+        value = bytearray(base64.b64decode(entry["value"]))
+        value[0] ^= 1
+        return {**entry, "value": base64.b64encode(bytes(value)).decode()}
+
+    def test_repository_spec_passes(self):
+        self.assertEqual(validate_examples.key_set_proof_check(), [])
+        self.assertEqual(self.count(), [])
+        self.assertEqual(validate_examples.two_authority_errors(self.proof, self.keys), [])
+
+    def test_proof_is_signed_by_two_keys_of_the_2_of_3_set_of_its_issuer(self):
+        self.assertEqual(self.proof["issuerDid"], self.discovery["authorityDid"])
+        self.assertEqual(self.discovery["issuerKeySet"]["threshold"], 2)
+        self.assertEqual(len(self.key_ids), 3)
+        self.assertEqual([entry["keyId"] for entry in self.proof["signatures"]], self.key_ids[:2])
+        self.assertEqual({entry["algorithm"] for entry in self.proof["signatures"]}, {"Ed25519"})
+        self.assertLess(self.proof["trustLevel"], 3)
+
+    def test_signatures_verify_under_the_keys_of_the_section_7_1_1_example(self):
+        message = validate_examples.canonical_string(self.proof).encode("utf-8")
+        self.assertEqual(
+            message.decode("utf-8"),
+            "did:opena2a:mcp_server:agent_conformance_test_001|2|0.743200|listed|"
+            "2026-10-12T12:00:00Z|2026-10-13T06:00:00Z|did:opena2a:authority:example.org",
+        )
+        for entry, other in ((self.first, self.second), (self.second, self.first)):
+            with self.subTest(keyId=entry["keyId"]):
+                value = base64.b64decode(entry["value"])
+                self.assertTrue(validate_examples.ed25519_verifies(self.keys[entry["keyId"]], message, value))
+                self.assertFalse(validate_examples.ed25519_verifies(self.keys[other["keyId"]], message, value))
+
+    def test_one_key_of_the_set_is_fewer_than_the_threshold(self):
+        for entry in (self.first, self.second):
+            with self.subTest(keyId=entry["keyId"]):
+                self.assertEqual(self.count([entry]), [self.fewer(1)])
+
+    def test_entries_with_the_same_key_id_count_as_one_key(self):
+        for signatures in ([self.first, self.first], [self.second, self.second, self.second]):
+            with self.subTest(entries=len(signatures)):
+                self.assertEqual(self.count(signatures), [self.fewer(1)])
+
+    def test_key_counts_when_any_entry_carrying_it_verifies(self):
+        for signatures in (
+            [self.first, self.changed(self.second), self.second],
+            [self.changed(self.first), self.first, self.second],
+        ):
+            with self.subTest(signatures=[entry["value"][:8] for entry in signatures]):
+                self.assertEqual(self.count(signatures), [])
+
+    def test_entry_that_does_not_verify_counts_toward_no_key(self):
+        for entry in (self.changed(self.second), {**self.second, "value": "not base64!"}):
+            with self.subTest(value=entry["value"][:12]):
+                self.assertEqual(self.count([self.first, entry]), [self.fewer(1)])
+
+    def test_entry_whose_key_id_is_not_in_the_set_counts_toward_no_key(self):
+        # The second entry's key is in publicKeys and verifies, but this set leaves it out.
+        discovery = self.with_set(keyIds=[self.key_ids[0], self.key_ids[2]])
+        self.assertEqual(validate_examples.issuer_key_set_errors(discovery), [])
+        self.assertEqual(self.count(discovery=discovery), [self.fewer(1)])
+
+    def test_entry_of_another_algorithm_counts_toward_no_key(self):
+        sigstore = validate_examples.sigstore_example()["signatures"][1]
+        for entry in (
+            {**self.second, "algorithm": "ML-DSA-65"},
+            {**self.second, "algorithm": "Sigstore"},
+            {**validate_examples.ML_DSA_SIGNATURE, "keyId": self.second["keyId"]},
+            {**sigstore, "keyId": self.second["keyId"]},
+        ):
+            with self.subTest(algorithm=entry["algorithm"], value="value" in entry):
+                self.assertEqual(self.count([self.first, entry]), [self.fewer(1)])
+
+    def test_threshold_decides_how_many_keys_meet_the_set(self):
+        self.assertEqual(self.count([self.first], self.with_set(threshold=1)), [])
+        self.assertEqual(
+            self.count(discovery=self.with_set(threshold=3)),
+            ["step 4: 2 keys of the issuer key set signed the proof, fewer than its threshold of 3"],
+        )
+
+    def test_no_key_signed_a_changed_proof(self):
+        self.assertEqual(
+            self.count(trustScore=0.7433),
+            ["step 4: 0 keys of the issuer key set signed the proof, fewer than its threshold of 2"],
+        )
+
+    def test_set_that_breaks_a_rule_is_met_by_no_proof(self):
+        broken = "step 4: no proof meets an issuer key set that breaks Section 7.1.1: "
+        for members, rule in (
+            ({"threshold": 4}, "issuerKeySet threshold 4 is more than the 3 keys it lists"),
+            ({"keyIds": [self.key_ids[0], self.key_ids[0], self.key_ids[1]]},
+             f"issuerKeySet lists {self.key_ids[0]} twice"),
+        ):
+            with self.subTest(members=members):
+                self.assertEqual(self.count(discovery=self.with_set(**members)), [broken + rule])
+
+    def test_discovery_without_a_set_is_met_by_every_proof(self):
+        discovery = copy.deepcopy(self.discovery)
+        del discovery["issuerKeySet"]
+        for signatures in ([self.first], [self.changed(self.first)]):
+            with self.subTest(signatures=signatures[0]["value"][:8]):
+                self.assertEqual(self.count(signatures, discovery), [])
+
+    def test_timestamp_that_is_not_rfc3339_is_one_error(self):
+        errors = self.count(issuedAt="never")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("no Section 4.3 canonical string: "), errors[0])
+
+    def test_edits_break_the_count_and_no_other_rule(self):
+        """The proof without its #key-2 entry, and with its #key-1 entry in
+        place of that entry: Section 4.4.2's two rejected cases."""
+        for signatures in ([self.first], [self.first, self.first]):
+            with self.subTest(entries=len(signatures)):
+                edit = {**self.proof, "signatures": signatures}
+                self.assertEqual(validate_examples.two_authority_errors(edit, self.keys), [])
+                self.assertEqual(self.count(signatures), [self.fewer(1)])
+
+    def test_check_fails_when_an_edit_meets_the_set(self):
+        with mock.patch.object(validate_examples, "key_set_count_errors", return_value=[]):
+            errors = validate_examples.key_set_proof_check()
+        self.assertEqual(
+            errors,
+            [
+                "the example without its last entry does not break the count alone",
+                "the example with its first entry in place of its last does not break the count alone",
+            ],
+        )
+
+    def test_check_fails_a_proof_one_key_signed(self):
+        with mock.patch.object(
+            validate_examples, "key_set_proof_example", return_value={**self.proof, "signatures": [self.first]}
+        ):
+            self.assertEqual(validate_examples.key_set_proof_check(), [self.fewer(1)])
+
+    def test_check_fails_a_proof_at_trust_level_3(self):
+        # Another trustLevel changes the canonical string, so no signature is verified here.
+        with mock.patch.object(
+            validate_examples, "key_set_proof_example", return_value={**self.proof, "trustLevel": 3}
+        ), mock.patch.object(validate_examples, "ed25519_verifies", return_value=True):
+            self.assertEqual(validate_examples.key_set_proof_check(), [validate_examples.SINGLE_AUTHORITY])
+
+    def test_check_fails_a_proof_of_another_authority(self):
+        issuer = "did:opena2a:authority:opena2a.org"
+        with mock.patch.object(
+            validate_examples, "key_set_proof_example", return_value={**self.proof, "issuerDid": issuer}
+        ):
+            errors = validate_examples.key_set_proof_check()
+        self.assertEqual(
+            errors,
+            [
+                f"the example's issuerDid {issuer!r} is not the authorityDid "
+                f"'did:opena2a:authority:example.org' of the {KEY_SET_HEADING!r} example"
+            ],
+        )
+
+    def test_check_fails_when_the_section_7_1_1_example_declares_no_set(self):
+        discovery = copy.deepcopy(self.discovery)
+        del discovery["issuerKeySet"]
+        with mock.patch.object(validate_examples, "key_set_discovery_example", return_value=discovery):
+            errors = validate_examples.key_set_proof_check()
+        self.assertEqual(errors, [f"the {KEY_SET_HEADING!r} example declares no issuerKeySet"])
+
+    def test_sections_4_4_7_1_1_and_2_1_name_the_proof(self):
+        lines = self.spec.splitlines()
+        count = next(i for i, line in enumerate(lines) if line.startswith("**Issuer key set count.**"))
+        paragraph = " ".join(lines[count:lines.index("", count)])
+        self.assertIn("Section 4.4.2 is a proof that meets the set of the Section 7.1.1 example.", paragraph)
+        self.assertIn("Section 4.4.2 is a proof that two of its keys signed.", self.spec)
+        coverage = next(line for line in lines if line.startswith(validate_examples.COVERAGE_LIST))
+        self.assertIn("the Section 4.4.2 proof and its two edits are the three cases", coverage)
+
+    def with_block(self, heading, block):
+        """ATP-SPEC.md with `block` in place of the ```json block under `heading`."""
+        start = self.spec.index("```json\n", self.spec.index(f"\n{heading}\n")) + len("```json\n")
+        end = self.spec.index("\n```\n", start)
+        return self.spec[:start] + block + self.spec[end:]
+
+    def main_with_spec(self, spec, unmapped=None):
+        """Run main() in a copy of the repository whose ATP-SPEC.md is `spec`,
+        without the examples map entry of the heading `unmapped` when one is
+        given. Returns the exit code, the output lines and those of them that
+        report a failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(ROOT / "README.md", root / "README.md")
+            (root / "ATP-SPEC.md").write_text(spec, encoding="utf-8")
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            if unmapped is not None:
+                map_path = root / "schemas" / "examples-map.json"
+                entries = json.loads(map_path.read_text(encoding="utf-8"))
+                kept = [entry for entry in entries if entry.get("heading") != unmapped]
+                self.assertEqual(len(kept), len(entries) - 1)
+                map_path.write_text(json.dumps(kept), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_the_check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 0)
+        self.assertIn(f"keyset OK      {self.KEYSET}\n", out.getvalue())
+        self.assertIn(f"example OK     ATP-SPEC.md @ {self.HEADING!r}\n", out.getvalue())
+
+    def test_main_fails_on_key_set_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "key_set_proof_check", return_value=["one key"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn(f"keyset FAIL    {self.KEYSET}\n    one key\n", out.getvalue())
+
+    def test_main_fails_on_a_proof_one_key_signed(self):
+        for signatures in ([self.first], [self.first, self.first]):
+            with self.subTest(entries=len(signatures)):
+                block = json.dumps({**self.proof, "signatures": signatures}, indent=2)
+                code, lines, failed = self.main_with_spec(self.with_block(self.HEADING, block))
+                self.assertEqual((code, failed), (1, [f"keyset FAIL    {self.KEYSET}"]), lines)
+                self.assertIn(f"    {self.fewer(1)}", lines)
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_reports_an_example_it_cannot_read_once(self):
+        """The examples map validates each block and reports it, and checks
+        the Section 7.1.1 rules on that example; the check is not compared,
+        not failed a second time."""
+        proof_label = f"ATP-SPEC.md @ {self.HEADING!r}"
+        set_label = f"ATP-SPEC.md @ {KEY_SET_HEADING!r}"
+        proof_schema = f"example FAIL   {proof_label} vs schemas/trust-proof-v1.schema.json"
+        for heading, block, failure, state in (
+            (self.HEADING, json.dumps(self.proof, indent=2)[:-1], f"example INVALID JSON  {proof_label}: ",
+             f"the {self.HEADING!r} example is not JSON"),
+            (self.HEADING, "[]", proof_schema,
+             f"the {self.HEADING!r} example is not a trust proof the schema accepts"),
+            (self.HEADING, json.dumps({**self.proof, "trustLevel": 5}), proof_schema,
+             f"the {self.HEADING!r} example is not a trust proof the schema accepts"),
+            (KEY_SET_HEADING, "[]", f"example FAIL   {set_label} vs schemas/discovery-v1.schema.json",
+             f"the {KEY_SET_HEADING!r} example is not a discovery document the schema accepts"),
+            (KEY_SET_HEADING, json.dumps(self.with_set(threshold=4), indent=2),
+             f"example FAIL   {set_label} vs schemas/discovery-v1.schema.json",
+             f"the {KEY_SET_HEADING!r} example's issuerKeySet breaks a Section 7.1.1 rule"),
+        ):
+            with self.subTest(heading=heading, block=block[:20], state=state):
+                code, lines, failed = self.main_with_spec(self.with_block(heading, block))
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(failure), failed)
+                self.assertIn(f"keyset SKIP    {self.KEYSET}: not compared, {state}", lines)
+                self.assertEqual([line for line in lines if line.startswith("keyset OK")], [])
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_fails_the_check_on_an_unmapped_example_it_cannot_read(self):
+        for heading, block, state in (
+            (self.HEADING, "[]", f"the {self.HEADING!r} example is not a trust proof the schema accepts"),
+            (KEY_SET_HEADING, json.dumps(self.with_set(threshold=4), indent=2),
+             f"the {KEY_SET_HEADING!r} example's issuerKeySet breaks a Section 7.1.1 rule"),
+        ):
+            with self.subTest(heading=heading):
+                code, lines, failed = self.main_with_spec(self.with_block(heading, block), unmapped=heading)
+                self.assertEqual(code, 1)
+                self.assertEqual(failed, [f"keyset FAIL    {self.KEYSET}"], lines)
+                self.assertIn(f"    {state}", lines)
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_reports_a_heading_that_is_not_in_the_spec_once(self):
+        not_found = f"ATP-SPEC.md: heading {self.HEADING!r} not found"
+        self.assertEqual(self.spec.count(f"\n{self.HEADING}\n"), 1)
+        renamed = self.spec.replace(f"\n{self.HEADING}\n", f"\n{self.HEADING} entry\n")
+        code, lines, failed = self.main_with_spec(renamed)
+        self.assertEqual((code, failed), (1, [f"example FAIL   {not_found}"]), lines)
+        self.assertIn(f"keyset SKIP    {self.KEYSET}: not compared, {not_found}", lines)
+        code, lines, failed = self.main_with_spec(renamed, unmapped=self.HEADING)
+        self.assertEqual((code, failed), (1, [f"keyset FAIL    {self.KEYSET}"]), lines)
+        self.assertIn(f"    {not_found}", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
 
 
 # A Section 4.3 with a table of served timestamps; {row} is on line 6.
@@ -2791,6 +3107,7 @@ class SchemaCheckTest(unittest.TestCase):
         "### 4.2 Trust Proof Format": "trust-proof-v1",
         "#### 4.3.1 Sigstore co-signature": "trust-proof-v1",
         "#### 4.4.1 Two-authority proof (Level 3)": "trust-proof-v1",
+        "#### 4.4.2 Issuer key set proof": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
     REPLACEMENTS = (
