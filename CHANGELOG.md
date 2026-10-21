@@ -271,6 +271,21 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   path/URL map and now describes a path map; the schema does not yet refuse a value that is
   not a path. T1.7 already failed, without a request, on an `endpoints.trustProof` that does
   not start with `/`.
+- Section 7.1: the authority URL is an `https` URL. An authority serves the discovery
+  document and every endpoint over HTTPS and SHOULD send `Strict-Transport-Security`; a
+  client sends no request under another scheme, follows no redirect to one and verifies the
+  authority's certificate (RFC 9110 Section 4.3.4). An `http` authority URL whose host is a
+  loopback address literal (`127.0.0.0/8` or `::1`; the name `localhost` is not one) is the
+  one exception. A verifier uses no copy of the discovery document more than 3600 seconds
+  old, counting the response's `Age` header (RFC 9111 Section 5.1), to verify a proof or
+  signature of the authority, SHOULD obtain the document again every 5 minutes (the Section
+  8.1 polling interval), and accepts no proof of an authority whose document it cannot obtain
+  within that hour. An authority SHOULD send a `Cache-Control` `max-age` of at most 3600 and
+  SHOULD publish a key at least an hour before it signs with it. Section 7.1.1 and Section
+  8.1 name this transport, Section 8.2 step 2 states when a revoked key leaves a verifier's
+  copy, Section 10.1 states that bound and adds a row for substitution of the discovery
+  document in transit, and Section 2.1 lists both rules among those no fixture covers. The
+  specification named no transport and no age before.
 - README: the Reference Implementation section said the OpenA2A Registry implements ATP at
   Level 2 conformance. It now names the conformance tests the reference authority passes (T1.1
   to T1.6) and fails (T1.7 to T1.14 and T2.1 to T2.3), and says that its discovery document
