@@ -11,6 +11,11 @@
   },
   {
     "file": "ATP-SPEC.md",
+    "heading": "#### 4.4.1 Two-authority proof (Level 3)",
+    "schema": "schemas/trust-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
     "heading": "### 5.4 Inclusion Proof",
     "schema": "schemas/inclusion-proof-v1.schema.json"
   },

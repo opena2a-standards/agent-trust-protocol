@@ -12,7 +12,7 @@
 
 ## Abstract
 
-The Agent Trust Protocol (ATP) defines a standard for expressing, verifying, and distributing trust assertions about AI agents. It enables any party to answer the question: "Should I trust this agent?" with a cryptographically verifiable and auditable response. Federation (Section 6, conformance Level 3), in which several trust authorities co-sign a proof so that the response is decentralized, is specified and not yet demonstrated: no second authority co-signs proofs yet, and no conformance fixture covers a co-signed proof (Section 2.1).
+The Agent Trust Protocol (ATP) defines a standard for expressing, verifying, and distributing trust assertions about AI agents. It enables any party to answer the question: "Should I trust this agent?" with a cryptographically verifiable and auditable response. Federation (Section 6, conformance Level 3), in which several trust authorities co-sign a proof so that the response is decentralized, is specified and not yet demonstrated: no second authority co-signs proofs yet, and no conformance-suite fixture covers a co-signed proof (Section 2.1). Section 4.4.1 is a two-authority proof signed with RFC 8032 test keys, which a reader can verify.
 
 ATP is designed for a world where millions of AI agents operate across organizational boundaries — MCP servers handling filesystem access, A2A agents delegating tasks to each other, autonomous agents making decisions on behalf of users. Each of these interactions requires a trust decision. ATP provides the infrastructure for making that decision reliably.
 
@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority; the Section 4.4.1 proof is co-signed under two RFC 8032 test keys and is not a suite fixture); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -461,7 +461,7 @@ A verifier MUST perform the following checks in order:
    - `issuedAt` MUST be before `expiresAt`
    - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
-7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present. A Sigstore co-signature (Section 4.3.1) is not an authority signature.
+7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present: the Ed25519 entry step 4 requires, under a key of `issuerDid`, and an Ed25519 entry that verifies in step 4 under a key of a second trust authority. The second authority is a known trust authority, as step 2 requires of `issuerDid`: the verifier knows it from its own configuration, never because the proof or the issuer's discovery document names it. Two authorities are distinct only when their DIDs differ and no public key is a key of both, so a key published under two DIDs never counts as a second authority. An ML-DSA-65 entry, the second signature of hybrid mode, is not a second authority, and a Sigstore co-signature (Section 4.3.1) is not an authority signature. Section 4.4.1 is a proof that passes this step.
 
 **Issuer key set count.** A proof meets an issuer key set when at least `threshold` distinct
 keys of the set signed it. Each entry of `keyIds` counts once when an Ed25519 entry of
@@ -477,6 +477,52 @@ of the agent itself is Section 8.1: a verifier that reads the revocation list ap
 entry for the proof's `did` whether or not the entry carries a `transparencyLogIndex`, and
 requires no inclusion proof for an entry without one (an agent revoked before the authority
 logged anything for it).
+
+#### 4.4.1 Two-authority proof (Level 3)
+
+The proof below is the Section 4.2 proof co-signed by a second authority: beside the
+issuer's entry from Section 4.2, it carries an Ed25519 entry from
+`did:opena2a:authority:cosigner.example` over the same Section 4.3 canonical string. Both
+keys are fixture keys. The issuer's is the `#key-1` key of the Section 7.1 example, the
+RFC 8032 Section 7.1 TEST 1 key, and the co-signer's is the TEST 2 key. RFC 8032 publishes
+the secret key of each, so anyone can sign with them: the proof shows the wire form and the
+step 7 rule, not a federation in operation.
+
+| Authority | `keyId` | Ed25519 public key (hex) |
+|---|---|---|
+| Issuer | `did:opena2a:authority:opena2a.org#key-1` | `d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a` |
+| Co-signer | `did:opena2a:authority:cosigner.example#key-1` | `3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c` |
+
+```json
+{
+  "did": "did:opena2a:mcp_server:agent_conformance_test_001",
+  "trustLevel": 3,
+  "trustScore": 0.825,
+  "verdict": "passed",
+  "issuedAt": "2026-05-23T12:00:00Z",
+  "expiresAt": "2026-05-24T06:00:00Z",
+  "issuerDid": "did:opena2a:authority:opena2a.org",
+  "signatures": [
+    {
+      "keyId": "did:opena2a:authority:opena2a.org#key-1",
+      "algorithm": "Ed25519",
+      "value": "L6Q6Dh+zPLq+BB9NutK9OV+zX2/cxbSd33k23OwZxmhvlJr+I5/eEDdcxEnSHpgqRFFLt/+b19IMb1mNseWtBw=="
+    },
+    {
+      "keyId": "did:opena2a:authority:cosigner.example#key-1",
+      "algorithm": "Ed25519",
+      "value": "kALLXZaZIunrKWn0ZmcPGUEnhndqWYegrzrCnvSiq2nmKbHBsGTPAdi9rpocLxrxrOLCk6vruTwK8PaKKbDjAg=="
+    }
+  ],
+  "transparencyLogIndex": 42
+}
+```
+
+Under the keys in the table both entries verify (step 4), and their DIDs and their keys
+differ, so the proof passes step 7. Without the co-signer's entry it is the Section 4.2
+proof, which carries one authority's signature and so fails step 7.
+`scripts/validate_examples.py` in this repository verifies both signatures, and checks that
+the proof passes step 7 and fails it without the co-signer's entry.
 
 ### 4.5 Proof Retrieval
 

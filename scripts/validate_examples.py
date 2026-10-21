@@ -100,6 +100,19 @@ that calls ATP or its response decentralized also says federation is not yet
 demonstrated. Headings and table rows naming the Level 3 conformance level, and
 "Decentralized Identifier", are not claims.
 
+The Section 4.4.1 proof is at trust level 3 or 4 and passes Section 4.4 steps
+3, 4 and 7 under the keys of its table: every entry is an Ed25519 entry whose
+keyId is a row of the table and whose signature verifies over the Section 4.3
+canonical string (RFC 8032 verification in Python integers, so no package
+beyond jsonschema is needed), one entry is under a key of issuerDid, and
+another is under a key of a second DID that shares no key with issuerDid. The
+same proof with the entries of issuerDid alone fails step 7. A table row whose
+keyId is not a DID URL with a fragment or repeats one above, or whose key is
+not 64 lowercase hex digits, is an error. A Section 4.4.1 example that is not
+JSON, or not a trust proof the schema accepts, is the examples map's failure
+when the map lists it, and the check is then reported as not compared, not as
+a second failure; when the map does not list it, it is this check's failure.
+
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
@@ -133,7 +146,10 @@ validated.
 Exit code 0 = all schemas well-formed and all mapped examples valid.
 """
 
+import base64
+import binascii
 import copy
+import hashlib
 import json
 import pathlib
 import re
@@ -1329,6 +1345,247 @@ def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
     return errors
 
 
+# Section 4.4.1: the proof two authorities co-sign. The first table under the
+# heading gives the Ed25519 public key each keyId of the proof names.
+TWO_AUTHORITY_HEADING = "#### 4.4.1 Two-authority proof (Level 3)"
+# A keyId in that table: a DID as the trust-proof schema writes one, with the
+# fragment Section 7.1 asks of a keyId.
+TABLE_KEY_ID = re.compile(r"did:[a-z0-9]+:[A-Za-z0-9._:@/-]+#[A-Za-z0-9._-]+")
+TABLE_KEY = re.compile(r"[0-9a-f]{64}")
+# The step 7 error, which the proof gives without its co-signer's entry.
+SINGLE_AUTHORITY = (
+    "step 7: no entry verifies under a key of a second authority, a DID other than "
+    "issuerDid that shares no key with it"
+)
+
+# Ed25519 (RFC 8032 Section 5.1) in Python integers: the field prime, the group
+# order, the curve constant d and a square root of -1 modulo the prime. A point
+# is a tuple (X, Y, Z, T) of extended coordinates: x = X/Z, y = Y/Z, x*y = T/Z.
+ED25519_P = 2**255 - 19
+ED25519_L = 2**252 + 27742317777372353535851937790883648493
+ED25519_D = -121665 * pow(121666, -1, ED25519_P) % ED25519_P
+ED25519_SQRT_M1 = pow(2, (ED25519_P - 1) // 4, ED25519_P)
+ED25519_IDENTITY = (0, 1, 1, 0)
+
+
+def ed25519_point(encoded: bytes):
+    """RFC 8032 Section 5.1.3: the point a 32-byte string encodes, or None when
+    it encodes none: another length, a y that is not below the field prime, a
+    y with no x on the curve, or x = 0 with the sign bit set."""
+    p = ED25519_P
+    if len(encoded) != 32:
+        return None
+    y = int.from_bytes(encoded, "little")
+    sign, y = y >> 255, y & ((1 << 255) - 1)
+    if y >= p:
+        return None
+    u, v = (y * y - 1) % p, (ED25519_D * y * y + 1) % p
+    x = u * pow(v, 3, p) * pow(u * pow(v, 7, p), (p - 5) // 8, p) % p
+    if (v * x * x - u) % p:
+        if (v * x * x + u) % p:
+            return None
+        x = x * ED25519_SQRT_M1 % p
+    if x == 0 and sign:
+        return None
+    if x & 1 != sign:
+        x = p - x
+    return (x, y, 1, x * y % p)
+
+
+def ed25519_add(first, second):
+    """RFC 8032 Section 5.1.4: the sum of two points, a point added to itself
+    included."""
+    p = ED25519_P
+    a = (first[1] - first[0]) * (second[1] - second[0]) % p
+    b = (first[1] + first[0]) * (second[1] + second[0]) % p
+    c = 2 * ED25519_D * first[3] * second[3] % p
+    d = 2 * first[2] * second[2] % p
+    e, f, g, h = b - a, d - c, d + c, b + a
+    return (e * f % p, g * h % p, f * g % p, e * h % p)
+
+
+def ed25519_multiply(scalar: int, point):
+    """[scalar]point, by double and add. It is not constant time, which a
+    check of public values does not need."""
+    result = ED25519_IDENTITY
+    while scalar:
+        if scalar & 1:
+            result = ed25519_add(result, point)
+        point = ed25519_add(point, point)
+        scalar >>= 1
+    return result
+
+
+def ed25519_same(first, second) -> bool:
+    """Whether two points in extended coordinates are one point."""
+    p = ED25519_P
+    return (first[0] * second[2] - second[0] * first[2]) % p == 0 and (
+        first[1] * second[2] - second[1] * first[2]
+    ) % p == 0
+
+
+# The base point B, decoded from its RFC 8032 encoding: y = 4/5, x even.
+ED25519_B = ed25519_point(bytes([0x58]) + bytes([0x66]) * 31)
+
+
+def ed25519_verifies(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """RFC 8032 Section 5.1.7: whether `signature` is an Ed25519 signature of
+    `message` under `public_key`, checked as [S]B = R + [k]A. False when the
+    signature is not 64 bytes, its R or the key encodes no point, or its S is
+    not below the group order."""
+    if len(signature) != 64:
+        return False
+    key, r = ed25519_point(public_key), ed25519_point(signature[:32])
+    s = int.from_bytes(signature[32:], "little")
+    if key is None or r is None or s >= ED25519_L:
+        return False
+    digest = hashlib.sha512(signature[:32] + public_key + message).digest()
+    k = int.from_bytes(digest, "little") % ED25519_L
+    return ed25519_same(ed25519_multiply(s, ED25519_B), ed25519_add(r, ed25519_multiply(k, key)))
+
+
+def canonical_string(proof: dict) -> str:
+    """Section 4.3: the string every authority signature of a trust proof is
+    computed over: did, trustLevel in decimal digits, trustScore with six
+    decimal places, verdict, issuedAt and expiresAt as signed_time() gives
+    them, and issuerDid, joined by |. Raises ValueError for a timestamp that
+    is not RFC 3339."""
+    return "|".join(
+        (
+            proof["did"],
+            str(int(proof["trustLevel"])),
+            f"{proof['trustScore']:.6f}",
+            proof["verdict"],
+            signed_time(proof["issuedAt"]),
+            signed_time(proof["expiresAt"]),
+            proof["issuerDid"],
+        )
+    )
+
+
+def key_did(key_id: str) -> str:
+    """The DID a keyId names: the part before its #."""
+    return key_id.split("#", 1)[0]
+
+
+def two_authority_errors(proof: dict, keys: dict) -> list[str]:
+    """Section 4.4 steps 3, 4 and 7 for a trust proof, with `keys` (each keyId
+    mapped to the 32-byte Ed25519 public key it names) as the keys of the
+    trust authorities the verifier knows. Every entry is an Ed25519 entry
+    whose keyId is in `keys` and whose value verifies over the Section 4.3
+    canonical string; one of them is under a key of issuerDid; and at trust
+    levels 3 and 4 another is under a key of a second DID, one that shares no
+    key with issuerDid. No other algorithm is verified here, and step 7
+    counts none."""
+    try:
+        message = canonical_string(proof).encode("utf-8")
+    except ValueError as exc:
+        return [f"no Section 4.3 canonical string: {exc}"]
+    owned: dict = {}
+    for key_id, key in keys.items():
+        owned.setdefault(key_did(key_id), set()).add(key)
+    errors, signers = [], set()
+    for position, entry in enumerate(proof["signatures"]):
+        key_id = entry.get("keyId")
+        if entry.get("algorithm") != "Ed25519":
+            errors.append(
+                f"signatures[{position}] is a {entry.get('algorithm')!r} entry; step 7 counts "
+                "Ed25519 authority signatures only, and this check verifies no other"
+            )
+            continue
+        if key_id not in keys:
+            errors.append(
+                f"signatures[{position}]: keyId {key_id!r} names no key the verifier knows (step 3)"
+            )
+            continue
+        try:
+            value = base64.b64decode(entry.get("value"), validate=True)
+        except (binascii.Error, TypeError, ValueError):
+            value = b""
+        if ed25519_verifies(keys[key_id], message, value):
+            signers.add(key_did(key_id))
+        else:
+            errors.append(f"signatures[{position}] does not verify under {key_id!r} (step 4)")
+    issuer = proof["issuerDid"]
+    if issuer not in signers:
+        errors.append(f"no entry verifies under a key of issuerDid {issuer!r} (step 4)")
+    elif proof["trustLevel"] >= 3 and not any(
+        did != issuer and not owned[did] & owned[issuer] for did in signers
+    ):
+        errors.append(SINGLE_AUTHORITY)
+    return errors
+
+
+def two_authority_keys(text: str) -> tuple[dict, list[str]]:
+    """The first table under the Section 4.4.1 heading: the 32-byte key each
+    row's `keyId` names, and an error, at the line of the row, for each row
+    whose keyId is not a DID URL with a fragment or repeats one above, or
+    whose key is not 64 lowercase hex digits."""
+    rows = section_table(text, TWO_AUTHORITY_HEADING)
+    if len(rows) < 3:
+        return {}, [f"ATP-SPEC.md: no key rows in a table under {TWO_AUTHORITY_HEADING!r}"]
+    keys, errors = {}, []
+    for number, line in rows[2:]:
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        key_id, key = (cells + ["", ""])[1:3]
+        if not TABLE_KEY_ID.fullmatch(key_id):
+            errors.append(f"ATP-SPEC.md:{number}: {key_id!r} is not a DID URL with a fragment")
+        elif key_id in keys:
+            errors.append(f"ATP-SPEC.md:{number}: {key_id!r} has a row above")
+        elif not TABLE_KEY.fullmatch(key):
+            errors.append(
+                f"ATP-SPEC.md:{number}: the key of {key_id!r} is not 64 lowercase hex digits"
+            )
+        else:
+            keys[key_id] = bytes.fromhex(key)
+    return keys, errors
+
+
+def two_authority_example() -> dict:
+    """The Section 4.4.1 example. A specification without the heading or its
+    ```json block, and a block that is not JSON or not a trust proof the
+    trust-proof schema accepts, raises SourceUnusable: the examples map reads
+    the block and validates it against that schema, which reports each."""
+    try:
+        proof = json.loads(extract_block(ROOT / "ATP-SPEC.md", TWO_AUTHORITY_HEADING))
+    except NoExample as exc:
+        raise SourceUnusable(f"ATP-SPEC.md: {exc}") from None
+    except json.JSONDecodeError:
+        raise SourceUnusable(f"the {TWO_AUTHORITY_HEADING!r} example is not JSON") from None
+    schema = json.loads(
+        (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
+    )
+    if not Draft202012Validator(schema).is_valid(proof):
+        raise SourceUnusable(
+            f"the {TWO_AUTHORITY_HEADING!r} example is not a trust proof the schema accepts"
+        )
+    return proof
+
+
+def two_authority_check(text: str) -> list[str]:
+    """Section 4.4.1 against Section 4.4 steps 3, 4 and 7, with the keys of its
+    table as the keys of the authorities the verifier knows: the example is at
+    trust level 3 or 4 and passes, and the example with the entries of
+    issuerDid alone fails step 7. Raises SourceUnusable when
+    two_authority_example() does."""
+    proof = two_authority_example()
+    keys, errors = two_authority_keys(text)
+    if errors:
+        return errors
+    if proof["trustLevel"] < 3:
+        errors.append(
+            f"the example's trustLevel {proof['trustLevel']} is below 3, where step 7 does not apply"
+        )
+    errors += two_authority_errors(proof, keys)
+    if not errors:
+        alone = [
+            entry for entry in proof["signatures"] if key_did(entry["keyId"]) == proof["issuerDid"]
+        ]
+        if SINGLE_AUTHORITY not in two_authority_errors({**proof, "signatures": alone}, keys):
+            errors.append("the example with the entries of issuerDid alone does not fail step 7")
+    return errors
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -1526,6 +1783,28 @@ def main() -> int:
         failures += 1
     elif cosignature_errors is not None:
         print("cosign OK      schemas/trust-proof-v1.schema.json vs Section 4.3.1")
+
+    try:
+        level3_errors = two_authority_check(spec)
+    except SourceUnusable as exc:
+        level3_errors = [str(exc)]
+        if any(
+            entry["file"] == "ATP-SPEC.md" and entry.get("heading") == TWO_AUTHORITY_HEADING
+            for entry in entries
+        ):
+            # The examples map reads and validates the block, so it fails there, once.
+            print(
+                "level3 SKIP    ATP-SPEC.md Section 4.4.1 vs Section 4.4 steps 3, 4 and 7: "
+                f"not compared, {exc}"
+            )
+            level3_errors = None
+    if level3_errors:
+        print("level3 FAIL    ATP-SPEC.md Section 4.4.1 vs Section 4.4 steps 3, 4 and 7")
+        for err in level3_errors:
+            print(f"    {err}")
+        failures += 1
+    elif level3_errors is not None:
+        print("level3 OK      ATP-SPEC.md Section 4.4.1 vs Section 4.4 steps 3, 4 and 7")
 
     timestamp_errors = signed_timestamp_errors(spec)
     if timestamp_errors:

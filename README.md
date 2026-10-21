@@ -4,7 +4,7 @@
 
 An open standard for verifiable trust assertions about AI agents. The agent-specific credential format defined by ATP is the Agent Trust eXtension (ATX).
 
-ATP enables any party to answer "Should I trust this agent?" with a cryptographically verifiable and auditable response. A decentralized response, co-signed by several trust authorities (federation, conformance Level 3), is specified and not yet demonstrated: no second authority co-signs proofs yet, and no conformance fixture covers a co-signed proof.
+ATP enables any party to answer "Should I trust this agent?" with a cryptographically verifiable and auditable response. A decentralized response, co-signed by several trust authorities (federation, conformance Level 3), is specified and not yet demonstrated: no second authority co-signs proofs yet. [The two-authority proof in ATP-SPEC.md](ATP-SPEC.md#441-two-authority-proof-level-3) is signed with RFC 8032 test keys, and a reader can verify it.
 
 ## Quick Start
 

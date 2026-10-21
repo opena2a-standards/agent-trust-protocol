@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-specification claim, revocation schema, Sigstore co-signature, threat model,
-issuer key set, signed timestamp, ATX status, fixture coverage, A2A agent card
-path and Verifiable Credential form checks in validate_examples.py,
-check_guides.py, the conformance scripts (run against fixture_authority.py;
-needs bash, curl and jq), the error fixture_authority.py stops with when it
-cannot read an example it serves or listen on its port, the registry
-generation and --check mode of gen_registries.py, and the test-suite sentences
-of the .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+specification claim, revocation schema, Sigstore co-signature, two-authority
+proof (with its Ed25519 verification), threat model, issuer key set, signed
+timestamp, ATX status, fixture coverage, A2A agent card path and Verifiable
+Credential form checks in validate_examples.py, check_guides.py, the
+conformance scripts (run against fixture_authority.py; needs bash, curl and
+jq), the error fixture_authority.py stops with when it cannot read an example
+it serves or listen on its port, the registry generation and --check mode of
+gen_registries.py, and the test-suite sentences of the
+.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
+import base64
 import calendar
 import contextlib
 import copy
 import io
+import itertools
 import json
 import os
 import re
@@ -222,6 +225,376 @@ class FederationClaimTest(unittest.TestCase):
             "```\n# decentralized\n```\n"
         )
         self.assertEqual(validate_examples.federation_claim_errors(text), [])
+
+
+class TwoAuthorityProofTest(unittest.TestCase):
+    """The Section 4.4.1 proof and the Section 4.4 step 7 rule:
+    two_authority_errors() accepts the proof under the keys of its table and
+    refuses each edit that leaves one authority, an entry it cannot verify or
+    a key it does not know, and main() reports the check once."""
+
+    HEADING = validate_examples.TWO_AUTHORITY_HEADING
+    LEVEL3 = "ATP-SPEC.md Section 4.4.1 vs Section 4.4 steps 3, 4 and 7"
+    SINGLE = validate_examples.SINGLE_AUTHORITY
+
+    def setUp(self):
+        self.spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.proof = validate_examples.two_authority_example()
+        self.keys, errors = validate_examples.two_authority_keys(self.spec)
+        self.assertEqual(errors, [])
+        self.issuer, self.cosigner = self.proof["signatures"]
+        self.issuer_did = self.proof["issuerDid"]
+        self.cosigner_did = validate_examples.key_did(self.cosigner["keyId"])
+
+    def errors(self, signatures=None, keys=None, **members):
+        proof = {**self.proof, **members}
+        if signatures is not None:
+            proof["signatures"] = signatures
+        return validate_examples.two_authority_errors(proof, self.keys if keys is None else keys)
+
+    def section_4_2_proof(self):
+        return json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 4.2 Trust Proof Format")
+        )
+
+    def fails_step_4(self, position, key_id):
+        return f"signatures[{position}] does not verify under {key_id!r} (step 4)"
+
+    def test_repository_spec_passes(self):
+        self.assertEqual(validate_examples.two_authority_check(self.spec), [])
+        self.assertEqual(self.errors(), [])
+
+    def test_proof_is_the_section_4_2_proof_with_an_entry_of_a_second_did(self):
+        self.assertEqual({**self.proof, "signatures": [self.issuer]}, self.section_4_2_proof())
+        self.assertNotEqual(self.cosigner_did, self.issuer_did)
+        self.assertEqual(self.cosigner["algorithm"], "Ed25519")
+        self.assertIn(self.proof["trustLevel"], (3, 4))
+
+    def test_issuer_key_is_the_key_the_section_7_1_example_publishes(self):
+        discovery = json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 7.1 Well-Known Endpoint")
+        )
+        published = {key["keyId"]: bytes.fromhex(key["publicKeyHex"]) for key in discovery["publicKeys"]}
+        self.assertEqual(self.keys[self.issuer["keyId"]], published[self.issuer["keyId"]])
+        self.assertNotEqual(self.keys[self.cosigner["keyId"]], self.keys[self.issuer["keyId"]])
+
+    def test_section_4_2_proof_fails_step_7_alone(self):
+        errors = validate_examples.two_authority_errors(self.section_4_2_proof(), self.keys)
+        self.assertEqual(errors, [self.SINGLE])
+
+    def test_entry_of_the_issuer_twice_is_one_authority(self):
+        self.assertEqual(self.errors([self.issuer, self.issuer]), [self.SINGLE])
+
+    def test_one_key_under_two_dids_is_one_authority(self):
+        keys = {**self.keys, self.cosigner["keyId"]: self.keys[self.issuer["keyId"]]}
+        signatures = [self.issuer, {**self.cosigner, "value": self.issuer["value"]}]
+        self.assertEqual(self.errors(signatures, keys), [self.SINGLE])
+
+    def test_second_did_sharing_a_key_with_the_issuer_is_one_authority(self):
+        for did, key_id in (
+            (self.issuer_did, self.cosigner["keyId"]),
+            (self.cosigner_did, self.issuer["keyId"]),
+        ):
+            with self.subTest(did=did):
+                keys = {**self.keys, f"{did}#key-2": self.keys[key_id]}
+                self.assertEqual(self.errors(keys=keys), [self.SINGLE])
+
+    def test_second_key_of_the_issuer_is_one_authority(self):
+        key_id = f"{self.issuer_did}#key-2"
+        keys = {
+            self.issuer["keyId"]: self.keys[self.issuer["keyId"]],
+            key_id: self.keys[self.cosigner["keyId"]],
+        }
+        signatures = [self.issuer, {**self.cosigner, "keyId": key_id}]
+        self.assertEqual(self.errors(signatures, keys), [self.SINGLE])
+
+    def test_changed_co_signature_fails_step_4(self):
+        value = base64.b64decode(self.cosigner["value"])
+        for position in (0, 31, 32, 63):
+            with self.subTest(position=position):
+                changed = bytearray(value)
+                changed[position] ^= 1
+                entry = {**self.cosigner, "value": base64.b64encode(bytes(changed)).decode()}
+                self.assertEqual(
+                    self.errors([self.issuer, entry]),
+                    [self.fails_step_4(1, self.cosigner["keyId"]), self.SINGLE],
+                )
+
+    def test_value_that_is_not_base64_fails_step_4(self):
+        entry = {**self.cosigner, "value": "not base64!"}
+        self.assertEqual(
+            self.errors([self.issuer, entry]), [self.fails_step_4(1, self.cosigner["keyId"]), self.SINGLE]
+        )
+
+    def test_changed_signed_member_fails_both_signatures(self):
+        self.assertEqual(
+            self.errors(trustScore=0.826),
+            [
+                self.fails_step_4(0, self.issuer["keyId"]),
+                self.fails_step_4(1, self.cosigner["keyId"]),
+                f"no entry verifies under a key of issuerDid {self.issuer_did!r} (step 4)",
+            ],
+        )
+
+    def test_key_the_verifier_does_not_know_fails_step_3(self):
+        keys = {self.issuer["keyId"]: self.keys[self.issuer["keyId"]]}
+        self.assertEqual(
+            self.errors(keys=keys),
+            [
+                f"signatures[1]: keyId {self.cosigner['keyId']!r} names no key the verifier knows (step 3)",
+                self.SINGLE,
+            ],
+        )
+
+    def test_entry_of_another_algorithm_is_not_a_second_authority(self):
+        sigstore = validate_examples.sigstore_example()["signatures"][1]
+        for entry in (sigstore, validate_examples.ML_DSA_SIGNATURE):
+            with self.subTest(algorithm=entry["algorithm"]):
+                errors = self.errors([self.issuer, entry])
+                self.assertEqual(len(errors), 2, errors)
+                self.assertTrue(
+                    errors[0].startswith(f"signatures[1] is a {entry['algorithm']!r} entry"), errors[0]
+                )
+                self.assertEqual(errors[1], self.SINGLE)
+
+    def test_proof_without_an_entry_of_the_issuer_fails_step_4(self):
+        self.assertEqual(
+            self.errors([self.cosigner]),
+            [f"no entry verifies under a key of issuerDid {self.issuer_did!r} (step 4)"],
+        )
+
+    def test_step_7_applies_at_trust_levels_3_and_4(self):
+        # Another trustLevel changes the canonical string, so no signature is verified here.
+        with mock.patch.object(validate_examples, "ed25519_verifies", return_value=True):
+            for level, expected in ((0, []), (2, []), (3, [self.SINGLE]), (4, [self.SINGLE])):
+                with self.subTest(level=level):
+                    self.assertEqual(self.errors([self.issuer], trustLevel=level), expected)
+
+    def test_timestamp_that_is_not_rfc3339_is_one_error(self):
+        errors = self.errors(issuedAt="never")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("no Section 4.3 canonical string: "), errors[0])
+
+    def test_check_fails_an_example_below_trust_level_3(self):
+        with mock.patch.object(
+            validate_examples, "two_authority_example", return_value={**self.proof, "trustLevel": 2}
+        ), mock.patch.object(validate_examples, "ed25519_verifies", return_value=True):
+            errors = validate_examples.two_authority_check(self.spec)
+        self.assertEqual(errors, ["the example's trustLevel 2 is below 3, where step 7 does not apply"])
+
+    def test_check_fails_when_the_entries_of_the_issuer_alone_pass(self):
+        with mock.patch.object(validate_examples, "two_authority_errors", return_value=[]):
+            errors = validate_examples.two_authority_check(self.spec)
+        self.assertEqual(errors, ["the example with the entries of issuerDid alone does not fail step 7"])
+
+    def test_table_row_that_names_no_key_fails_at_its_line(self):
+        lines = self.spec.split("\n")
+        row = next(i for i, line in enumerate(lines) if line.startswith("| Co-signer |"))
+        key = self.keys[self.cosigner["keyId"]].hex()
+        not_hex = f"ATP-SPEC.md:{row + 1}: the key of {self.cosigner['keyId']!r} is not 64 lowercase hex digits"
+        for line, error in (
+            (lines[row].replace(key, key[:-1]), not_hex),
+            (lines[row].replace(key, key.upper()), not_hex),
+            (
+                lines[row].replace("#key-1", ""),
+                f"ATP-SPEC.md:{row + 1}: {self.cosigner_did!r} is not a DID URL with a fragment",
+            ),
+            (
+                lines[row].replace(self.cosigner["keyId"], self.issuer["keyId"]),
+                f"ATP-SPEC.md:{row + 1}: {self.issuer['keyId']!r} has a row above",
+            ),
+        ):
+            with self.subTest(line=line):
+                spec = "\n".join(lines[:row] + [line] + lines[row + 1:])
+                self.assertEqual(validate_examples.two_authority_keys(spec)[1], [error])
+                self.assertEqual(validate_examples.two_authority_check(spec), [error])
+
+    def test_section_without_a_table_is_one_error(self):
+        spec = "\n".join(
+            line for line in self.spec.split("\n") if not line.startswith(("| Issuer |", "| Co-signer |"))
+        )
+        self.assertEqual(
+            validate_examples.two_authority_check(spec),
+            [f"ATP-SPEC.md: no key rows in a table under {self.HEADING!r}"],
+        )
+
+    def main_with_two_authority_example(self, block, mapped=True):
+        """Run main() in a copy of the repository whose Section 4.4.1 example
+        block is `block`; see main_with_spec()."""
+        start = self.spec.index("```json\n", self.spec.index(self.HEADING)) + len("```json\n")
+        end = self.spec.index("\n```\n", start)
+        return self.main_with_spec(self.spec[:start] + block + self.spec[end:], mapped)
+
+    def main_with_spec(self, spec, mapped=True):
+        """Run main() in a copy of the repository whose ATP-SPEC.md is `spec`,
+        with or without the Section 4.4.1 examples map entry. Returns the exit
+        code, the output lines and those of them that report a failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(ROOT / "README.md", root / "README.md")
+            (root / "ATP-SPEC.md").write_text(spec, encoding="utf-8")
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            if not mapped:
+                map_path = root / "schemas" / "examples-map.json"
+                entries = json.loads(map_path.read_text(encoding="utf-8"))
+                kept = [entry for entry in entries if entry.get("heading") != self.HEADING]
+                self.assertEqual(len(kept), len(entries) - 1)
+                map_path.write_text(json.dumps(kept), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_the_check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 0)
+        self.assertIn(f"level3 OK      {self.LEVEL3}\n", out.getvalue())
+        self.assertIn(f"example OK     ATP-SPEC.md @ {self.HEADING!r}\n", out.getvalue())
+
+    def test_main_fails_on_two_authority_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "two_authority_check", return_value=["one authority"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn(f"level3 FAIL    {self.LEVEL3}\n    one authority\n", out.getvalue())
+
+    def test_main_fails_on_a_proof_one_authority_signs(self):
+        block = json.dumps({**self.proof, "signatures": [self.issuer]}, indent=2)
+        code, lines, failed = self.main_with_two_authority_example(block)
+        self.assertEqual((code, failed), (1, [f"level3 FAIL    {self.LEVEL3}"]), lines)
+        self.assertIn(f"    {self.SINGLE}", lines)
+
+    def test_main_reports_an_example_it_cannot_read_once(self):
+        """The examples map validates the block and reports it; the check is
+        not compared, not failed a second time."""
+        label = f"ATP-SPEC.md @ {self.HEADING!r}"
+        schema_failure = f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"
+        for state, block, failure in (
+            ("is not JSON", json.dumps(self.proof, indent=2)[:-1], f"example INVALID JSON  {label}: "),
+            ("is not a trust proof the schema accepts", "[]", schema_failure),
+            ("is not a trust proof the schema accepts", json.dumps({**self.proof, "trustLevel": 5}),
+             schema_failure),
+        ):
+            with self.subTest(state=state, block=block[:20]):
+                code, lines, failed = self.main_with_two_authority_example(block)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(failure), failed)
+                self.assertIn(
+                    f"level3 SKIP    {self.LEVEL3}: not compared, the {self.HEADING!r} example {state}", lines
+                )
+                self.assertEqual([line for line in lines if line.startswith("level3 OK")], [])
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_fails_the_check_on_an_unmapped_example_it_cannot_read(self):
+        code, lines, failed = self.main_with_two_authority_example("[]", mapped=False)
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [f"level3 FAIL    {self.LEVEL3}"])
+        self.assertIn(f"    the {self.HEADING!r} example is not a trust proof the schema accepts", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_reports_a_heading_that_is_not_in_the_spec_once(self):
+        not_found = f"ATP-SPEC.md: heading {self.HEADING!r} not found"
+        self.assertEqual(self.spec.count(f"\n{self.HEADING}\n"), 1)
+        renamed = self.spec.replace(f"\n{self.HEADING}\n", f"\n{self.HEADING} entry\n")
+        code, lines, failed = self.main_with_spec(renamed)
+        self.assertEqual((code, failed), (1, [f"example FAIL   {not_found}"]), lines)
+        self.assertIn(f"level3 SKIP    {self.LEVEL3}: not compared, {not_found}", lines)
+        code, lines, failed = self.main_with_spec(renamed, mapped=False)
+        self.assertEqual((code, failed), (1, [f"level3 FAIL    {self.LEVEL3}"]), lines)
+        self.assertIn(f"    {not_found}", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+
+class Ed25519Test(unittest.TestCase):
+    """validate_examples.ed25519_verifies (RFC 8032 Section 5.1.7) on the
+    signatures of the Section 4.4.1 proof, and the Section 4.3 canonical string
+    they are over."""
+
+    def setUp(self):
+        proof = validate_examples.two_authority_example()
+        keys, _ = validate_examples.two_authority_keys((ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"))
+        self.message = validate_examples.canonical_string(proof).encode("utf-8")
+        self.signed = [(keys[entry["keyId"]], base64.b64decode(entry["value"])) for entry in proof["signatures"]]
+
+    def test_canonical_string(self):
+        self.assertEqual(
+            self.message.decode("utf-8"),
+            "did:opena2a:mcp_server:agent_conformance_test_001|3|0.825000|passed|"
+            "2026-05-23T12:00:00Z|2026-05-24T06:00:00Z|did:opena2a:authority:opena2a.org",
+        )
+        proof = {
+            "did": "did:opena2a:agent:a", "trustLevel": 4.0, "trustScore": 0.5, "verdict": "verified",
+            "issuedAt": "2026-10-11T20:57:21.5-06:00", "expiresAt": "2026-10-12T02:57:21.999Z",
+            "issuerDid": "did:opena2a:authority:b",
+        }
+        self.assertEqual(
+            validate_examples.canonical_string(proof),
+            "did:opena2a:agent:a|4|0.500000|verified|2026-10-12T02:57:21Z|2026-10-12T02:57:21Z|"
+            "did:opena2a:authority:b",
+        )
+
+    def test_signatures_of_the_proof_verify(self):
+        for key, signature in self.signed:
+            self.assertTrue(validate_examples.ed25519_verifies(key, self.message, signature))
+
+    def test_signature_under_the_other_key_does_not_verify(self):
+        (first_key, first), (second_key, second) = self.signed
+        self.assertFalse(validate_examples.ed25519_verifies(first_key, self.message, second))
+        self.assertFalse(validate_examples.ed25519_verifies(second_key, self.message, first))
+
+    def test_changed_message_does_not_verify(self):
+        key, signature = self.signed[0]
+        for message in (self.message + b" ", self.message[:-1], self.message.replace(b"|3|", b"|4|")):
+            with self.subTest(message=message[-12:]):
+                self.assertFalse(validate_examples.ed25519_verifies(key, message, signature))
+
+    def test_s_not_below_the_group_order_does_not_verify(self):
+        # [S + L]B is [S]B, so only the range check refuses this signature.
+        key, signature = self.signed[0]
+        s = int.from_bytes(signature[32:], "little") + validate_examples.ED25519_L
+        self.assertFalse(
+            validate_examples.ed25519_verifies(key, self.message, signature[:32] + s.to_bytes(32, "little"))
+        )
+
+    def test_encoding_of_no_point_does_not_verify(self):
+        key, signature = self.signed[0]
+        no_x = next(
+            y for y in itertools.count(2) if validate_examples.ed25519_point(y.to_bytes(32, "little")) is None
+        )
+        for name, encoded in (
+            ("a y with no x", no_x.to_bytes(32, "little")),
+            ("y not below the field prime", validate_examples.ED25519_P.to_bytes(32, "little")),
+            ("x = 0 with the sign bit set", (1 | 1 << 255).to_bytes(32, "little")),
+        ):
+            with self.subTest(name):
+                self.assertIsNone(validate_examples.ed25519_point(encoded))
+                self.assertFalse(validate_examples.ed25519_verifies(encoded, self.message, signature))
+                self.assertFalse(validate_examples.ed25519_verifies(key, self.message, encoded + signature[32:]))
+
+    def test_wrong_lengths_do_not_verify(self):
+        key, signature = self.signed[0]
+        for public, value in (
+            (key[:31], signature), (key + b"\0", signature), (key, signature[:63]), (key, signature + b"\0"),
+        ):
+            with self.subTest(key=len(public), signature=len(value)):
+                self.assertFalse(validate_examples.ed25519_verifies(public, self.message, value))
+
+    def test_base_point_is_the_rfc_8032_generator(self):
+        p, base = validate_examples.ED25519_P, validate_examples.ED25519_B
+        self.assertEqual(base[1], 4 * pow(5, -1, p) % p)
+        self.assertEqual(base[0] % 2, 0)
+        identity = validate_examples.ED25519_IDENTITY
+        self.assertFalse(validate_examples.ed25519_same(base, identity))
+        self.assertTrue(
+            validate_examples.ed25519_same(
+                validate_examples.ed25519_multiply(validate_examples.ED25519_L, base), identity
+            )
+        )
 
 
 class ReadmeDiscoveryTest(unittest.TestCase):
@@ -2417,6 +2790,7 @@ class SchemaCheckTest(unittest.TestCase):
         KEY_SET_HEADING: "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
         "#### 4.3.1 Sigstore co-signature": "trust-proof-v1",
+        "#### 4.4.1 Two-authority proof (Level 3)": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
     REPLACEMENTS = (

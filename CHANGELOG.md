@@ -20,6 +20,24 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `clients/README.md` documents the client and the fixture copies. A TypeScript client is not
   yet written.
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
+- Section 4.4.1: a two-authority proof for Level 3. It is the Section 4.2 proof with an
+  Ed25519 entry of `did:opena2a:authority:cosigner.example` added over the same Section 4.3
+  canonical string, and a table gives the public key each `keyId` names. Both keys are
+  fixture keys: the issuer's is the Section 7.1 example's `#key-1`, the RFC 8032 Section 7.1
+  TEST 1 key, and the co-signer's is the TEST 2 key, and RFC 8032 publishes the secret key of
+  each. The proof shows the wire form and the step 7 rule, not a federation in operation, and
+  it is not a conformance-suite fixture. `scripts/validate_examples.py` verifies both Ed25519
+  signatures with RFC 8032 verification written in Python integers, so CI still installs no
+  package beyond `jsonschema`, and checks that the proof passes Section 4.4 steps 3, 4 and 7
+  under the table's keys and fails step 7 with the entries of `issuerDid` alone; the examples
+  map validates the block against the trust-proof schema. `scripts/test_checks.py` covers the
+  rule's refusals (the issuer's entry twice, one key under two DIDs, a second DID sharing a
+  key with the issuer, a second key of the issuer, a changed signature, a key the verifier
+  does not know, an entry of another algorithm) and the verification's (a changed message,
+  an S not below the group order, an encoding of no point, a wrong length), and its
+  `checks.jq` agreement test now runs on the proof and its edits as well. The abstract, the
+  README headline and the Section 2.1 coverage list point to the proof; federation stays
+  specified and not yet demonstrated, since no second authority co-signs proofs.
 - Section 4.3.1: the Sigstore co-signature the abstract and README listed, which the
   trust-proof schema refused. It is a `signatures[]` entry with `algorithm: "Sigstore"`,
   `keyId` set to the certificate identity, and a Sigstore v0.3 `bundle` (message signature
@@ -156,6 +174,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 4.4 step 7: the two-authority rule says when two signatures come from distinct
+  authorities. They are two Ed25519 entries that verify in step 4, one under a key of
+  `issuerDid` and one under a key of a second known trust authority, which the verifier knows
+  from its own configuration and never because the proof or the issuer's discovery document
+  names it. Two authorities are distinct only when their DIDs differ and no public key is a
+  key of both, so a key published under two DIDs never counts as a second authority, and an
+  ML-DSA-65 entry is not a second authority. Step 7 required "at least two signatures from
+  distinct authorities" without saying when two authorities are distinct.
 - Abstract and README headline: the trust response is cryptographically verifiable and
   auditable; a decentralized response (Section 6 federation, conformance Level 3) is stated
   as specified and not yet demonstrated, since no second authority co-signs proofs and no
