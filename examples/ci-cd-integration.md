@@ -151,6 +151,8 @@ jobs:
 
 For pipelines with many agent dependencies, use the batch endpoint (ATP-SPEC Section 7.2) to verify all agents in a single API call. A batch answer is a query result, not a signed proof, so it carries no expiry to check; a pipeline that needs the signed proof runs `atp-trust-gate.sh` per agent instead.
 
+The reference authority (`https://api.oa2a.org`) does not accept this request yet: it answers the Section 7.2 body, `{"agents": [{"did": ...}]}`, with HTTP 400 and `{"error":"packages array is required"}`, so against it the script below exits 2. Until it accepts the body, run `atp-trust-gate.sh` for each agent.
+
 ```bash
 #!/usr/bin/env bash
 # verify-agents.sh -- Batch trust verification for CI/CD

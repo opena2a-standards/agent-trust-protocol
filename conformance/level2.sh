@@ -2,13 +2,14 @@
 # ATP Level 2 Conformance Test (extends Level 1)
 # Usage: ./level2.sh https://api.oa2a.org
 
-BASE_URL="${1:?Usage: $0 <authority-url>}"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # lib.sh's setup checks run before Level 1, so a setup error is printed once and
-# exits SETUP_ERROR before any test runs.
+# exits SETUP_ERROR before any test runs; a missing authority URL exits
+# USAGE_ERROR here, before Level 1 too.
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
+require_authority_url "${1:-}"
+BASE_URL="$1"
 
 # Run Level 1 first
 "$SCRIPT_DIR/level1.sh" "$BASE_URL"

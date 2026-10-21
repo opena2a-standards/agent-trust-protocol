@@ -69,7 +69,9 @@ a ```json block are wire data, such as a sample response's algorithm name, and
 are not sentences; lines of other code blocks are checked one by one.
 
 A README line that links ATP-SPEC.md and names a version names the version in
-the specification's `**Version:**` header.
+the specification's `**Version:**` header. A link fragment (`#4.3.1-...`) and a
+section number (`Section 4.3.1`, `§4.3.1`, `Sections 4.3.1 and 5.1.1`) are not
+read as versions.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
 link to no repository an anonymous reader cannot open, by its web, SSH, wiki, API,
@@ -743,18 +745,6 @@ def sentences(text: str):
     yield begin, text[begin:]
 
 
-def unit_sentences(unit):
-    """Yield (line number, sentence) for each sentence of a unit from
-    readme_units, the line number being the one the sentence starts on."""
-    starts, parts, offset = [], [], 0
-    for _, line in unit:
-        starts.append(offset)
-        parts.append(line.strip())
-        offset += len(parts[-1]) + 1
-    for begin, sentence in sentences(" ".join(parts)):
-        yield unit[bisect_right(starts, begin) - 1][0], sentence
-
-
 def join_unit(unit: list[tuple[int, str]]) -> tuple[str, list[int]]:
     """A unit's lines joined by single spaces, and the offset of each line in
     the joined text, so a match maps back to the line it starts on."""
@@ -764,6 +754,14 @@ def join_unit(unit: list[tuple[int, str]]) -> tuple[str, list[int]]:
         parts.append(line.strip())
         offset += len(parts[-1]) + 1
     return " ".join(parts), starts
+
+
+def unit_sentences(unit):
+    """Yield (line number, sentence) for each sentence of a unit from
+    readme_units, the line number being the one the sentence starts on."""
+    joined, starts = join_unit(unit)
+    for begin, sentence in sentences(joined):
+        yield unit[bisect_right(starts, begin) - 1][0], sentence
 
 
 def readme_signing_errors(text: str) -> list[str]:
@@ -1114,9 +1112,24 @@ def media_type_errors(text: str) -> list[str]:
     ]
 
 
+# A link fragment names a heading and a section number names a section; either
+# can hold digits in the form of a version (#changes-since-1.0.0-rc1, Section
+# 4.3.1), and neither names one. A section number is the number after
+# "Section" or "Sections" (with a capital or small s) or "§", and each number
+# of a list that follows it; a number followed by "-" or by another digit group
+# is not one, so a version such as 1.0.0-rc1 after the list is still read.
+LINK_FRAGMENT = re.compile(r"(\]\([^)\s#]*|https?://[^\s#)>]*)#[^\s)>]*")
+SECTION_NUMBER = r"\d+(?:\.\d+)*(?!\.?\d|-)"
+SECTION_NUMBERS = re.compile(
+    rf"(?:\b[Ss]ections?\s+|§+\s*){SECTION_NUMBER}"
+    rf"(?:(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or|to)\s+){SECTION_NUMBER})*"
+)
+
+
 def readme_spec_version_errors(text: str, spec: str) -> list[str]:
     """A README line that links ATP-SPEC.md and names a version names the
-    version in the specification's `**Version:**` header."""
+    version in the specification's `**Version:**` header. Link fragments and
+    section numbers are not read as versions."""
     header = SPEC_VERSION.search(spec)
     if header is None:
         return ["ATP-SPEC.md: no **Version:** header line"]
@@ -1124,7 +1137,8 @@ def readme_spec_version_errors(text: str, spec: str) -> list[str]:
     for number, line, kind in markdown_lines(text):
         if kind != "prose" or "ATP-SPEC.md" not in line:
             continue
-        for version in VERSION.findall(line):
+        named = SECTION_NUMBERS.sub(" ", LINK_FRAGMENT.sub(r"\1", line))
+        for version in VERSION.findall(named):
             if version != header.group(1):
                 errors.append(
                     f"README.md:{number}: names the specification v{version}; "

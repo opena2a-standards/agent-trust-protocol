@@ -214,6 +214,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   section and the Why ATX subsection moved, as written, into `docs/use-cases.md`, which now
   holds each use case in full; the `declaredPurpose` row's authorization caveat is a sentence
   under the ATX table.
+- Section 7.1: each `endpoints` value is a path on the authority, not a URL. It starts with
+  `/` and holds no `#`, whitespace or control character; a client appends it to the
+  authority URL and MUST NOT request a value that does not start with `/`, which would name
+  another host (`.attacker.example/x` or `@attacker.example/x` after
+  `https://api.oa2a.org`). `schemas/discovery-v1.schema.json` described `endpoints` as a
+  path/URL map and now describes a path map; the schema does not yet refuse a value that is
+  not a path. T1.7 already failed, without a request, on an `endpoints.trustProof` that does
+  not start with `/`.
+- README: the Reference Implementation section said the OpenA2A Registry implements ATP at
+  Level 2 conformance. It now names the conformance tests the reference authority passes (T1.1
+  to T1.6) and fails (T1.7 to T1.14 and T2.1 to T2.3), and says that its discovery document
+  declares conformance level 1. `docs/reference-implementation.md` records the run of
+  2026-10-21 and the answers behind each failure: the proof endpoint refuses the
+  authority's own `did:atp:` DID with HTTP 400, the log is not served at the path `level2.sh`
+  requests, and the revocation response has no `nextSince`. `scripts/test_checks.py` fails
+  when the README's ranges differ from the recorded run or the section names a conformance
+  level.
 
 ### Fixed
 
@@ -576,6 +593,46 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   when `schemas/` holds a link whose target is not there: `listed_files()` lists the link,
   and the registry holds the same schemas as it does without the link, so a
   `local_registry()` that reads the link fails a test.
+- Conformance scripts: run without an authority URL, or with an empty one,
+  `conformance/level1.sh` and `conformance/level2.sh` exited 1 (bash's own `${1:?}` error),
+  the code of one failed test; they now print the usage line and exit 64 (EX_USAGE in
+  sysexits.h), outside the failed-test range, before any test. `rfc3339` in
+  `conformance/checks.jq` read a timestamp through `jq`'s `mktime`, which with jq 1.8.1 and
+  1.7.1 on macOS refuses a year before 1900 and 1969-12-31T23:59:59Z (epoch second -1), so an
+  `issuedAt` of 1899-12-31T00:00:00Z failed T1.8 and a log entry timestamped
+  1969-12-31T23:59:59Z failed T2.2. It now checks the date and time fields by number and
+  counts the epoch seconds itself, for years 0000 to 9999. The date-time check in
+  `scripts/test_checks.py`, written apart from `checks.jq`, accepted hour 24 on Python 3.14,
+  whose `datetime.fromisoformat` reads it as midnight of the next day; it now bounds each
+  field by number and the day by `calendar`, and agrees with `rfc3339` on hour 24, a minute
+  or second of 60, a day the month lacks, years before 1900, year 0000 and
+  1969-12-31T23:59:59Z. `scripts/test_checks.py` checks the epoch seconds `rfc3339` gives
+  against values worked out apart from it, probes T1.8 and T2.2 with those timestamps, and
+  adds T1.7 probes for an `endpoints.trustProof` that extends the host name
+  (`.attacker.example/...`) or lacks its leading slash, each asserting the reason and that
+  no request is sent.
+- `scripts/validate_examples.py` read a section number or a link fragment on a README line
+  that links ATP-SPEC.md as a version of the specification:
+  `[ATP-SPEC.md Section 4.3.1](ATP-SPEC.md)` failed as `v4.3.1`, and so did `§4.3.1` and a
+  link to `#changes-since-1.0.0-rc1`. The number after `Section` or `Sections` (capital or
+  small s) or `§`, each number of a list that follows it, and a link fragment are no longer
+  read as versions; a version on the same line still is. `unit_sentences` repeated the
+  joining of a paragraph's lines that `join_unit` does; it now calls `join_unit`, so the
+  sentence checks and the example-claim check join lines in one place.
+  `scripts/test_checks.py` covers each case.
+- Integration guides: the A2A Python and TypeScript samples trusted a card whose embedded
+  proof was about another DID (`Agent trusted (level 3, score 0.82)`). Both now refuse a card
+  without `atp.did`, or whose `trustProof.did` is not `atp.did`, before the expiry check. The
+  batch sections of the CI/CD and MCP guides now say that the reference authority answers the
+  Section 7.2 body with HTTP 400 (`packages array is required`), as it did on 2026-10-21, and
+  to check each agent on its own until it accepts the body. `scripts/check_guides.py` fails
+  when a batch section does not say so while `scripts/guide_responses.json` records the
+  refusal, or still says so once it does not. Its docstring said that a drifting example
+  fails the build, though no workflow in `.github/workflows` runs it; it now says so, and
+  when to run it. New cases cover an expired proof in the A2A TypeScript sample, a level 3
+  proof with verdict `blocked` in the gate script, a B.2 proof about another DID, and the
+  two A2A cards above, and `scripts/test_checks.py` checks that each case fails when its
+  guide check is taken out.
 
 ## [1.0.0-rc1] - 2026-04-28
 

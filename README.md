@@ -69,7 +69,7 @@ The mapped form is not secured by a Verifiable Credentials securing mechanism. I
 
 ## Reference Implementation
 
-The OpenA2A Registry implements ATP at Level 2 conformance. Its source code is not public; the reference trust authority it runs is live at `api.oa2a.org`, and [ATP-SPEC Appendix A](ATP-SPEC.md#appendix-a-reference-implementation) maps each component to the public endpoint that demonstrates it.
+The OpenA2A Registry runs the reference trust authority, live at `api.oa2a.org`. Its source code is not public, and [ATP-SPEC Appendix A](ATP-SPEC.md#appendix-a-reference-implementation) maps each component to the public endpoint that demonstrates it. Run against it, the conformance scripts pass the discovery and DID resolution tests (T1.1 to T1.6) and fail the trust proof, verification, transparency log and revocation tests (T1.7 to T1.14 and T2.1 to T2.3); its discovery document declares conformance level 1. [docs/reference-implementation.md](docs/reference-implementation.md#conformance-run) records the run and the answers behind each failure.
 
 ```bash
 curl "https://api.oa2a.org/api/v1/trust/proof?did=did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
@@ -84,7 +84,7 @@ This hybrid proof carries both an Ed25519 signature for fast local verification 
 - [ATP-SPEC.md](ATP-SPEC.md): the protocol specification
 - [docs/use-cases.md](docs/use-cases.md): three use cases, what works today and where each stops, and why ATX
 - [docs/interoperability.md](docs/interoperability.md): the standards ATP is designed to complement
-- [docs/reference-implementation.md](docs/reference-implementation.md): a recorded reference authority response
+- [docs/reference-implementation.md](docs/reference-implementation.md): a recorded reference authority response and conformance run
 - [conformance/README.md](conformance/README.md): the live-endpoint conformance scripts
 - [CHANGELOG.md](CHANGELOG.md): changes to the specification
 - [AIP (Agent Identity Protocol)](https://github.com/opena2a-org/agent-identity-protocol) — identity + capabilities

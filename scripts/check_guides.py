@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """Run the code blocks of the integration guides in examples/ and of
 ATP-SPEC.md Appendix B.1 and B.2 against recorded authority responses, so an
-example that drifts from what the authority answers fails the build.
+example that drifts from what the authority answers fails this check.
 Run: python3 scripts/check_guides.py
+
+No workflow in .github/workflows runs it (validate.yml runs
+scripts/validate_examples.py and scripts/gen_registries.py --check, and
+spec-drift.yml the family drift gate), so run it after changing a guide,
+Appendix B.1 or B.2, or scripts/guide_responses.json.
 
 Every fenced block in the three guides and in Appendix B.1 and B.2 is run by a
 case below or read by one as an input (agents.json, mcp-config.json, the agent
 card, the quick check's example output). A block no case uses is an error, so
 a new block cannot land unchecked. Appendix B.3 runs the opena2a CLI, which no
 stub here answers for, and is not run.
+
+While the recorded responses hold the reference authority's refusal of the
+Section 7.2 batch body (batchRejection), the two batch sections say that it
+answers that body with HTTP 400; once a recording no longer holds the refusal,
+a section that still says so is an error.
 
 No request leaves the machine. Bash blocks and the shell steps of the YAML
 workflows run with a curl stub first on PATH, Python blocks with a requests
@@ -178,7 +188,8 @@ def recorded_proof():
     return copy.deepcopy(RECORDED["proof"]["body"]["proof"])
 
 
-def card(blocks, card_level=None, verify_at=None, expired=False, **proof_changes):
+def card(blocks, card_level=None, verify_at=None, expired=False, without_did=False,
+         **proof_changes):
     """The guide's own agent card, its embedded proof re-dated to be valid now."""
     result = json.loads(blocks.get(CARD).body)
     embedded = result["atp"]["trustProof"]
@@ -189,6 +200,8 @@ def card(blocks, card_level=None, verify_at=None, expired=False, **proof_changes
         result["atp"]["trustLevel"] = card_level
     if verify_at is not None:
         result["atp"]["verifyAt"] = verify_at
+    if without_did:
+        del result["atp"]["did"]
     return result
 
 
@@ -520,6 +533,8 @@ CASES = [
          lambda b: {"proofs": {FS: proof(trustLevel=None)}}, args=(FS, "2")),
     Case("gate: blocked refuses", GATE, 1, ("blocked",),
          lambda b: {"proofs": {FS: at(0, "blocked")}}, args=(FS, "2")),
+    Case("gate: level 3 blocked proof refuses", GATE, 1, ("blocked (verdict blocked)",),
+         lambda b: {"proofs": {FS: at(3, "blocked")}}, args=(FS, "2")),
     Case("gate: expired proof refuses", GATE, 1, ("expired",),
          lambda b: {"proofs": {FS: proof(expired=True)}}, args=(FS, "2")),
     Case("gate: revoked agent refuses", GATE, 1, ("revoked",),
@@ -625,6 +640,12 @@ CASES = [
     Case("a2a python: expired proof is not trusted", A2A_PY, 0,
          ("Agent not trusted: Trust proof expired",),
          lambda b: {"cards": {CARD_URL: card(b, expired=True)}}, reads=(CARD,)),
+    Case("a2a python: a proof about another DID is not trusted", A2A_PY, 0,
+         ("Agent not trusted: Trust proof is not about the agent the card names",),
+         lambda b: {"cards": {CARD_URL: card(b, did=FS)}}, reads=(CARD,)),
+    Case("a2a python: a card without atp.did is not trusted", A2A_PY, 0,
+         ("Agent not trusted: Trust proof is not about the agent the card names",),
+         lambda b: {"cards": {CARD_URL: card(b, without_did=True)}}, reads=(CARD,)),
     Case("a2a python: delegate_task defines cleanly", DELEGATE, 0),
     Case("a2a typescript: the guide's card is trusted", A2A_TS, 0,
          ("Trusted: level 3, score 0.82",),
@@ -636,6 +657,15 @@ CASES = [
          ("Not trusted: did and at least one signature are required",),
          lambda b: {"cards": {CARD_URL: card(b, verify_at=UNTRUSTED_VERIFIER, signatures=[])}},
          reads=(CARD,)),
+    Case("a2a typescript: expired proof is not trusted", A2A_TS, 0,
+         ("Not trusted: Trust proof expired",),
+         lambda b: {"cards": {CARD_URL: card(b, expired=True)}}, reads=(CARD,)),
+    Case("a2a typescript: a proof about another DID is not trusted", A2A_TS, 0,
+         ("Not trusted: Trust proof is not about the agent the card names",),
+         lambda b: {"cards": {CARD_URL: card(b, did=FS)}}, reads=(CARD,)),
+    Case("a2a typescript: a card without atp.did is not trusted", A2A_TS, 0,
+         ("Not trusted: Trust proof is not about the agent the card names",),
+         lambda b: {"cards": {CARD_URL: card(b, without_did=True)}}, reads=(CARD,)),
     Case("a2a curl: the card's proof verifies", A2A_CURL, 0, ('"valid": true',),
          lambda b: {"cards": {CARD_URL: card(b)}}, reads=(CARD,)),
     Case("a2a refresh: the stored proof is what verify accepts", REFRESH, 0, ("valid True",),
@@ -679,6 +709,9 @@ CASES = [
     Case("spec b.2: expired proof is refused", SPEC_MCP, 0,
          ("refused: MCP server trust proof invalid",),
          lambda b: {"proofs": {FS: proof(expired=True)}}, driver=MCP_DRIVER),
+    Case("spec b.2: proof about another DID is refused", SPEC_MCP, 0,
+         ("refused: MCP server trust proof invalid",),
+         lambda b: {"proofs": {FS: at(3, did=GH)}}, driver=MCP_DRIVER),
     Case("spec b.2: null level is refused", SPEC_MCP, 0,
          ("refused: MCP server trust proof invalid",),
          lambda b: {"proofs": {FS: proof(trustLevel=None)}}, driver=MCP_DRIVER),
@@ -791,14 +824,68 @@ def unchecked_blocks(texts):
     ]
 
 
+BATCH_SECTIONS = (BATCH, MCP_BATCH)
+BATCH_REFUSAL = "HTTP 400"
+
+
+def section_prose(text, heading):
+    """The lines under the heading line `heading`, up to the next heading of
+    its level or a higher one, without fenced code blocks ("" when the heading
+    is not there)."""
+    level = len(heading) - len(heading.lstrip("#"))
+    lines = text.splitlines()
+    if heading not in lines:
+        return ""
+    prose = []
+    fence = None
+    for line in lines[lines.index(heading) + 1:]:
+        if fence is not None:
+            if fence.fullmatch(line.strip()):
+                fence = None
+            continue
+        opening = re.match(r"^(`{3,}|~{3,})\s*([\w+-]*)\s*$", line)
+        if opening:
+            fence = re.compile(re.escape(opening.group(1)[0]) + "{%d,}" % len(opening.group(1)))
+            continue
+        found = re.match(r"^(#{1,6}) ", line)
+        if found and len(found.group(1)) <= level:
+            break
+        prose.append(line)
+    return "\n".join(prose)
+
+
+def batch_note_errors(texts, recorded=RECORDED):
+    """An error line for each batch section that does not say the reference
+    authority answers the Section 7.2 body with HTTP 400 while the recorded
+    responses hold that refusal, or that still says so once they do not."""
+    refused = "batchRejection" in recorded
+    errors = []
+    for guide, heading, _ in BATCH_SECTIONS:
+        states = BATCH_REFUSAL in section_prose(texts[guide], heading)
+        if refused and not states:
+            errors.append(
+                f"{GUIDES[guide].name}: {heading!r} does not say that the reference authority "
+                f"answers the Section 7.2 body with {BATCH_REFUSAL} (batchRejection in "
+                "scripts/guide_responses.json)"
+            )
+        elif states and not refused:
+            errors.append(
+                f"{GUIDES[guide].name}: {heading!r} says the reference authority answers the "
+                f"Section 7.2 body with {BATCH_REFUSAL}, which no recorded response in "
+                "scripts/guide_responses.json shows"
+            )
+    return errors
+
+
 def run(texts=None, select=None, workers=4):
     """Run the cases (those `select` accepts, or all); return the error lines.
-    The check for blocks no case uses runs only with every case."""
+    The checks for blocks no case uses and for the batch sections' statement
+    of the recorded refusal run only with every case."""
     if texts is None:
         texts = guide_texts()
     blocks = Blocks(texts)
     cases = [case for case in CASES if select is None or select(case)]
-    errors = unchecked_blocks(texts) if select is None else []
+    errors = unchecked_blocks(texts) + batch_note_errors(texts) if select is None else []
     node = node_command()
     with tempfile.TemporaryDirectory(prefix="atp-guides-") as tmp:
         root = Path(tmp)

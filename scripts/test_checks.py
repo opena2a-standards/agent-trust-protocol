@@ -9,6 +9,7 @@ it serves or listen on its port, the registry generation and --check mode of
 gen_registries.py, and the test-suite sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
+import calendar
 import contextlib
 import copy
 import io
@@ -111,6 +112,17 @@ class ReadmeSigningTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("README.md:6:"), errors[0])
 
+    def test_unit_sentences_joins_the_unit_with_join_unit(self):
+        """The sentence checks and the example-claim check join a unit's lines
+        in one place, join_unit, so a sentence maps to the line it starts on."""
+        unit = [(3, "  First sentence wraps"), (4, "onto this line. Second"), (5, "one.")]
+        with mock.patch.object(
+            validate_examples, "join_unit", wraps=validate_examples.join_unit
+        ) as joined:
+            found = list(validate_examples.unit_sentences(unit))
+        joined.assert_called_once_with(unit)
+        self.assertEqual(found, [(3, "First sentence wraps onto this line."), (4, "Second one.")])
+
 
 class ReadmeSpecVersionTest(unittest.TestCase):
     SPEC = "# Agent Trust Protocol (ATP)\n\n**Version:** 1.1.0-draft\n"
@@ -133,6 +145,37 @@ class ReadmeSpecVersionTest(unittest.TestCase):
     def test_line_without_spec_link_is_not_checked(self):
         text = "| did, signatures | Shipped (v1.0.0-rc1) | Base trust proof. |\n"
         self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_section_numbers_are_not_versions(self):
+        for text in (
+            "[ATP-SPEC.md Section 4.3.1](ATP-SPEC.md) defines the co-signature.\n",
+            "ATP-SPEC.md Sections 4.3.1, 5.1.1 and 8.1.1 hold the registries.\n",
+            "See ATP-SPEC.md §4.3.1 and §§ 5.1.1, 8.1.1.\n",
+            "ATP-SPEC.md ends with Section 8.1.1.\n",
+            "See section 4.3.1 to 4.3.2 of ATP-SPEC.md.\n",
+        ):
+            with self.subTest(text):
+                self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_link_fragments_are_not_versions(self):
+        for text in (
+            "[the co-signature](ATP-SPEC.md#4.3.1-sigstore-co-signature) in ATP-SPEC.md.\n",
+            "[changes](CHANGELOG.md#changes-since-1.0.0-rc1) to ATP-SPEC.md.\n",
+            "ATP-SPEC.md at https://specs.opena2a.org/atp#v1.0.0-rc1 is the same text.\n",
+        ):
+            with self.subTest(text):
+                self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_version_beside_a_section_number_or_fragment_still_fails(self):
+        for text in (
+            "[ATP-SPEC.md v1.0.0-rc1 Section 4.3.1](ATP-SPEC.md#431-sigstore) defines it.\n",
+            "ATP-SPEC.md Section 4.3.1, 1.0.0-rc1 edition.\n",
+            "[ATP-SPEC.md](ATP-SPEC.md#4-trust-proofs) (1.0.0-rc1).\n",
+        ):
+            with self.subTest(text):
+                errors = validate_examples.readme_spec_version_errors(text, self.SPEC)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("names the specification v1.0.0-rc1;", errors[0])
 
     def test_spec_without_version_header_fails(self):
         text = "[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).\n"
@@ -1603,6 +1646,22 @@ class ConformanceScriptTest(unittest.TestCase):
         self.assertIn("(endpoints.trustProof does not start with /)", run.stdout)
         self.assertEqual(other.requests, [])
 
+    def test_trust_proof_endpoint_without_a_leading_slash_fails_without_a_request(self):
+        """Appended to an authority URL without a port or path, such as
+        https://api.oa2a.org, a value that starts with "." extends the host
+        name (https://api.oa2a.org.attacker.example/...), and one that starts
+        with a letter runs into it. T1.7 sends neither request, and says why."""
+        for label, value in (
+            ("host suffix", ".attacker.example/api/v1/trust/proof"),
+            ("no leading slash", "api/v1/trust/proof"),
+        ):
+            with self.subTest(label):
+                run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=value)))
+                self.assertIn(
+                    f"FAIL: {T1[7]} (endpoints.trustProof does not start with /)", run.stdout
+                )
+                self.assertEqual(self.received("/trust/pro"), [])
+
     def test_trust_proof_endpoint_reading(self):
         """T1.7 requests /api/v1/trust/proof when endpoints.trustProof is not a
         string, and reads a string with its NUL characters and trailing
@@ -1790,6 +1849,8 @@ class ConformanceScriptTest(unittest.TestCase):
              {"proof": put(issuedAt="2026-01-01T00:00:00+24:00")}),
             ("issuedAt followed by a newline", [T1[8]],
              {"proof": put(issuedAt="2026-01-01T00:00:00Z\n")}),
+            ("issuedAt at hour 24", [T1[8]], {"proof": put(issuedAt="2026-01-01T24:00:00Z")}),
+            ("issuedAt before 1900", [], {"proof": put(issuedAt="1899-12-31T00:00:00Z")}),
             ("no trustLevel", [T1[8], T1[11]], {"proof": pop("trustLevel")}),
             ("trustLevel 4.0", [], {"proof": put(trustLevel=4.0)}),
             ("fractional trustLevel", [T1[8], T1[11]], {"proof": put(trustLevel=2.5)}),
@@ -1834,6 +1895,8 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no entries", [T2[2]], {"log": '{"entries": []}'}),
             ("string entry", [T2[2]], {"log": '{"entries": ["FAKE"]}'}),
             ("entry without timestamp", [T2[2]], {"log": first("entries", pop("timestamp"))}),
+            ("timestamp at epoch second -1", [],
+             {"log": first("entries", put(timestamp="1969-12-31T23:59:59Z"))}),
             ("entry without entryType", [T2[2]], {"log": first("entries", pop("entryType"))}),
             ("negative logIndex", [T2[2]], {"log": first("entries", put(logIndex=-1))}),
         ])
@@ -1862,8 +1925,9 @@ class ConformanceScriptTest(unittest.TestCase):
 @unittest.skipUnless(all(shutil.which(tool) for tool in ("bash", "curl", "dirname")),
                      "the conformance scripts need bash, curl and dirname")
 class SetupErrorTest(unittest.TestCase):
-    """A missing tool or schema stops both scripts with exit code 69, which no
-    count of failed tests reaches, before any test runs, with one error line."""
+    """A missing tool or schema stops both scripts with exit code 69, and a run
+    without an authority URL with exit code 64, codes no count of failed tests
+    reaches, before any test runs, with one error line."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1921,6 +1985,25 @@ class SetupErrorTest(unittest.TestCase):
                                         env={name: value})
 
     @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_missing_authority_url_exits_64(self):
+        """64 is EX_USAGE in sysexits.h; bash's own ${1:?} error exits 1, which
+        reads as one failed test."""
+        for script in ("level1.sh", "level2.sh"):
+            for args in ((), ("",)):
+                with self.subTest(script=script, args=args):
+                    path = str(CONFORMANCE / script)
+                    run = subprocess.run(
+                        [shutil.which("bash"), path, *args],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        env={"PATH": os.environ.get("PATH", "")},
+                    )
+                    self.assertEqual(run.returncode, 64, run.stderr)
+                    self.assertEqual(run.stderr, f"Usage: {path} <authority-url>\n")
+                    self.assertEqual(run.stdout, "")
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
     def test_time_limit_of_a_millisecond_or_more_runs_the_tests(self):
         for value in ("0.001", "0.05", "007", "1.0"):
             with self.subTest(value):
@@ -1934,6 +2017,76 @@ class SetupErrorTest(unittest.TestCase):
                 )
                 self.assertEqual(run.stderr, "")
                 self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
+
+
+class ReferenceAuthorityRunTest(unittest.TestCase):
+    """The README says which conformance tests the reference authority passes
+    and fails, as the run docs/reference-implementation.md records them,
+    instead of naming a conformance level."""
+
+    IDS = [f"T1.{n}" for n in range(1, 15)] + [f"T2.{n}" for n in range(1, 4)]
+
+    @staticmethod
+    def ranges(ids):
+        """Test IDs in suite order written as ranges: 'T1.7 to T1.14 and T2.1 to T2.3'."""
+        groups = []
+        for test_id in ids:
+            level, number = (int(part) for part in test_id[1:].split("."))
+            if groups and groups[-1][0] == level and groups[-1][2] == number - 1:
+                groups[-1][2] = number
+            else:
+                groups.append([level, number, number])
+        names = [f"T{lv}.{a}" if a == b else f"T{lv}.{a} to T{lv}.{b}" for lv, a, b in groups]
+        return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+    def test_ranges(self):
+        self.assertEqual(self.ranges(["T1.1", "T1.2", "T1.3"]), "T1.1 to T1.3")
+        self.assertEqual(self.ranges(["T1.4", "T1.14", "T2.1", "T2.2"]),
+                         "T1.4, T1.14 and T2.1 to T2.2")
+
+    def test_readme_names_the_tests_the_recorded_run_passes_and_fails(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        section = readme.split("\n## Reference Implementation\n", 1)[1].split("\n## ", 1)[0]
+        record = (ROOT / "docs" / "reference-implementation.md").read_text(encoding="utf-8")
+        run = record.split("\n## Conformance run\n", 1)[1].split("\n## ", 1)[0]
+        results = {}
+        for test_id, name in zip(self.IDS, LEVEL1 + LEVEL2):
+            if f"\nPASS: {name}\n" in run:
+                results[test_id] = True
+            elif f"\nFAIL: {name}" in run:
+                results[test_id] = False
+        self.assertEqual(list(results), self.IDS)
+        self.assertIn(f"=== Results: {sum(results[i] for i in self.IDS[:14])} passed", run)
+        passed = self.ranges([i for i in self.IDS if results[i]])
+        failed = self.ranges([i for i in self.IDS if not results[i]])
+        self.assertIn(f"({passed})", section)
+        self.assertIn(f"({failed})", section)
+        self.assertNotRegex(section, r"(?i)\bimplements ATP at\b|\blevel [1-3] conformance\b")
+        self.assertIn("(docs/reference-implementation.md#conformance-run)", section)
+
+
+class DiscoveryEndpointPathTest(unittest.TestCase):
+    """Section 7.1 and the discovery schema define an endpoints value as a
+    path, the form T1.7 appends to the authority URL, and the values of the
+    Section 7.1 example are paths."""
+
+    def test_section_7_1_and_the_schema_define_endpoint_values_as_paths(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        section = spec.split("\n### 7.1 Well-Known Endpoint\n", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("Each `endpoints` value is a path", section)
+        schema = json.loads((ROOT / "schemas" / "discovery-v1.schema.json").read_text(encoding="utf-8"))
+        description = schema["properties"]["endpoints"]["description"]
+        self.assertNotIn("URL map", description)
+        self.assertIn("a path that starts with /", description)
+
+    def test_section_7_1_example_endpoint_values_are_paths(self):
+        example = json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 7.1 Well-Known Endpoint")
+        )
+        self.assertTrue(example["endpoints"])
+        for name, value in example["endpoints"].items():
+            with self.subTest(name):
+                self.assertRegex(value, r"\A/[^#\s\x00-\x1f\x7f]*\Z")
 
 
 class FixtureAuthorityTest(unittest.TestCase):
@@ -2068,29 +2221,39 @@ class FixtureAuthorityTest(unittest.TestCase):
             self.assertEqual([sock.fileno() for sock in opened], [authority.fileno()])
 
 
-# Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
-# offset bounded by number), so the agreement tests can catch a mistake in either.
+# Written apart from the rfc3339 pattern in checks.jq (a full match, the fields
+# bounded by number and the day by calendar), so the agreement tests can catch a
+# mistake in either.
 RFC3339 = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))"
+    r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?"
+    r"(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))"
 )
 DATE_TIME = FormatChecker(formats=())
 
 
 @DATE_TIME.checks("date-time")
 def is_date_time(value):
+    """RFC 3339 Section 5.6: a year from 0000 to 9999, a day of the month, an
+    hour from 00 to 23, a minute and a second from 00 to 59 (no leap second, as
+    in checks.jq) and a UTC offset from 00:00 to 23:59. datetime is not used for
+    the date: it has no year 0000, and on Python 3.14 fromisoformat reads hour
+    24 as midnight of the next day."""
     if not isinstance(value, str):
         return True
     match = RFC3339.fullmatch(value)
     if not match:
         return False
-    offset_hours, offset_minutes = match.group(2, 3)
+    year, month, day, hour, minute, second = (int(part) for part in match.group(1, 2, 3, 4, 5, 6))
+    offset_hours, offset_minutes = match.group(7, 8)
     if offset_hours is not None and (int(offset_hours) > 23 or int(offset_minutes) > 59):
         return False
-    try:
-        datetime.fromisoformat(value[:10] + "T" + value[11:19])
-    except ValueError:
-        return False
-    return True
+    return (
+        1 <= month <= 12
+        and 1 <= day <= calendar.monthrange(year, month)[1]
+        and hour <= 23
+        and minute <= 59
+        and second <= 59
+    )
 
 
 @unittest.skipUnless(HAS_JQ, "checks.jq needs jq")
@@ -2109,6 +2272,7 @@ class SchemaCheckTest(unittest.TestCase):
     REPLACEMENTS = (
         None, True, -1, 1.5, "x", [], {},
         "2026-01-01T00:00:00+24:00", "2026-01-01T00:00:00Z\n", "2099-02-30T00:00:00Z",
+        "2026-01-01T24:00:00Z", "1899-12-31T00:00:00Z",
     )
     TIMESTAMPS = {
         "2026-01-01T00:00:00Z": True,
@@ -2121,6 +2285,34 @@ class SchemaCheckTest(unittest.TestCase):
         "2026-01-01T00:00:00Z\n": False,
         "\n2026-01-01T00:00:00Z": False,
         "2099-02-30T00:00:00Z": False,
+        # Hour 24, a minute or second of 60 and a day the month lacks are not RFC
+        # 3339; a year before 1900, 1969-12-31T23:59:59Z (epoch second -1) and
+        # year 0000 are, whatever the platform's mktime accepts.
+        "2026-01-01T24:00:00Z": False,
+        "2026-01-01T23:60:00Z": False,
+        "2026-12-31T23:59:60Z": False,
+        "1900-02-29T00:00:00Z": False,
+        "2000-02-29T00:00:00Z": True,
+        "1899-12-31T00:00:00Z": True,
+        "1000-01-01T00:00:00+05:30": True,
+        "1969-12-31T23:59:59Z": True,
+        "0000-02-29T00:00:00Z": True,
+        "9999-12-31T23:59:59Z": True,
+    }
+    # Epoch seconds that rfc3339 gives, worked out apart from it: by datetime
+    # where it has the year, and from 0001-01-01 (-62135596800) for year 0000,
+    # a leap year of 366 days.
+    EPOCH_SECONDS = {
+        "1970-01-01T00:00:00Z": 0,
+        "1969-12-31T23:59:59Z": -1,
+        "2026-10-12T02:57:21.999Z": 1791773841,
+        "2026-10-11T20:57:21.5-06:00": 1791773841,
+        "2026-01-01T00:30:00+01:00": 1767223800,
+        "1899-12-31T23:00:00-01:00": -2208988800,
+        "1600-02-29T12:00:00Z": None,
+        "0001-01-01T00:00:00Z": -62135596800,
+        "0000-01-01T00:00:00Z": -62135596800 - 366 * 86400,
+        "9999-12-31T23:59:59Z": None,
     }
     SUPPORTED = {
         "type", "const", "enum", "anyOf", "pattern", "minLength", "format", "minimum",
@@ -2181,6 +2373,24 @@ class SchemaCheckTest(unittest.TestCase):
         expected = list(self.TIMESTAMPS.values())
         self.assertEqual(dict(zip(timestamps, json.loads(run.stdout))), self.TIMESTAMPS)
         self.assertEqual([is_date_time(value) for value in timestamps], expected)
+
+    def test_rfc3339_counts_epoch_seconds_without_mktime(self):
+        """T1.10 compares the seconds rfc3339 gives with now. They are counted
+        in checks.jq, so a year mktime refuses on a platform still gets them."""
+        expected = {
+            value: int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+            if seconds is None else seconds
+            for value, seconds in self.EPOCH_SECONDS.items()
+        }
+        run = subprocess.run(
+            ["jq", "-c", "-L", str(CONFORMANCE), 'include "checks"; map(rfc3339)'],
+            input=json.dumps(list(expected)),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(dict(zip(expected, json.loads(run.stdout))), expected)
 
     def test_schemas_use_only_keywords_checks_jq_implements(self):
         for name in self.EXAMPLES.values():
@@ -2410,6 +2620,16 @@ class GuideBlocksTest(unittest.TestCase):
             self.failing_cases(texts, check_guides.GATE), ["gate: revoked agent refuses"]
         )
 
+    def test_gate_refusing_only_level_0_as_blocked_fails(self):
+        texts = self.edited(
+            "ci",
+            'if [ "$LEVEL" -eq 0 ] || [ "$VERDICT" = blocked ]; then refuse',
+            'if [ "$LEVEL" -eq 0 ]; then refuse',
+        )
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.GATE), ["gate: level 3 blocked proof refuses"]
+        )
+
     def test_batch_loop_in_a_pipeline_subshell_fails(self):
         texts = self.edited(
             "ci", "while read -r DID; do", "jq -r '.[]' \"$AGENTS_FILE\" | while read -r DID; do"
@@ -2438,6 +2658,31 @@ class GuideBlocksTest(unittest.TestCase):
         failing = self.failing_cases(texts, check_guides.A2A_PY)
         self.assertEqual(failing, ["a2a python: the card's verifyAt is not followed"])
 
+    def test_a2a_without_the_did_check_fails(self):
+        for block, old, never, sample in (
+            (check_guides.A2A_PY,
+             '    if not atp.get("did") or proof.get("did") != atp["did"]:\n',
+             "    if False:\n", "a2a python"),
+            (check_guides.A2A_TS,
+             "  if (!card.atp.did || proof.did !== card.atp.did) {\n",
+             "  if (false) {\n", "a2a typescript"),
+        ):
+            with self.subTest(sample):
+                texts = self.edited("a2a", old, never)
+                self.assertEqual(self.failing_cases(texts, block), [
+                    f"{sample}: a proof about another DID is not trusted",
+                    f"{sample}: a card without atp.did is not trusted",
+                ])
+
+    def test_a2a_typescript_without_expiry_check_fails(self):
+        texts = self.edited(
+            "a2a", "  if (!(Date.parse(proof.expiresAt) > Date.now())) {", "  if (false) {"
+        )
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.A2A_TS),
+            ["a2a typescript: expired proof is not trusted"],
+        )
+
     def test_refresh_storing_the_envelope_fails(self):
         texts = self.edited(
             "a2a",
@@ -2464,6 +2709,64 @@ class GuideBlocksTest(unittest.TestCase):
         texts = self.edited("spec", "(await resp.json()).proof ?? {}", "await resp.json()")
         failing = self.failing_cases(texts, check_guides.SPEC_MCP)
         self.assertIn("spec b.2: listed server connects", failing)
+
+    def test_spec_b2_without_the_did_check_fails(self):
+        texts = self.edited("spec", "if (proof.did !== did || !(", "if (!(")
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.SPEC_MCP),
+            ["spec b.2: proof about another DID is refused"],
+        )
+
+    def test_batch_guides_state_the_recorded_refusal(self):
+        self.assertEqual(check_guides.batch_note_errors(self.texts), [])
+        self.assertIn("batchRejection", check_guides.RECORDED)
+        for guide, heading, _ in check_guides.BATCH_SECTIONS:
+            with self.subTest(guide):
+                self.assertIn(check_guides.BATCH_REFUSAL,
+                              check_guides.section_prose(self.texts[guide], heading))
+
+    def test_batch_guide_without_the_note_fails(self):
+        for guide, heading, _ in check_guides.BATCH_SECTIONS:
+            with self.subTest(guide):
+                prose = check_guides.section_prose(self.texts[guide], heading)
+                note = next(p for p in prose.split("\n\n") if check_guides.BATCH_REFUSAL in p)
+                texts = self.edited(guide, note + "\n", "")
+                errors = check_guides.batch_note_errors(texts)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith(check_guides.GUIDES[guide].name + ":"),
+                                errors[0])
+
+    def test_note_without_a_recorded_refusal_fails(self):
+        recorded = {k: v for k, v in check_guides.RECORDED.items() if k != "batchRejection"}
+        errors = check_guides.batch_note_errors(self.texts, recorded)
+        self.assertEqual(len(errors), len(check_guides.BATCH_SECTIONS), errors)
+        for error in errors:
+            self.assertIn("no recorded response", error)
+
+    def test_section_prose_leaves_out_code_blocks_and_later_sections(self):
+        text = (
+            "## Batch\n\nFirst paragraph.\n\n```bash\necho HTTP 400\n```\n\n"
+            "Last paragraph.\n\n### Detail\n\nStill here.\n\n## Next\n\nNot here.\n"
+        )
+        prose = check_guides.section_prose(text, "## Batch")
+        self.assertIn("First paragraph.", prose)
+        self.assertIn("Still here.", prose)
+        self.assertNotIn("HTTP 400", prose)
+        self.assertNotIn("Not here.", prose)
+        self.assertEqual(check_guides.section_prose(text, "## Missing"), "")
+
+    def test_docstring_says_whether_a_workflow_runs_the_check(self):
+        """No workflow names check_guides.py yet, so its docstring says so
+        instead of saying a drifting example fails the build."""
+        workflows = "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        )
+        in_ci = "check_guides.py" in workflows
+        self.assertEqual("fails the build" in check_guides.__doc__, in_ci)
+        self.assertEqual(
+            "No workflow in .github/workflows runs it" in check_guides.__doc__, not in_ci
+        )
 
     def test_spec_examples_are_appendix_b1_and_b2(self):
         examples = self.texts["spec"]

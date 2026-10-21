@@ -29,7 +29,7 @@
         "type": "string",
         "minLength": 1
       },
-      "description": "Endpoint-name to path/URL map. The section 7.1 example names didResolve, trustProof, trustVerify, trustBatch, transparencyLog, transparencyProof, transparencySth, revocations and federation; Appendix A maps the reference authority's components to the endpoints it serves publicly."
+      "description": "Endpoint-name to path map: each value is a path that starts with /, which a client appends to the authority URL (section 7.1). The section 7.1 example names didResolve, trustProof, trustVerify, trustBatch, transparencyLog, transparencyProof, transparencySth, revocations and federation; Appendix A maps the reference authority's components to the endpoints it serves publicly."
     },
     "publicKeys": {
       "type": "array",

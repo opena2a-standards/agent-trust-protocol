@@ -9,7 +9,7 @@ The [Google A2A Protocol](https://github.com/google/A2A) defines how agents disc
 **Flow:**
 1. Agent A publishes its agent card with an embedded ATP trust proof
 2. Agent B fetches A's agent card before delegating a task
-3. Agent B verifies the trust proof against the ATP authority
+3. Agent B checks that the trust proof is about the DID the card names, and verifies it against the ATP authority
 4. If verification passes and trust level meets the minimum, Agent B accepts the task
 
 ---
@@ -64,7 +64,7 @@ An A2A agent card with ATP trust embedded in the `atp` field:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `atp.did` | Yes | The agent's ATP DID (see [ATP-SPEC Section 3](../ATP-SPEC.md#3-agent-identifiers)) |
+| `atp.did` | Yes | The agent's ATP DID (see [ATP-SPEC Section 3](../ATP-SPEC.md#3-agent-identifiers)). The samples below refuse a card without it, or whose `trustProof` has another `did` |
 | `atp.trustLevel` | Yes | Current trust level (0-4), an unsigned copy for display. Verifiers read the level from `trustProof`, which the authority signed |
 | `atp.trustProof` | Yes | The signed trust proof object |
 | `atp.verifyAt` | No | Verification URL suggested by the card's publisher. The samples below do not use it: they verify against the authority the verifier is configured with (by default `https://api.oa2a.org/api/v1/trust/verify`), because the card is unverified input and a card that named its own verifier could name one that always answers valid |
@@ -105,12 +105,17 @@ def verify_a2a_agent(
 
     proof = atp["trustProof"]
 
-    # 3. Check expiry locally before making a network call
+    # 3. The signed proof must be about the agent the card names: a valid proof
+    #    of another agent, copied into this card, says nothing about this one.
+    if not atp.get("did") or proof.get("did") != atp["did"]:
+        return {"trusted": False, "reason": "Trust proof is not about the agent the card names"}
+
+    # 4. Check expiry locally before making a network call
     expires = datetime.fromisoformat(proof["expiresAt"].replace("Z", "+00:00"))
     if expires < datetime.now(timezone.utc):
         return {"trusted": False, "reason": "Trust proof expired"}
 
-    # 4. Verify the trust proof against the authority this verifier trusts.
+    # 5. Verify the trust proof against the authority this verifier trusts.
     #    The card's own atp.verifyAt is not used: the card chose it.
     verification = requests.post(
         verify_url,
@@ -122,7 +127,7 @@ def verify_a2a_agent(
     if not verification.get("valid"):
         return {"trusted": False, "reason": verification.get("error", "Verification failed")}
 
-    # 5. Read the level from the signed proof, not the card's unsigned atp.trustLevel.
+    # 6. Read the level from the signed proof, not the card's unsigned atp.trustLevel.
     #    A level that is not an integer 0-4 is not trusted.
     trust_level = proof.get("trustLevel")
     if type(trust_level) is not int or not 0 <= trust_level <= 4:
@@ -204,12 +209,18 @@ async function verifyA2AAgent(
 
   const proof = card.atp.trustProof;
 
-  // 3. Check expiry locally; Date.parse returns NaN for a missing expiresAt, which also refuses
+  // 3. The signed proof must be about the agent the card names: a valid proof
+  //    of another agent, copied into this card, says nothing about this one.
+  if (!card.atp.did || proof.did !== card.atp.did) {
+    return { trusted: false, reason: "Trust proof is not about the agent the card names" };
+  }
+
+  // 4. Check expiry locally; Date.parse returns NaN for a missing expiresAt, which also refuses
   if (!(Date.parse(proof.expiresAt) > Date.now())) {
     return { trusted: false, reason: "Trust proof expired" };
   }
 
-  // 4. Verify against the authority this verifier trusts.
+  // 5. Verify against the authority this verifier trusts.
   //    The card's own atp.verifyAt is not used: the card chose it.
   const verification = await fetch(verifyUrl, {
     method: "POST",
@@ -221,7 +232,7 @@ async function verifyA2AAgent(
     return { trusted: false, reason: verification.error || "Verification failed" };
   }
 
-  // 5. Read the level from the signed proof, not the card's unsigned atp.trustLevel.
+  // 6. Read the level from the signed proof, not the card's unsigned atp.trustLevel.
   //    A level that is not an integer 0-4 is not trusted.
   const level = proof.trustLevel;
   if (!Number.isInteger(level) || level < 0 || level > 4) {

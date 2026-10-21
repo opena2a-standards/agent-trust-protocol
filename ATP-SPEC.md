@@ -953,6 +953,14 @@ machine-readable shape is
 [`schemas/discovery-v1.schema.json`](./schemas/discovery-v1.schema.json);
 required members are `authorityDid`, `version`, `endpoints`, `publicKeys`.
 
+Each `endpoints` value is a path on the authority, not a URL: it starts with `/`
+and holds no `#`, whitespace or control character. A client requests it by
+appending it to the authority URL, the URL under which the authority serves
+`/.well-known/atp`, and MUST NOT request a value that does not start with `/`:
+appended to `https://api.oa2a.org`, `.attacker.example/x` names the host
+`api.oa2a.org.attacker.example`, and `@attacker.example/x` names the host
+`attacker.example`.
+
 The discovery document MAY carry `leafFormatSince` (integer, the first `logIndex` hashed
 under Section 5.2 of this revision). A log built before this revision MUST publish it;
 absent, every leaf in the log conforms to Section 5.2.
