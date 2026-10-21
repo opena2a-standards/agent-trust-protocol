@@ -2,11 +2,14 @@
 
 AtpClient fetches a trust authority's discovery document (Section 7.1) and its
 trust proofs (Section 4.5). The verify functions make no network call: they
-check a trust proof (Section 4.4 steps 1 to 5), a discovery document (Section
-7.1), a signed tree head (Section 5.6), an inclusion proof (Section 5.4), a
-consistency proof (Section 5.5) and a revocation response (Section 8.1). Each
-returns a VerifyResult; a rejected input carries one of CATEGORIES and a
-reason that names the member or the step that failed.
+check a trust proof (Section 4.4 steps 1 to 5, except the issuer key set count
+of step 4), a discovery document (Section 7.1), a signed tree head (Section
+5.6), an inclusion proof (Section 5.4), a consistency proof (Section 5.5) and a
+revocation response (Section 8.1). Each returns a VerifyResult; a rejected
+input carries one of CATEGORIES and a reason that names the member or the step
+that failed. The client does not count an issuer key set (Section 7.1.1), so
+verify_discovery, and AtpClient.verify with it, refuse a discovery document
+that declares one.
 """
 
 from __future__ import annotations
@@ -318,8 +321,11 @@ def verify_trust_proof(
     clock for step 1. Step 6, the transparency log, is verify_inclusion_proof;
     step 7, co-signing by a second authority at conformance Level 3, is not
     checked. A Sigstore co-signature (Section 4.3.1) is not verified, so step 4
-    rejects a proof that carries one. Raises ValueError for a now that is not
-    a timezone-aware datetime or an RFC 3339 string."""
+    rejects a proof that carries one. The issuer key set count of step 4
+    (Section 7.1.1) is not applied: pass only the keys of an authority whose
+    discovery document carries no issuerKeySet, which verify_discovery
+    checks. Raises ValueError for a now that is not a timezone-aware datetime
+    or an RFC 3339 string."""
     clock = _clock(now)
     return _outcome(lambda: _check_trust_proof(proof, list(keys), _trusted(trusted_issuers), clock))
 
@@ -384,7 +390,9 @@ def _check_trust_proof(proof: Any, keys: list[Any], trusted: set[str], clock: in
 def verify_discovery(discovery: Any, trusted_issuers: str | Iterable[str] | None = None) -> VerifyResult:
     """Section 7.1: the members a verifier reads from a discovery document,
     each publicKeys entry a hex key of its algorithm's size. With
-    trusted_issuers, authorityDid must be one of them."""
+    trusted_issuers, authorityDid must be one of them. A document that carries
+    issuerKeySet is refused with SIGNATURE_INVALID: this client does not count
+    an issuer key set (Section 7.1.1), which Section 4.4 step 4 requires."""
     trusted = None if trusted_issuers is None else _trusted(trusted_issuers)
     return _outcome(lambda: _check_discovery(discovery, trusted))
 
@@ -424,6 +432,15 @@ def _check_discovery(discovery: Any, trusted: set[str] | None) -> None:
         _instant(key.get("validFrom"), f"{name}.validFrom")
     if trusted is not None and authority not in trusted:
         raise _Reject("UNTRUSTED_ISSUER", f"authorityDid {authority} is not a trusted issuer")
+    # Section 4.4 step 4 requires a proof to meet a declared set, and no proof
+    # meets a set that breaks Section 7.1.1; not counting sets, the client
+    # refuses every one, whatever it holds.
+    if "issuerKeySet" in discovery:
+        raise _Reject(
+            "SIGNATURE_INVALID",
+            "issuerKeySet: this client does not count an issuer key set (Section 7.1.1), "
+            "so it verifies no proof of an authority that declares one",
+        )
 
 
 # Transparency log (Sections 5.4 to 5.6, RFC 9162 Section 2.1)
@@ -659,7 +676,9 @@ class AtpClient:
 
     def verify(self, proof: Any, *, now: datetime | str | None = None) -> VerifyResult:
         """verify_trust_proof against this authority: its discovery document's
-        publicKeys, and its authorityDid as the one trusted issuer."""
+        publicKeys, and its authorityDid as the one trusted issuer. A discovery
+        document that verify_discovery refuses, one that declares an issuer
+        key set among them, rejects the proof with that category."""
         discovery = self.get_discovery()
         checked = verify_discovery(discovery)
         if not checked.valid:

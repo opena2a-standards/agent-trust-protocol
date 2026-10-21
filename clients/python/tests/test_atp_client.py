@@ -474,6 +474,22 @@ class DiscoveryTests(unittest.TestCase):
         result = atp.verify_discovery(self.document, ["did:opena2a:authority:partner.example"])
         self.assertEqual(result.category, "UNTRUSTED_ISSUER")
 
+    def test_a_document_that_declares_an_issuer_key_set_is_refused(self):
+        # The client does not count an issuer key set (Section 7.1.1), so it
+        # refuses one that meets the rules as well as one that breaks them.
+        key_id = self.document["publicKeys"][0]["keyId"]
+        cases = {
+            "a 1-of-1 set": {"threshold": 1, "keyIds": [key_id]},
+            "a threshold above the number of keys": {"threshold": 5, "keyIds": [key_id]},
+            "a keyId listed twice": {"threshold": 1, "keyIds": [key_id, key_id]},
+            "null": None,
+        }
+        for label, key_set in cases.items():
+            with self.subTest(label):
+                result = atp.verify_discovery({**self.document, "issuerKeySet": key_set})
+                self.assertEqual(result.category, "SIGNATURE_INVALID")
+                self.assertIn("issuerKeySet", result.reason)
+
 
 class Authority(http.server.BaseHTTPRequestHandler):
     """Answers each path from the server's routes: a (status, body) pair, or
@@ -565,6 +581,24 @@ class ClientTests(unittest.TestCase):
         result = self.client.verify(signed_proof(self.signer), now=CLOCK)
         self.assertEqual(result.category, "PARSE_ERROR")
         self.assertIn("discovery document: publicKeys[0].publicKeyHex", result.reason)
+
+    def test_verify_refuses_a_proof_of_an_authority_that_declares_an_issuer_key_set(self):
+        signers = [self.signer, Signer(AUTHORITY + "#key-2"), Signer(AUTHORITY + "#key-3")]
+        keys = [signer.key(status="active", validFrom="2026-01-01T00:00:00Z") for signer in signers]
+        cases = {
+            "one key of a 2-of-3 set": ({"threshold": 2, "keyIds": [s.key_id for s in signers]}, signers[:1]),
+            "two keys of a 2-of-3 set": ({"threshold": 2, "keyIds": [s.key_id for s in signers]}, signers[:2]),
+            "a set that breaks Section 7.1.1": ({"threshold": 5, "keyIds": [self.signer.key_id]}, signers[:1]),
+        }
+        for label, (key_set, signed_by) in cases.items():
+            with self.subTest(label):
+                client = atp.AtpClient(
+                    "https://authority.example",
+                    discovery={**self.discovery, "publicKeys": keys, "issuerKeySet": key_set},
+                )
+                result = client.verify(signed_proof(*signed_by), now=CLOCK)
+                self.assertEqual(result.category, "SIGNATURE_INVALID")
+                self.assertIn("discovery document: issuerKeySet", result.reason)
 
     def test_a_base_url_that_is_not_http_raises(self):
         for url in ("ftp://authority.example", "authority.example", "https://authority.example/?a=1"):

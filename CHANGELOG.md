@@ -12,13 +12,17 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   published). `AtpClient` fetches the discovery document (falling back to
   `/.well-known/opena2a` on 404) and a trust proof (unwrapped from `proof`, refused when it is
   about another DID), and verifies the proof offline with the discovery document's keys. The
-  verify functions check a trust proof (Section 4.4 steps 1 to 5, Ed25519 and ML-DSA-65), a
-  discovery document, a signed tree head, inclusion and consistency proofs (RFC 9162) and a
-  revocation response, and return a reject category and reason. `clients/fixtures` holds byte
-  copies of the 14 atp-conformance fixtures with their SHA-256 manifest; the tests check the
-  copies against it and that the client gives each fixture its pinned verdict and category.
-  `clients/README.md` documents the client and the fixture copies. A TypeScript client is not
-  yet written.
+  verify functions check a trust proof (Section 4.4 steps 1 to 5, Ed25519 and ML-DSA-65,
+  without the issuer key set count of step 4), a discovery document, a signed tree head,
+  inclusion and consistency proofs (RFC 9162) and a revocation response, and return a reject
+  category and reason. The client does not count a Section 7.1.1 issuer key set, so
+  `verify_discovery` refuses a discovery document that carries `issuerKeySet` with
+  `SIGNATURE_INVALID` and `AtpClient.verify` verifies no proof of an authority that declares
+  one; `verify_trust_proof` receives keys without the set and is for an authority that
+  declares none. `clients/fixtures` holds byte copies of the 14 atp-conformance fixtures with
+  their SHA-256 manifest; the tests check the copies against it and that the client gives each
+  fixture its pinned verdict and category. `clients/README.md` documents the client and the
+  fixture copies. A TypeScript client is not yet written.
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
 - Section 4.4.1: a two-authority proof for Level 3. It is the Section 4.2 proof with an
   Ed25519 entry of `did:opena2a:authority:cosigner.example` added over the same Section 4.3

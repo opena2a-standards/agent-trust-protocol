@@ -35,8 +35,8 @@ The verify functions make no request:
 
 | Function | Checks | Section |
 |---|---|---|
-| `verify_trust_proof(proof, keys, trusted_issuers, now=None)` | Steps 1 to 5 in order: expiry, issuer, key lookup by `keyId`, every signature over the canonical string (Ed25519 and ML-DSA-65), at least one Ed25519 signature by a key of `issuerDid`, then trust level, score, verdict and the 24-hour window | 4.3, 4.4 |
-| `verify_discovery(document, trusted_issuers=None)` | The members a verifier reads, and each key's size for its algorithm | 7.1 |
+| `verify_trust_proof(proof, keys, trusted_issuers, now=None)` | Steps 1 to 5 in order, without the issuer key set count of step 4: expiry, issuer, key lookup by `keyId`, every signature over the canonical string (Ed25519 and ML-DSA-65), at least one Ed25519 signature by a key of `issuerDid`, then trust level, score, verdict and the 24-hour window | 4.3, 4.4 |
+| `verify_discovery(document, trusted_issuers=None)` | The members a verifier reads, and each key's size for its algorithm; a document that carries `issuerKeySet` is refused | 7.1, 7.1.1 |
 | `verify_signed_tree_head(sth, keys)` | The Ed25519 signature over the 32 root-hash bytes | 5.6 |
 | `verify_inclusion_proof(proof, keys)` | The tree head, then the RFC 9162 Section 2.1.3.2 root | 5.4 |
 | `verify_consistency_proof(proof, keys)` | Both tree heads, then the RFC 9162 Section 2.1.4.2 roots | 5.5 |
@@ -47,10 +47,14 @@ Each returns a `VerifyResult`: `valid`, and for a rejection a `category` (`PARSE
 a `reason` naming the member or step. `canonical_string(proof)` returns the Section 4.3 string.
 
 Not checked: Section 4.4 step 7 (a second authority's signature on levels 3 and 4, conformance
-Level 3), and Sigstore co-signatures (Section 4.3.1), so a proof carrying one is rejected as
-step 4 requires of a verifier that does not implement that section. `verify_inclusion_proof`
-checks the proof it is given; tying its `leafHash` to a trust proof (Section 5.2) is the
-caller's.
+Level 3); Sigstore co-signatures (Section 4.3.1), so a proof carrying one is rejected as
+step 4 requires of a verifier that does not implement that section; and the issuer key set
+count of step 4 (Section 7.1.1). Since the specification forbids ignoring a set,
+`verify_discovery` refuses a discovery document that carries `issuerKeySet` with
+`SIGNATURE_INVALID`, so `AtpClient.verify` verifies no proof of an authority that declares one.
+`verify_trust_proof` receives keys without the set: pass it only the keys of an authority whose
+discovery document has no `issuerKeySet`. `verify_inclusion_proof` checks the proof it is
+given; tying its `leafHash` to a trust proof (Section 5.2) is the caller's.
 
 ## Tests
 
