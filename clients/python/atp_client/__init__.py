@@ -16,10 +16,17 @@ that declares one.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
+import http.client
+import ipaddress
 import json
 import math
 import re
+import socket
+import ssl
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,6 +44,8 @@ except ImportError:  # cryptography releases before 47 have no ML-DSA
 
 __all__ = [
     "CATEGORIES",
+    "MAX_DISCOVERY_AGE",
+    "MAX_RESPONSE_BYTES",
     "VERDICTS",
     "AtpClient",
     "AtpError",
@@ -62,6 +71,8 @@ VERDICTS = ("passed", "warning", "blocked", "listed", "verified", "unknown")
 KEY_SIZES = {"Ed25519": 32, "ML-DSA-65": 1952}
 KEY_STATUSES = ("active", "retired", "revoked")
 MAX_VALIDITY_MICROSECONDS = 24 * 3600 * 1_000_000  # Section 10.2
+MAX_DISCOVERY_AGE = 3600  # seconds, the maximum age of a copy of the discovery document (Section 7.1)
+MAX_RESPONSE_BYTES = 1024 * 1024  # the longest answer body AtpClient reads
 
 _EPOCH = datetime(1970, 1, 1)
 _RFC3339 = re.compile(
@@ -79,6 +90,10 @@ _NOT_IN_ENDPOINT = re.compile(r"[#\s\x00-\x1f\x7f-\x9f]")
 # with a quote.
 _PLAIN = re.compile(r"[\x21\x23-\x5b\x5d-\x7e]+")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The hosts Section 7.1 allows under an http authority URL.
+_LOOPBACK_IPV4 = ipaddress.ip_network("127.0.0.0/8")
+_LOOPBACK_IPV6 = ipaddress.ip_address("::1")
+_DELTA_SECONDS = re.compile(r"[0-9]+")  # the value of an Age header (RFC 9111 Sections 1.2.2 and 5.1)
 
 
 @dataclass(frozen=True)
@@ -745,47 +760,228 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
-
-
 def _no_constant(name: str) -> None:
     raise ValueError(f"{name} is not JSON")
 
 
+def _loopback_literal(host: str | None) -> bool:
+    """Section 7.1: host is an IPv4 address in 127.0.0.0/8 or the IPv6
+    address ::1, written as an address. A name, localhost among them, is
+    not."""
+    try:
+        address = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return address in _LOOPBACK_IPV4 if address.version == 4 else address == _LOOPBACK_IPV6
+
+
+def _age(headers: Any) -> int:
+    """The Age header of an answer (RFC 9111 Section 5.1) in seconds, 0 when
+    the answer has none."""
+    values = headers.get_all("Age") or []
+    if not values:
+        return 0
+    value = values[0].strip()
+    if len(values) > 1 or not _DELTA_SECONDS.fullmatch(value):
+        raise AtpError("the discovery document's Age header is not one number of seconds (RFC 9111 Section 5.1)")
+    digits = value.lstrip("0")
+    # RFC 9111 Section 1.2.2: a value too large to represent counts as 2^31.
+    return min(int(digits or "0"), 2**31) if len(digits) <= 10 else 2**31
+
+
+class _Exchange:
+    """One GET, which AtpClient runs on a worker thread so that it can stop
+    waiting at the request's deadline. The connection hands its socket over
+    once it is connected and takes it back before closing it; abandon()
+    shuts that socket down, which ends a read the worker is blocked in."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.outcome: tuple[int, Any, bytes] | BaseException = RuntimeError("the request has not finished")
+        self._lock = threading.Lock()
+        self._abandoned = False
+        self._socket: socket.socket | None = None
+
+    def run(self, opener: urllib.request.OpenerDirector, request: urllib.request.Request, timeout: float) -> None:
+        try:
+            self.outcome = self._exchange(opener, request, timeout)
+        except BaseException as error:  # raised again in the thread that waits for it
+            self.outcome = error
+        finally:
+            self.done.set()
+
+    def _exchange(
+        self, opener: urllib.request.OpenerDirector, request: urllib.request.Request, timeout: float
+    ) -> tuple[int, Any, bytes]:
+        """(status, headers, body) of the answer. The body is read to one byte
+        past MAX_RESPONSE_BYTES at most, so that a longer one is told apart."""
+        try:
+            response = opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            self.detach()
+            error.close()
+            return error.code, error.headers, b""
+        try:
+            body = bytearray()
+            while len(body) <= MAX_RESPONSE_BYTES:
+                chunk = response.read(min(1 << 16, MAX_RESPONSE_BYTES + 1 - len(body)))
+                if not chunk:
+                    break
+                body += chunk
+            return response.status, response.headers, bytes(body)
+        finally:
+            self.detach()
+            response.close()
+
+    def attach(self, sock: socket.socket) -> None:
+        with self._lock:
+            if self._abandoned:
+                raise ConnectionAbortedError("the request was abandoned at its deadline")
+            self._socket = sock
+
+    def detach(self) -> None:
+        with self._lock:
+            self._socket = None
+
+    def abandon(self) -> None:
+        with self._lock:
+            self._abandoned = True
+            if self._socket is not None:
+                try:
+                    # socket.socket's own shutdown: SSLSocket's also drops the
+                    # TLS state that the worker may be reading with.
+                    socket.socket.shutdown(self._socket, socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    """Hands its socket to the exchange once connected, and takes it back
+    before closing it."""
+
+    def __init__(self, *args: Any, exchange: _Exchange, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._exchange = exchange
+
+    def connect(self) -> None:
+        super().connect()
+        self._exchange.attach(self.sock)
+
+    def close(self) -> None:
+        self._exchange.detach()
+        super().close()
+
+
+class _HTTPSConnection(_HTTPConnection, http.client.HTTPSConnection):
+    pass
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, exchange: _Exchange) -> None:
+        super().__init__()
+        self._exchange = exchange
+
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(functools.partial(_HTTPConnection, exchange=self._exchange), req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, exchange: _Exchange, context: ssl.SSLContext) -> None:
+        super().__init__(context=context)
+        self._exchange = exchange
+        self._tls = context
+
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(functools.partial(_HTTPSConnection, exchange=self._exchange), req, context=self._tls)
+
+
 class AtpClient:
-    """A client of one trust authority, named by its base URL.
+    """A client of one trust authority, named by its base URL: an https URL,
+    or an http URL whose host is a loopback address literal (Section 7.1).
 
     get_trust_proof and get_discovery send requests; verify checks a proof
-    offline against the authority's discovery document, which is fetched once
-    and kept. Pass discovery to verify against a stored copy instead."""
+    offline against the authority's discovery document. A request that has
+    not finished within timeout seconds of its start raises AtpError, also
+    when the authority keeps sending a byte at a time, and so does an answer
+    body longer than MAX_RESPONSE_BYTES. A request under an http URL is sent
+    directly, not through a proxy.
 
-    def __init__(self, base_url: str, *, discovery: dict[str, Any] | None = None, timeout: float = 10.0) -> None:
+    The client keeps the copy of the discovery document it receives and
+    requests the document again once that copy is more than refresh_after
+    seconds old (300 when absent, the Section 8.1 polling interval; at most
+    MAX_DISCOVERY_AGE). The age of a copy is the time since the client
+    received it plus the Age header of the answer that carried it. Pass
+    discovery to start from a stored copy, and discovery_age for its age in
+    seconds (0 when absent)."""
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        discovery: dict[str, Any] | None = None,
+        discovery_age: float = 0,
+        timeout: float = 10.0,
+        refresh_after: float = 300,
+    ) -> None:
         parts = urllib.parse.urlsplit(base_url)
         if parts.scheme not in ("http", "https") or not parts.netloc or parts.query or parts.fragment:
             raise ValueError("base_url must be an http or https URL without a query or fragment")
+        if parts.scheme == "http" and not _loopback_literal(parts.hostname):
+            raise ValueError(
+                "base_url must be an https URL (Section 7.1); an http URL is accepted only when its host is a "
+                "loopback address literal, an IPv4 address in 127.0.0.0/8 or the IPv6 address ::1, and localhost "
+                "is not one"
+            )
+        for name, value in (("timeout", timeout), ("refresh_after", refresh_after), ("discovery_age", discovery_age)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be a number of seconds")
+        if not 0 < timeout <= threading.TIMEOUT_MAX:
+            raise ValueError("timeout must be a positive number of seconds")
+        if not 0 <= refresh_after <= MAX_DISCOVERY_AGE:
+            raise ValueError(
+                f"refresh_after must be from 0 to {MAX_DISCOVERY_AGE} seconds, the Section 7.1 maximum age"
+            )
+        if not 0 <= discovery_age < math.inf:
+            raise ValueError("discovery_age must be a finite number of seconds, at least 0")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.refresh_after = refresh_after
+        self._direct = parts.scheme == "http"
+        self._tls = ssl.create_default_context()
         self._discovery = discovery
+        self._received = time.monotonic() - discovery_age
 
     def get_discovery(self) -> dict[str, Any]:
         """The Section 7.1 discovery document from /.well-known/atp, or from
-        the legacy /.well-known/opena2a when the first answers 404."""
-        if self._discovery is None:
+        the legacy /.well-known/opena2a when the first answers 404: the copy
+        the client holds while it is at most refresh_after seconds old, and
+        otherwise a copy requested again. Raises AtpError when that request
+        fails, when the copy that arrives is more than MAX_DISCOVERY_AGE
+        seconds old by its Age header, or when its Age header is not a number
+        of seconds; the client's earlier copy is then not returned."""
+        if self._discovery is None or time.monotonic() - self._received > self.refresh_after:
             try:
-                document = self._get("/.well-known/atp")
+                document, headers = self._get("/.well-known/atp")
             except AtpError as error:
                 if error.status != 404:
                     raise
-                document = self._get("/.well-known/opena2a")
+                document, headers = self._get("/.well-known/opena2a")
+            received = time.monotonic()
             if not isinstance(document, dict):
                 raise AtpError("the discovery document is not a JSON object")
-            self._discovery = document
+            age = _age(headers)
+            if age > MAX_DISCOVERY_AGE:
+                raise AtpError(
+                    f"the discovery document was {age} seconds old when it arrived (its Age header), "
+                    f"more than the Section 7.1 maximum age of {MAX_DISCOVERY_AGE} seconds"
+                )
+            self._discovery, self._received = document, received - age
         return self._discovery
 
     def get_trust_proof(self, did: str) -> dict[str, Any]:
         """The current trust proof for did (Section 4.5). A proof the authority
         wraps under "proof" is unwrapped; a proof about another DID raises."""
-        body = self._get("/api/v1/trust/proof?did=" + urllib.parse.quote(did, safe=""))
+        body, _ = self._get("/api/v1/trust/proof?did=" + urllib.parse.quote(did, safe=""))
         proof = body.get("proof", body) if isinstance(body, dict) else None
         if not isinstance(proof, dict) or proof.get("did") != did:
             raise AtpError(f"the authority did not answer with a trust proof for {did}")
@@ -797,25 +993,46 @@ class AtpClient:
         document that verify_discovery refuses, one that declares an issuer
         key set among them, rejects the proof with that category. Step 7 is
         not applied, and a signature whose key the document does not list is
-        rejected at step 3."""
+        rejected at step 3.
+
+        When get_discovery raises AtpError, verify raises it instead of
+        returning a result: the proof is then unverified, which is not a
+        Section 4.4 rejection of it."""
         discovery = self.get_discovery()
         checked = verify_discovery(discovery)
         if not checked.valid:
             return VerifyResult(False, checked.category, f"discovery document: {checked.reason}")
         return verify_trust_proof(proof, discovery["publicKeys"], discovery["authorityDid"], now=now)
 
-    def _get(self, path: str) -> Any:
+    def _get(self, path: str) -> tuple[Any, Any]:
+        """The JSON body of the answer to GET path, and the answer's headers."""
+        exchange = _Exchange()
+        handlers: list[Any] = [_NoRedirect, _HTTPHandler(exchange), _HTTPSHandler(exchange, self._tls)]
+        if self._direct:
+            handlers.append(urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(*handlers)
         request = urllib.request.Request(self.base_url + path, headers={"Accept": "application/json"})
+        worker = threading.Thread(target=exchange.run, args=(opener, request, self.timeout), daemon=True)
+        worker.start()
         try:
-            with _OPENER.open(request, timeout=self.timeout) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as error:
-            error.close()
-            note = "; redirects are not followed" if 300 <= error.code < 400 else ""
-            raise AtpError(f"GET {path} answered HTTP {error.code}{note}", error.code) from None
-        except (urllib.error.URLError, OSError) as error:
-            raise AtpError(f"GET {path} failed: {getattr(error, 'reason', error)}") from None
+            finished = exchange.done.wait(self.timeout)
+        finally:
+            if not exchange.done.is_set():
+                exchange.abandon()
+        if not finished:
+            raise AtpError(f"GET {path} did not finish within the {self.timeout}-second timeout")
+        outcome = exchange.outcome
+        if isinstance(outcome, (OSError, http.client.HTTPException)):
+            raise AtpError(f"GET {path} failed: {getattr(outcome, 'reason', outcome)}") from None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        status, headers, raw = outcome
+        if not 200 <= status < 300:
+            note = "; redirects are not followed" if 300 <= status < 400 else ""
+            raise AtpError(f"GET {path} answered HTTP {status}{note}", status)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise AtpError(f"GET {path} answered with a body longer than {MAX_RESPONSE_BYTES} bytes")
         try:
-            return json.loads(raw, parse_constant=_no_constant)
+            return json.loads(raw, parse_constant=_no_constant), headers
         except ValueError:
             raise AtpError(f"GET {path} did not answer with JSON") from None

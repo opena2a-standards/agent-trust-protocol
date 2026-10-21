@@ -20,7 +20,7 @@ from atp_client import AtpClient
 
 client = AtpClient("https://authority.example")  # the authority this verifier trusts
 proof = client.get_trust_proof("did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem")
-result = client.verify(proof)  # no request beyond the discovery document, fetched once
+result = client.verify(proof)  # no request beyond the discovery document, requested again after 300 seconds
 if not result.valid:
     raise SystemExit(f"{result.category}: {result.reason}")
 ```
@@ -28,9 +28,24 @@ if not result.valid:
 `AtpClient` sends two kinds of request: `get_discovery()` reads `/.well-known/atp` (and
 `/.well-known/opena2a` when the first answers 404), and `get_trust_proof(did)` reads
 `/api/v1/trust/proof?did=...`, takes the proof from under `proof` when the authority wraps
-it, and raises `AtpError` for a proof about another DID. Redirects are not followed. To verify
-against a stored discovery document, with no request at all, pass it in:
-`AtpClient(url, discovery=document)`.
+it, and raises `AtpError` for a proof about another DID. Redirects are not followed. The base
+URL is an `https` URL, as Section 7.1 requires, or an `http` URL whose host is a loopback
+address literal, an IPv4 address in `127.0.0.0/8` or the IPv6 address `::1`; otherwise the
+constructor raises `ValueError`, for `http://localhost` too. A request under an `http` URL is
+sent directly, not through a proxy. A request that has not finished within `timeout` seconds
+(10 when absent) raises `AtpError`, also when the authority keeps sending a byte at a time,
+and so does an answer body longer than `MAX_RESPONSE_BYTES`, 1,048,576 bytes.
+
+The client keeps the discovery document it receives and requests it again once its copy is
+more than `refresh_after` seconds old: 300 when absent, the Section 8.1 polling interval, and
+at most 3600. The age of a copy is the time since the client received it plus the answer's
+`Age` header. A key the authority removes (Section 8.2) stops verifying once a copy without
+it arrives. When the client needs a new copy and cannot get one, `verify` raises `AtpError`
+instead of returning a result: the request failed, or the copy arrived more than 3600
+seconds old (`MAX_DISCOVERY_AGE`, the Section 7.1 maximum age) or with an `Age` that is not a
+number of seconds. To start from a stored copy, pass it with its age in seconds:
+`AtpClient(url, discovery=document, discovery_age=age)` requests no discovery document until
+that copy is more than `refresh_after` seconds old.
 
 The verify functions make no request:
 
@@ -135,7 +150,9 @@ table above except the two named below, leave unchecked what the Python client l
 unchecked and return a `VerifyResult` whose `category` is `null` for a valid input. `now` is
 a `Date` or an RFC 3339 string, and
 `new AtpClient(url, { discovery, timeoutMs })` takes a stored discovery document and a
-request timeout in milliseconds (10000 when absent). Where the Python client raises
+request timeout in milliseconds (10000 when absent). Unlike the Python client, it fetches the
+discovery document once and keeps it, accepts an `http` base URL whose host is not a loopback
+address, and does not bound the length of an answer body. Where the Python client raises
 `ValueError`, this one throws a `TypeError`: `getTrustProof` throws one for a `did` that holds
 a lone surrogate, before it sends a request. An `AtpError` carries `status`, `null` when the
 authority gave no HTTP status.

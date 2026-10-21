@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, Sigstore co-signature, two-authority
-proof (with its Ed25519 verification), threat model, issuer key set, issuer
+proof (with its Ed25519 verification), threat model, discovery transport and
+maximum age, issuer key set, issuer
 key set proof (with the Section 4.4 count), signed timestamp, ATX status, fixture coverage, A2A agent card path and Verifiable
 Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
@@ -1220,6 +1221,153 @@ class ThreatModelTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("threats FAIL", out.getvalue())
         self.assertIn("row cites no section", out.getvalue())
+
+
+TRANSPORT_SPEC = (
+    "### 7.1 Well-Known Endpoint\n\n"
+    "A trust authority MUST serve a discovery document.\n\n"
+    "{rules}\n\n"
+    "#### 7.1.1 Issuer key set\n\n"
+    "{claim}\n\n"
+    "### 7.2 Batch Queries\n"
+)
+TRANSPORT_RULE = "A client MUST NOT send a request under an authority URL whose scheme is not `https`."
+AGE_RULE = "A verifier MUST NOT use a copy whose age is more than 3600 seconds."
+CITED_CLAIM = "Its authenticity rides on the transport Section 7.1 requires."
+UNCITED_CLAIM = "Its authenticity rides on the transport."
+
+
+class DiscoveryTransportTest(unittest.TestCase):
+    def errors(self, rules=f"{TRANSPORT_RULE} {AGE_RULE}", claim=CITED_CLAIM):
+        return validate_examples.discovery_transport_errors(
+            TRANSPORT_SPEC.format(rules=rules, claim=claim)
+        )
+
+    def spec(self):
+        return (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+
+    def without_paragraph(self, lead):
+        lines = self.spec().splitlines(keepends=True)
+        begins = [i for i, line in enumerate(lines) if line.startswith(lead)]
+        self.assertEqual(len(begins), 1, f"ATP-SPEC.md has no one paragraph starting {lead!r}")
+        end = next((i for i in range(begins[0], len(lines)) if not lines[i].strip()), len(lines))
+        return "".join(lines[:begins[0]] + lines[end + 1:])
+
+    def test_repository_spec_passes(self):
+        self.assertEqual(validate_examples.discovery_transport_errors(self.spec()), [])
+
+    def test_repository_spec_with_its_earlier_claims_fails_at_their_lines(self):
+        # Sections 7.1.1 and 8.1 said authenticity rides on the transport and named none.
+        spec = self.spec().replace(
+            "rides on the transport Section 7.1 requires", "rides on the transport"
+        )
+        lines = spec.splitlines()
+
+        def starts(text):
+            return next(n for n, line in enumerate(lines, start=1) if text in line)
+
+        errors = validate_examples.discovery_transport_errors(spec)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertTrue(
+            errors[0].startswith(f"ATP-SPEC.md:{starts('The set protects against')}:"), errors[0]
+        )
+        self.assertTrue(
+            errors[1].startswith(f"ATP-SPEC.md:{starts('The response body itself')}:"), errors[1]
+        )
+
+    def test_repository_spec_without_its_transport_paragraph_fails(self):
+        errors = validate_examples.discovery_transport_errors(
+            self.without_paragraph("The authority URL is an `https` URL.")
+        )
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("no sentence that requires `https` with a MUST", errors[0])
+
+    def test_repository_spec_without_its_maximum_age_paragraph_fails(self):
+        errors = validate_examples.discovery_transport_errors(
+            self.without_paragraph("A verifier MUST NOT use a copy of the discovery document")
+        )
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("sets no maximum age", errors[0])
+
+    def test_rules_and_a_cited_claim_pass(self):
+        self.assertEqual(self.errors(), [])
+
+    def test_uncited_claim_fails_at_its_line(self):
+        errors = self.errors(claim=UNCITED_CLAIM)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:9:"), errors[0])
+        self.assertIn("without citing Section 7.1", errors[0])
+
+    def test_claim_wrapped_across_lines_fails_at_the_line_it_starts_on(self):
+        claim = "The document is not signed.\nIts authenticity rides on the\ntransport alone."
+        errors = self.errors(claim=claim)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:10:"), errors[0])
+
+    def test_rests_on_the_transport_is_a_claim(self):
+        errors = self.errors(claim="An entry without an index rests on the transport alone.")
+        self.assertEqual(len(errors), 1, errors)
+
+    def test_claim_citing_another_section_fails(self):
+        for claim in (
+            "Its authenticity rides on the transport Section 7.1.1 names.",
+            "Its authenticity rides on the transport Section 7.10 names.",
+            "Its authenticity rides on the transport (Section 8.1).",
+        ):
+            with self.subTest(claim=claim):
+                errors = self.errors(claim=claim)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("without citing Section 7.1", errors[0])
+
+    def test_claim_citing_section_7_1_passes(self):
+        for claim in (
+            "Its authenticity rides on the transport of Section 7.1.",
+            "Its authenticity rests on the transport §7.1 requires.",
+            "It rides on the transport Section 7.1 requires, as Section 7.1.1 says.",
+        ):
+            with self.subTest(claim=claim):
+                self.assertEqual(self.errors(claim=claim), [])
+
+    def test_https_without_a_must_names_no_transport(self):
+        errors = self.errors(rules=f"The authority URL is an `https` URL. {AGE_RULE}")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:1:"), errors[0])
+        self.assertIn("names no transport", errors[0])
+
+    def test_age_without_a_must_sets_no_maximum(self):
+        rules = f"{TRANSPORT_RULE} A verifier SHOULD refetch a copy whose age is more than 3600 seconds."
+        errors = self.errors(rules=rules)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("sets no maximum age", errors[0])
+
+    def test_rules_in_a_subsection_do_not_count(self):
+        errors = self.errors(rules="No rule here.", claim=f"{TRANSPORT_RULE} {AGE_RULE} {CITED_CLAIM}")
+        self.assertEqual(len(errors), 2, errors)
+        self.assertTrue(all(error.startswith("ATP-SPEC.md:1:") for error in errors), errors)
+
+    def test_code_blocks_are_not_read(self):
+        errors = self.errors(
+            rules=f"```\n{TRANSPORT_RULE} {AGE_RULE}\n```", claim=f"```\n{UNCITED_CLAIM}\n```"
+        )
+        self.assertEqual(len(errors), 2, errors)
+        self.assertFalse(any("without citing" in error for error in errors), errors)
+
+    def test_section_ending_the_text_is_read(self):
+        text = f"### 7.1 Well-Known Endpoint\n\n{TRANSPORT_RULE} {AGE_RULE}\n"
+        self.assertEqual(validate_examples.discovery_transport_errors(text), [])
+
+    def test_missing_heading_fails(self):
+        errors = validate_examples.discovery_transport_errors("### 7.2 Batch Queries\n\nText.\n")
+        self.assertEqual(errors, ["ATP-SPEC.md: heading '### 7.1 Well-Known Endpoint' not found"])
+
+    def test_main_fails_on_discovery_transport_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "discovery_transport_errors", return_value=["names no transport"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("transport FAIL", out.getvalue())
+        self.assertIn("names no transport", out.getvalue())
 
 
 KEY_SET_HEADING = "#### 7.1.1 Issuer key set"

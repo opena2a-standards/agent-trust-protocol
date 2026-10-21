@@ -53,6 +53,14 @@ Every defense in the Section 10.1 threat model table cites the section that
 defines it, and that section is a numbered heading of ATP-SPEC.md, so the table
 cannot list a defense the specification never defines.
 
+Section 7.1 names the transport of every request under the authority URL and
+the maximum age of a verifier's copy of the discovery document: before its
+first subsection, a prose sentence requires `https` with a MUST, and one with a
+MUST bounds the copy with "age is more than N seconds". The discovery document
+and the Section 8.1 response are not signed, so a prose sentence of ATP-SPEC.md
+saying authenticity rides or rests on the transport cites Section 7.1, not only
+one of its subsections.
+
 The Section 4.3 table of served timestamps gives, for each, the form the
 canonical string carries (UTC, whole seconds with fractional seconds dropped,
 `Z` suffix), and includes a served timestamp with fractional seconds, so the
@@ -1344,6 +1352,66 @@ def threat_model_errors(text: str) -> list[str]:
     return errors
 
 
+# Section 7.1: the transport of every request under the authority URL, and the
+# maximum age of a verifier's copy of the discovery document.
+DISCOVERY_HEADING = "### 7.1 Well-Known Endpoint"
+HTTPS_SCHEME = "`https`"
+MAXIMUM_AGE = re.compile(r"\bage is more than \d+ seconds\b")
+TRANSPORT_CLAIM = re.compile(r"\b(?:rides|rests) on the transport\b", re.IGNORECASE)
+# Section 7.1 itself: not 7.1.1, and not 7.10.
+CITES_DISCOVERY = re.compile(r"(?:\bSection |§)7\.1(?!\.?\d)")
+
+
+def discovery_transport_errors(text: str) -> list[str]:
+    """Section 7.1 names the transport and the maximum age: before its first
+    subsection, a prose sentence requires `https` with a MUST, and a prose
+    sentence with a MUST bounds a verifier's copy of the discovery document
+    with "age is more than N seconds". The discovery document and the Section
+    8.1 response are not signed, so a prose sentence saying authenticity rides
+    or rests on the transport cites Section 7.1, the section that names it.
+    Code blocks are not checked. A missing rule is reported at the heading, a
+    claim at the line its sentence starts on."""
+    start = end = None
+    code = set()
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose":
+            code.add(number)
+        elif start is None and line.strip() == DISCOVERY_HEADING:
+            start = number
+        elif start is not None and end is None and line.startswith("#"):
+            end = number
+    if start is None:
+        return [f"ATP-SPEC.md: heading {DISCOVERY_HEADING!r} not found"]
+    if end is None:
+        end = len(text.splitlines()) + 1
+    transport = age = False
+    claims = []
+    for unit in readme_units(text):
+        if unit[0][0] in code:
+            continue
+        for lineno, sentence in unit_sentences(unit):
+            if start < lineno < end and "MUST" in sentence:
+                transport = transport or HTTPS_SCHEME in sentence
+                age = age or bool(MAXIMUM_AGE.search(sentence))
+            if TRANSPORT_CLAIM.search(sentence) and not CITES_DISCOVERY.search(sentence):
+                claims.append(
+                    f"ATP-SPEC.md:{lineno}: rests authenticity on the transport without citing "
+                    f"Section 7.1, which names it: {sentence.strip()!r}"
+                )
+    errors = []
+    if not transport:
+        errors.append(
+            f"ATP-SPEC.md:{start}: Section 7.1 has no sentence that requires {HTTPS_SCHEME} "
+            "with a MUST, so it names no transport"
+        )
+    if not age:
+        errors.append(
+            f"ATP-SPEC.md:{start}: Section 7.1 has no sentence with a MUST on a copy whose "
+            "\"age is more than N seconds\", so it sets no maximum age"
+        )
+    return errors + claims
+
+
 def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
     """Section 6 federation is what makes a trust response decentralized, and
     no second authority co-signs proofs yet (Section 2.1 lists the Level 3
@@ -1994,6 +2062,15 @@ def main() -> int:
         failures += 1
     else:
         print("threats OK     ATP-SPEC.md Section 10.1 defenses vs the spec's sections")
+
+    transport_errors = discovery_transport_errors(spec)
+    if transport_errors:
+        print("transport FAIL ATP-SPEC.md transport claims vs the Section 7.1 rule and maximum age")
+        for err in transport_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("transport OK   ATP-SPEC.md transport claims vs the Section 7.1 rule and maximum age")
 
     discovery_errors = discovery_path_errors(readme)
     if discovery_errors:
