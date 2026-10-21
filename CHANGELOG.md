@@ -435,6 +435,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `clients/README.md` documents the behavior, and that the TypeScript client fetches the
   discovery document once, accepts an `http` base URL whose host is not a loopback address
   and does not bound an answer body.
+- `clients/python` and `clients/typescript`: `AtpClient` accepted a base URL that ends in an
+  empty query or fragment, such as `https://authority.example?` or `http://127.0.0.1:8080#`,
+  although the constructor's error says a base URL has no query or fragment: `urlsplit`, and
+  the `search` and `hash` of a `URL`, give an empty one as an empty string, as they give an
+  absent one. Each request appends its path to the base URL, so under a trailing `#` the
+  discovery request went to `/` and the client returned the answer there as the discovery
+  document, and under a trailing `?` it went to `/?/.well-known/atp`. The constructor now
+  raises `ValueError` (Python) or throws a `TypeError` (TypeScript) for a base URL that holds
+  a `?` or `#`, and its message names both characters; a percent-encoded `%3F` or `%23` in
+  the path is accepted. The tests cover `?`, `#`, `/?`, `/#`, `?#`, `/?a=1` and `#top` after
+  an `https` URL and after the local authority's URL, to which no request is sent.
+  `clients/README.md` states the rule for both clients.
 - Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
   (the PyPI package of that name is unrelated), so neither ran. They now call the Section
   4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,

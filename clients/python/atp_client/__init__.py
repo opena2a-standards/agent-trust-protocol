@@ -924,8 +924,10 @@ class AtpClient:
         refresh_after: float = 300,
     ) -> None:
         parts = urllib.parse.urlsplit(base_url)
-        if parts.scheme not in ("http", "https") or not parts.netloc or parts.query or parts.fragment:
-            raise ValueError("base_url must be an http or https URL without a query or fragment")
+        # Each request appends its path to base_url. urlsplit reports an empty query or
+        # fragment as "", as it does an absent one, so "?" and "#" are looked for in base_url.
+        if parts.scheme not in ("http", "https") or not parts.netloc or "?" in base_url or "#" in base_url:
+            raise ValueError("base_url must be an http or https URL without a query or fragment (no ? or #)")
         if parts.scheme == "http" and not _loopback_literal(parts.hostname):
             raise ValueError(
                 "base_url must be an https URL (Section 7.1); an http URL is accepted only when its host is a "

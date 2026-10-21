@@ -822,14 +822,16 @@ export class AtpClient {
     } catch {
       url = null;
     }
+    // Each request appends its path to baseUrl. url.search and url.hash are "" for an empty
+    // query or fragment, as for an absent one, so "?" and "#" are looked for in baseUrl.
     if (
       url === null ||
       (url.protocol !== "http:" && url.protocol !== "https:") ||
       url.host === "" ||
-      url.search !== "" ||
-      url.hash !== ""
+      baseUrl.includes("?") ||
+      baseUrl.includes("#")
     ) {
-      throw new TypeError("baseUrl must be an http or https URL without a query or fragment");
+      throw new TypeError("baseUrl must be an http or https URL without a query or fragment (no ? or #)");
     }
     let end = baseUrl.length;
     while (end > 0 && baseUrl[end - 1] === "/") end -= 1;
