@@ -7,7 +7,7 @@ Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the error fixture_authority.py stops with when it cannot read an example
 it serves or listen on its port, the registry generation and --check mode of
-gen_registries.py, and the test-suite sentences of the
+gen_registries.py, and the test-suite and package sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import base64
@@ -3318,15 +3318,157 @@ class GuideBlocksTest(unittest.TestCase):
         self.assertIn("YYYY-MM-DD", body)
 
 
+# The marker test derives the unit test suites and packages from the tree: a
+# unit test suite is a test*.py module (unittest's default discovery pattern)
+# and a package is a manifest that pip or npm builds one from.
+PACKAGE_MANIFESTS = ("pyproject.toml", "setup.py", "package.json")
+# How the marker names a unit test suite: "<path>, <what it tests> (run: <command>)".
+SUITE_CLAUSE = re.compile(r"([\w./-]+), [^();]+ \(run: ([^()]+)\)")
+
+
+def is_test_module(path):
+    name = Path(path).name
+    return name.startswith("test") and name.endswith(".py")
+
+
+def tree_files(root, wanted):
+    """The paths, relative to root, of the files under it whose name `wanted`
+    accepts, outside hidden directories, node_modules, build directories and
+    virtual environments (a directory holding pyvenv.cfg)."""
+    found = []
+    for directory, subdirs, names in os.walk(root):
+        here = Path(directory)
+        subdirs[:] = [
+            name
+            for name in subdirs
+            if not name.startswith(".")
+            and name not in ("node_modules", "build")
+            and not (here / name / "pyvenv.cfg").exists()
+        ]
+        found += [(here / name).relative_to(root).as_posix() for name in names if wanted(name)]
+    return sorted(found)
+
+
+def unit_test_suites(root):
+    return tree_files(root, is_test_module)
+
+
+def package_manifests(root):
+    return tree_files(root, lambda name: name in PACKAGE_MANIFESTS)
+
+
+def marker_errors(marker, root):
+    """What the marker gets wrong about the tree under root: a unit test suite
+    it does not name with the command that runs it, a suite it names that is
+    not in the tree, and a package manifest it does not name."""
+    named = [path for path, _ in SUITE_CLAUSE.findall(marker) if is_test_module(path)]
+    suites = unit_test_suites(root)
+    errors = [
+        f"the marker does not name the unit test suite {path} with the command that runs it"
+        for path in suites
+        if path not in named
+    ]
+    errors += [
+        f"the marker names the unit test suite {path}, which is not in the tree"
+        for path in named
+        if path not in suites
+    ]
+    errors += [
+        f"the marker does not name the package manifest {path}"
+        for path in package_manifests(root)
+        if not re.search(rf"(?<![\w./-]){re.escape(path)}(?!\.?[\w/-])", marker)
+    ]
+    return errors
+
+
 class TestSuiteMarkerTest(unittest.TestCase):
+    # Names the unit test suite a/test_a.py and the package manifest b/pyproject.toml.
+    NAMED = (
+        "The unit test suite is a/test_a.py, the unit tests for a (run: python3 a/test_a.py); "
+        "the package is b (b/pyproject.toml)."
+    )
+
     def setUp(self):
         self.marker = (ROOT / ".pre-push-review-not-required").read_text(encoding="utf-8")
 
-    def test_marker_names_the_only_unit_test_suite(self):
+    def tree(self, *paths):
+        """A temporary directory holding an empty file at each path."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for path in paths:
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).touch()
+        return root
+
+    def test_marker_names_every_unit_test_suite_and_package(self):
         title = (ROOT / "conformance" / "README.md").read_text(encoding="utf-8").splitlines()[0]
         self.assertIn("Test Suite", title)
         self.assertNotIn("The only test suite", self.marker)
-        self.assertIn("The only unit test suite is scripts/test_checks.py", self.marker)
+        self.assertIn(Path(__file__).resolve().relative_to(ROOT).as_posix(), unit_test_suites(ROOT))
+        self.assertTrue(package_manifests(ROOT))
+        self.assertEqual(marker_errors(self.marker, ROOT), [])
+
+    def test_marker_installs_and_tests_the_client_as_its_readme_does(self):
+        blocks = check_guides.parse_blocks((ROOT / "clients" / "README.md").read_text(encoding="utf-8"))
+        install = " && ".join(blocks[("## Python", 0)].body.splitlines())
+        tests = " && ".join(blocks[("## Tests", 0)].body.splitlines())
+        self.assertIn(f"(run: {install})", self.marker)
+        commands = dict(SUITE_CLAUSE.findall(self.marker))
+        self.assertEqual(commands.get("clients/python/tests/test_atp_client.py"), tests)
+
+    def test_marker_naming_the_tree_passes(self):
+        self.assertEqual(marker_errors(self.NAMED, self.tree("a/test_a.py", "b/pyproject.toml")), [])
+
+    def test_suite_or_package_the_marker_does_not_name_fails(self):
+        root = self.tree(
+            "a/test_a.py", "b/pyproject.toml", "b/tests/test_b.py", "c/package.json", "pyproject.toml"
+        )
+        self.assertEqual(
+            marker_errors(self.NAMED, root),
+            [
+                "the marker does not name the unit test suite b/tests/test_b.py with the command that runs it",
+                "the marker does not name the package manifest c/package.json",
+                "the marker does not name the package manifest pyproject.toml",
+            ],
+        )
+
+    def test_manifest_is_named_only_by_its_whole_path(self):
+        root = self.tree("b/pyproject.toml")
+        self.assertEqual(marker_errors("The package manifest is b/pyproject.toml.", root), [])
+        for marker in (
+            "The package manifest is x/b/pyproject.toml.",
+            "The package manifest is b/pyproject.toml.bak.",
+        ):
+            with self.subTest(marker=marker):
+                self.assertEqual(
+                    marker_errors(marker, root),
+                    ["the marker does not name the package manifest b/pyproject.toml"],
+                )
+
+    def test_suite_named_without_its_command_fails(self):
+        marker = self.NAMED.replace(" (run: python3 a/test_a.py)", "")
+        self.assertEqual(
+            marker_errors(marker, self.tree("a/test_a.py", "b/pyproject.toml")),
+            ["the marker does not name the unit test suite a/test_a.py with the command that runs it"],
+        )
+
+    def test_suite_the_tree_does_not_hold_fails(self):
+        self.assertEqual(
+            marker_errors(self.NAMED, self.tree("b/pyproject.toml")),
+            ["the marker names the unit test suite a/test_a.py, which is not in the tree"],
+        )
+
+    def test_hidden_build_node_modules_and_virtual_environment_files_are_not_derived(self):
+        root = self.tree(
+            ".venv/lib/test_a.py",
+            "env/pyvenv.cfg",
+            "env/lib/test_b.py",
+            "b/build/lib/test_c.py",
+            "c/node_modules/d/package.json",
+        )
+        self.assertEqual(unit_test_suites(root), [])
+        self.assertEqual(package_manifests(root), [])
 
     def test_marker_run_command_runs_this_file(self):
         this = Path(__file__).resolve().relative_to(ROOT).as_posix()

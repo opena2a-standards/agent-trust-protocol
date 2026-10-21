@@ -681,6 +681,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   proof with verdict `blocked` in the gate script, a B.2 proof about another DID, and the
   two A2A cards above, and `scripts/test_checks.py` checks that each case fails when its
   guide check is taken out.
+- `.pre-push-review-not-required` said that the repository had no build, that
+  `scripts/test_checks.py` was the only unit test suite and that nothing was packaged, which
+  `clients/python` made false: it is a package that pip builds with setuptools, with its own
+  unit test suite. The marker now names the package (`clients/python/pyproject.toml`) with
+  the command that installs it, and each unit test suite with the command that runs it. The
+  marker test in `scripts/test_checks.py` checked that the sentence was present rather than
+  true, so it passed while the sentence was false. It now finds the unit test suites
+  (`test*.py` modules) and the package manifests (`pyproject.toml`, `setup.py`,
+  `package.json`) in the tree, outside hidden directories, `node_modules`, `build`
+  directories and virtual environments, and fails when the marker leaves out a suite or its
+  run command, names a suite the tree does not hold, or leaves out a manifest; it also checks
+  the client's install and test commands against `clients/README.md`.
 
 ## [1.0.0-rc1] - 2026-04-28
 
