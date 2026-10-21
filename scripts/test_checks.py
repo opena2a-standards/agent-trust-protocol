@@ -3320,7 +3320,8 @@ class GuideBlocksTest(unittest.TestCase):
 
 # The marker test derives the unit test suites and packages from the tree: a
 # unit test suite is a test*.py module (unittest's default discovery pattern)
-# and a package is a manifest that pip or npm builds one from.
+# or a *.test.ts module (the TypeScript client's), and a package is a manifest
+# that pip or npm builds one from.
 PACKAGE_MANIFESTS = ("pyproject.toml", "setup.py", "package.json")
 # How the marker names a unit test suite: "<path>, <what it tests> (run: <command>)".
 SUITE_CLAUSE = re.compile(r"([\w./-]+), [^();]+ \(run: ([^()]+)\)")
@@ -3328,7 +3329,7 @@ SUITE_CLAUSE = re.compile(r"([\w./-]+), [^();]+ \(run: ([^()]+)\)")
 
 def is_test_module(path):
     name = Path(path).name
-    return name.startswith("test") and name.endswith(".py")
+    return (name.startswith("test") and name.endswith(".py")) or name.endswith(".test.ts")
 
 
 def tree_files(root, wanted):
@@ -3409,16 +3410,37 @@ class TestSuiteMarkerTest(unittest.TestCase):
         self.assertTrue(package_manifests(ROOT))
         self.assertEqual(marker_errors(self.marker, ROOT), [])
 
-    def test_marker_installs_and_tests_the_client_as_its_readme_does(self):
+    def test_marker_installs_and_tests_the_clients_as_their_readme_does(self):
         blocks = check_guides.parse_blocks((ROOT / "clients" / "README.md").read_text(encoding="utf-8"))
-        install = " && ".join(blocks[("## Python", 0)].body.splitlines())
-        tests = " && ".join(blocks[("## Tests", 0)].body.splitlines())
-        self.assertIn(f"(run: {install})", self.marker)
         commands = dict(SUITE_CLAUSE.findall(self.marker))
-        self.assertEqual(commands.get("clients/python/tests/test_atp_client.py"), tests)
+        # The first block under each client's heading builds or installs it, and
+        # the blocks under "## Tests" run the clients' tests in the same order.
+        for index, (heading, suite) in enumerate(
+            [
+                ("## Python", "clients/python/tests/test_atp_client.py"),
+                ("## TypeScript", "clients/typescript/test/atp-client.test.ts"),
+            ]
+        ):
+            with self.subTest(client=heading):
+                install = " && ".join(blocks[(heading, 0)].body.splitlines())
+                tests = " && ".join(blocks[("## Tests", index)].body.splitlines())
+                self.assertIn(f"(run: {install})", self.marker)
+                self.assertEqual(commands.get(suite), tests)
 
     def test_marker_naming_the_tree_passes(self):
         self.assertEqual(marker_errors(self.NAMED, self.tree("a/test_a.py", "b/pyproject.toml")), [])
+
+    def test_typescript_test_module_is_a_unit_test_suite(self):
+        root = self.tree(
+            "a/test_a.py", "b/pyproject.toml", "c/test/c.test.ts", "c/dist/test/c.test.js", "c/dist/test/c.test.d.ts"
+        )
+        self.assertEqual(unit_test_suites(root), ["a/test_a.py", "c/test/c.test.ts"])
+        self.assertEqual(
+            marker_errors(self.NAMED, root),
+            ["the marker does not name the unit test suite c/test/c.test.ts with the command that runs it"],
+        )
+        named = self.NAMED + " The other is c/test/c.test.ts, the unit tests for c (run: cd c && npm test)."
+        self.assertEqual(marker_errors(named, root), [])
 
     def test_suite_or_package_the_marker_does_not_name_fails(self):
         root = self.tree(

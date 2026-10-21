@@ -1,8 +1,9 @@
 # ATP clients
 
-A Python client for the [Agent Trust Protocol](../ATP-SPEC.md): it fetches a trust proof from an
-authority and verifies it offline, with the issuer keys of the authority's discovery document.
-It is not published to a package index; install it from a checkout of this repository.
+Two clients for the [Agent Trust Protocol](../ATP-SPEC.md), one in Python and one in
+TypeScript: each fetches a trust proof from an authority and verifies it offline, with the
+issuer keys of the authority's discovery document. Neither is published to a package index;
+install one from a checkout of this repository.
 
 ## Python
 
@@ -56,20 +57,67 @@ count of step 4 (Section 7.1.1). Since the specification forbids ignoring a set,
 discovery document has no `issuerKeySet`. `verify_inclusion_proof` checks the proof it is
 given; tying its `leafHash` to a trust proof (Section 5.2) is the caller's.
 
+## TypeScript
+
+The package, `@opena2a/atp-client`, declares Node.js 22 or later (its tests were run on
+26.12.0) and has no runtime dependencies: it uses the `crypto` module and `fetch` of Node.js.
+ML-DSA-65 signatures need a Node.js whose `crypto` module has ML-DSA-65 keys, as 26.12.0 has.
+`npm ci` installs the build's two dev dependencies, `typescript` and `@types/node`, at the
+versions `package-lock.json` pins:
+
+```bash
+cd clients/typescript
+npm ci
+npm run build
+```
+
+Then, from the project that uses it, run `npm install <path to clients/typescript>`.
+
+```typescript
+import { AtpClient } from "@opena2a/atp-client";
+
+const client = new AtpClient("https://authority.example"); // the authority this verifier trusts
+const proof = await client.getTrustProof("did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem");
+const result = await client.verify(proof); // no request beyond the discovery document, fetched once
+if (!result.valid) throw new Error(`${result.category}: ${result.reason}`);
+```
+
+It has the Python client's functions, named in camelCase, and sends the same two kinds of
+request. `getDiscovery()`, `getTrustProof(did)` and `verify(proof, { now })` return promises;
+`verifyTrustProof(proof, keys, trustedIssuers, { now })`, `verifyDiscovery(document,
+trustedIssuers)`, `verifySignedTreeHead(sth, keys)`, `verifyInclusionProof(proof, keys)`,
+`verifyConsistencyProof(proof, keys)` and `verifyRevocationList(body)` make the checks of the
+table above, leave the same steps unchecked and return a `VerifyResult` whose `category` is
+`null` for a valid input. `now` is a `Date` or an RFC 3339 string, and
+`new AtpClient(url, { discovery, timeoutMs })` takes a stored discovery document and a
+request timeout in milliseconds (10000 when absent). Where the Python client raises
+`ValueError`, this one throws a `TypeError`; an `AtpError` carries `status`, `null` when the
+authority gave no HTTP status. One check is its own: a `did`, `verdict` or `issuerDid` that
+holds a lone surrogate, which UTF-8 cannot encode, is a `PARSE_ERROR`.
+
 ## Tests
 
 [`fixtures/`](fixtures/) holds byte copies of the 14 fixtures of
 [atp-conformance](https://github.com/opena2a-standards/atp-conformance) at commit
-`24187d4538b4c32263e293d21ae29834792a3888`, with its `MANIFEST.sha256`. The tests check each
-copy against that manifest, then check that every fixture gets the verdict and reject
-category it pins. The other tests sign proofs, tree heads and trees with keys they generate,
-and run the client against a local server on 127.0.0.1.
+`24187d4538b4c32263e293d21ae29834792a3888`, with its `MANIFEST.sha256`. The tests of each
+client check each copy against that manifest, then check that every fixture gets the verdict
+and reject category it pins. The other tests sign proofs, tree heads and trees with keys they
+generate, and run the client against a local server on 127.0.0.1.
 
 ```bash
 cd clients/python
 pip install .
 python -m unittest discover -s tests
 ```
+
+```bash
+cd clients/typescript
+npm ci
+npm test
+```
+
+`npm test` builds `src/` and `test/` into `dist/` and runs `dist/test/atp-client.test.js`
+with the Node.js test runner.
 
 To take a new fixture set, copy `fixtures/*.json` and `MANIFEST.sha256` from that repository
 and update the commit above.
