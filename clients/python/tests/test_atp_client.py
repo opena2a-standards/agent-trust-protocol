@@ -16,15 +16,26 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.server
+import ipaddress
 import json
+import math
+import os
 import pathlib
+import ssl
+import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from unittest import mock
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.mldsa import MLDSA65PrivateKey
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 import atp_client as atp
 
@@ -883,32 +894,118 @@ class ReasonTextTests(unittest.TestCase):
 
 class Authority(http.server.BaseHTTPRequestHandler):
     """Answers each path from the server's routes: a (status, body) pair, or
-    (status, None, headers) for an answer without a body."""
+    (status, body, headers). A body of None is an answer without a body, and
+    headers is a dict or a list of (name, value) pairs."""
 
     def do_GET(self):
         self.server.requests.append(self.path)
         route = self.server.routes.get(urllib.parse.urlsplit(self.path).path, (404, {"error": "not found"}))
         status, body, headers = (route + ({},))[:3]
         self.send_response(status)
-        for name, value in headers.items():
+        for name, value in headers.items() if isinstance(headers, dict) else headers:
             self.send_header(name, value)
         payload = b"" if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except ConnectionError:
+            pass  # the client stopped reading, as it does past MAX_RESPONSE_BYTES
 
     def log_message(self, *args):
         pass
 
 
+class Drip(http.server.BaseHTTPRequestHandler):
+    """Answers 200 one byte at a time, 0.1 seconds apart, from the status
+    line on, or from the body on when server.phase is "body". Sets
+    server.closed when a write fails because the client closed the
+    connection."""
+
+    def do_GET(self):
+        body = json.dumps({"pad": "x" * 1000}).encode()
+        head = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body)
+        if self.server.phase == "body":
+            self.wfile.write(head)
+            head = b""
+        try:
+            for byte in head + body:
+                self.wfile.write(bytes([byte]))
+                time.sleep(0.1)
+        except OSError:
+            self.server.closed.set()
+
+    def log_message(self, *args):
+        pass
+
+
+def tls_context(directory: pathlib.Path) -> ssl.SSLContext:
+    """A TLS server context with a certificate for 127.0.0.1, signed by a CA
+    generated here, whose certificate is written to directory / "ca.pem"."""
+    now = datetime.now(timezone.utc)
+    ca_key, key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "atp-client test CA")])
+
+    def certificate(subject: x509.Name, public_key, *extensions) -> x509.Certificate:
+        builder = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(ca_name)
+            .public_key(public_key)
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=5))
+            .not_valid_after(now + timedelta(hours=1))
+        )
+        for extension, critical in extensions:
+            builder = builder.add_extension(extension, critical=critical)
+        return builder.sign(ca_key, hashes.SHA256())
+
+    ca = certificate(
+        ca_name,
+        ca_key.public_key(),
+        (x509.BasicConstraints(ca=True, path_length=None), True),
+        (x509.KeyUsage(False, False, False, False, False, True, True, False, False), True),  # keyCertSign, cRLSign
+        (x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), False),
+    )
+    leaf = certificate(
+        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]),
+        key.public_key(),
+        (x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False),
+        (x509.BasicConstraints(ca=False, path_length=None), True),
+        (x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False),
+        (x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), False),
+    )
+    (directory / "ca.pem").write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    chain = directory / "server.pem"
+    chain.write_bytes(
+        leaf.public_bytes(serialization.Encoding.PEM)
+        + key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(chain)
+    return context
+
+
+def serve(
+    test: unittest.TestCase, handler: type, context: ssl.SSLContext | None = None
+) -> http.server.ThreadingHTTPServer:
+    """A server on 127.0.0.1 that answers with handler until test ends, over
+    TLS with context when one is given."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    if context is not None:
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.routes, server.requests = {}, []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    test.addCleanup(server.server_close)
+    test.addCleanup(server.shutdown)
+    return server
+
+
 class ClientTests(unittest.TestCase):
     def setUp(self):
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Authority)
-        self.server.routes, self.server.requests = {}, []
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.addCleanup(self.server.server_close)
-        self.addCleanup(self.server.shutdown)
-        self.client = atp.AtpClient(f"http://127.0.0.1:{self.server.server_address[1]}/", timeout=5)
+        self.server = serve(self, Authority)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.client = atp.AtpClient(self.url + "/", timeout=5)
         self.signer = Signer()
         self.discovery = {
             "authorityDid": AUTHORITY,
@@ -994,6 +1091,163 @@ class ClientTests(unittest.TestCase):
         for url in ("ftp://authority.example", "authority.example", "https://authority.example/?a=1"):
             with self.subTest(url), self.assertRaises(ValueError):
                 atp.AtpClient(url)
+
+    def test_an_http_base_url_needs_a_loopback_address_literal(self):
+        # Section 7.1: an https authority URL, or an http one whose host is in
+        # 127.0.0.0/8 or is ::1; the name localhost is not an address literal.
+        for url in ("http://127.0.0.1:8080", "http://127.255.0.9/", "http://[::1]:8080", "https://authority.example"):
+            with self.subTest(url):
+                self.assertEqual(atp.AtpClient(url).base_url, url.rstrip("/"))
+        refused = (
+            "http://authority.example",
+            "http://localhost:8080",
+            "http://0.0.0.0",
+            "http://128.0.0.1",
+            "http://127.1",
+            "http://[::2]",
+            "http://[::ffff:127.0.0.1]",
+        )
+        for url in refused:
+            with self.subTest(url), self.assertRaisesRegex(ValueError, r"Section 7\.1"):
+                atp.AtpClient(url)
+
+    def test_a_request_under_an_http_url_does_not_go_through_a_proxy(self):
+        proxy = serve(self, Authority)
+        proxy.routes = {"/.well-known/atp": (200, {**self.discovery, "authorityDid": "did:opena2a:authority:proxy"})}
+        self.server.routes = {"/.well-known/atp": (200, self.discovery)}
+        address = f"http://127.0.0.1:{proxy.server_address[1]}"
+        with mock.patch.dict(os.environ, {"http_proxy": address, "HTTP_PROXY": address}):
+            for name in ("no_proxy", "NO_PROXY"):
+                os.environ.pop(name, None)
+            self.assertEqual(self.client.get_discovery(), self.discovery)
+        self.assertEqual(proxy.requests, [])
+
+    def test_an_answer_body_longer_than_max_response_bytes_raises(self):
+        document = json.dumps(self.discovery).encode()
+        self.server.routes = {"/.well-known/atp": (200, document + b" " * (atp.MAX_RESPONSE_BYTES - len(document)))}
+        self.assertEqual(self.client.get_discovery(), self.discovery)
+        for path, size in (
+            ("/.well-known/atp", 20 * 1024 * 1024),
+            ("/.well-known/atp", atp.MAX_RESPONSE_BYTES + 1),
+            ("/api/v1/trust/proof", atp.MAX_RESPONSE_BYTES + 1),
+        ):
+            with self.subTest(path=path, size=size):
+                self.server.routes = {path: (200, b" " * (size - 2) + b"{}")}
+                client = atp.AtpClient(self.url)
+                fetch = client.get_discovery if path == "/.well-known/atp" else lambda: client.get_trust_proof(AGENT)
+                with self.assertRaisesRegex(atp.AtpError, rf"GET {path}\S* answered with a body longer than 1048576 bytes"):
+                    fetch()
+
+    def tls(self, handler: type) -> tuple[http.server.ThreadingHTTPServer, dict[str, str]]:
+        """A server that answers with handler over TLS, and the environment
+        under which a client created trusts its certificate."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        server = serve(self, handler, tls_context(pathlib.Path(directory.name)))
+        return server, {"SSL_CERT_FILE": os.path.join(directory.name, "ca.pem")}
+
+    def test_an_https_authority_is_reached_and_its_certificate_verified(self):
+        server, trust = self.tls(Authority)
+        server.routes = {"/.well-known/atp": (200, self.discovery)}
+        url = f"https://127.0.0.1:{server.server_address[1]}"
+        with mock.patch.dict(os.environ, trust):
+            client = atp.AtpClient(url)
+        self.assertEqual(client.get_discovery(), self.discovery)
+        with self.assertRaisesRegex(atp.AtpError, "CERTIFICATE_VERIFY_FAILED"):
+            atp.AtpClient(url).get_discovery()
+
+    def test_a_request_that_has_not_finished_within_the_timeout_raises(self):
+        # Each byte arrives well within the timeout, so only a deadline on the
+        # whole request ends it; the client then closes the connection.
+        for scheme, phase in (("http", "headers"), ("http", "body"), ("https", "body")):
+            with self.subTest(scheme=scheme, phase=phase):
+                server, trust = self.tls(Drip) if scheme == "https" else (serve(self, Drip), {})
+                server.phase, server.closed = phase, threading.Event()
+                with mock.patch.dict(os.environ, trust):
+                    client = atp.AtpClient(f"{scheme}://127.0.0.1:{server.server_address[1]}", timeout=1)
+                started = time.monotonic()
+                with self.assertRaisesRegex(atp.AtpError, "did not finish within the 1-second timeout"):
+                    client.get_discovery()
+                self.assertLess(time.monotonic() - started, 3)
+                self.assertTrue(server.closed.wait(5), "the client did not close the connection")
+
+    def test_a_removed_key_stops_verifying_once_the_copy_is_older_than_refresh_after(self):
+        # Section 8.2 step 2: the authority removes a revoked key from its
+        # discovery document, and the client requests the document again.
+        client = atp.AtpClient(self.url, refresh_after=0.05)
+        proof = signed_proof(self.signer)
+        self.server.routes = {"/.well-known/atp": (200, self.discovery)}
+        self.assertTrue(client.verify(proof, now=CLOCK).valid)
+        other = Signer(AUTHORITY + "#key-2").key(status="active", validFrom="2026-01-01T00:00:00Z")
+        self.server.routes = {"/.well-known/atp": (200, {**self.discovery, "publicKeys": [other]})}
+        time.sleep(0.1)
+        result = client.verify(proof, now=CLOCK)
+        self.assertEqual(result.category, "SIGNATURE_INVALID")
+        self.assertIn("does not resolve", result.reason)
+        self.assertEqual(self.server.requests.count("/.well-known/atp"), 2)
+
+    def test_the_age_header_counts_toward_the_age_of_the_copy(self):
+        proof = signed_proof(self.signer)
+        for age, requests in (("290", 1), ("301", 2)):
+            with self.subTest(age=age):
+                self.server.routes, self.server.requests = {"/.well-known/atp": (200, self.discovery, {"Age": age})}, []
+                client = atp.AtpClient(self.url)
+                self.assertTrue(client.verify(proof, now=CLOCK).valid)
+                self.assertTrue(client.verify(proof, now=CLOCK).valid)
+                self.assertEqual(self.server.requests.count("/.well-known/atp"), requests)
+
+    def test_a_copy_more_than_3600_seconds_old_on_arrival_raises(self):
+        proof = signed_proof(self.signer)
+        self.server.routes = {"/.well-known/atp": (200, self.discovery, {"Age": "3600"})}
+        self.assertTrue(atp.AtpClient(self.url).verify(proof, now=CLOCK).valid)
+        for age in ("3601", "0003601", "9" * 5000):
+            with self.subTest(age=age[:8]):
+                self.server.routes = {"/.well-known/atp": (200, self.discovery, {"Age": age})}
+                with self.assertRaisesRegex(atp.AtpError, "more than the Section 7.1 maximum age of 3600 seconds"):
+                    atp.AtpClient(self.url).verify(proof, now=CLOCK)
+
+    def test_an_age_header_that_is_not_one_number_of_seconds_raises(self):
+        for headers in ({"Age": "soon"}, {"Age": "-1"}, {"Age": "1.5"}, {"Age": ""}, [("Age", "1"), ("Age", "2")]):
+            with self.subTest(headers=headers):
+                self.server.routes = {"/.well-known/atp": (200, self.discovery, headers)}
+                with self.assertRaisesRegex(atp.AtpError, "Age header is not one number of seconds"):
+                    atp.AtpClient(self.url).get_discovery()
+
+    def test_a_failed_request_for_a_new_copy_raises_instead_of_verifying(self):
+        client = atp.AtpClient(self.url, refresh_after=0.05)
+        proof = signed_proof(self.signer)
+        self.server.routes = {"/.well-known/atp": (200, self.discovery)}
+        self.assertTrue(client.verify(proof, now=CLOCK).valid)
+        self.server.routes = {"/.well-known/atp": (503, {"error": "unavailable"})}
+        time.sleep(0.1)
+        with self.assertRaises(atp.AtpError) as raised:
+            client.verify(proof, now=CLOCK)
+        self.assertEqual(raised.exception.status, 503)
+        self.server.routes = {"/.well-known/atp": (200, self.discovery)}
+        self.assertTrue(client.verify(proof, now=CLOCK).valid)
+
+    def test_a_stored_copy_is_used_until_its_age_is_more_than_refresh_after(self):
+        proof = signed_proof(self.signer)
+        stored = atp.AtpClient(self.url, discovery=self.discovery, discovery_age=290)
+        self.assertTrue(stored.verify(proof, now=CLOCK).valid)
+        self.assertEqual(self.server.requests, [])
+        self.server.routes = {"/.well-known/atp": (503, {"error": "unavailable"})}
+        stale = atp.AtpClient(self.url, discovery=self.discovery, discovery_age=3601)
+        with self.assertRaises(atp.AtpError):
+            stale.verify(proof, now=CLOCK)
+        self.assertEqual(self.server.requests, ["/.well-known/atp"])
+
+    def test_timeout_refresh_after_and_discovery_age_are_checked(self):
+        cases = {
+            "timeout": (0, -1, math.inf, math.nan, "10", None, True),
+            "refresh_after": (-1, 3601, math.nan, "300"),
+            "discovery_age": (-1, math.inf, math.nan, None),
+        }
+        for name, values in cases.items():
+            for value in values:
+                with self.subTest(name=name, value=value), self.assertRaisesRegex(ValueError, name):
+                    atp.AtpClient("https://authority.example", **{name: value})
+        self.assertEqual(atp.AtpClient("https://authority.example", refresh_after=3600).refresh_after, 3600)
 
 
 if __name__ == "__main__":

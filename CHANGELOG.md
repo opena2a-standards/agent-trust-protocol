@@ -377,6 +377,32 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `fetch` stubs follow a redirect as those libraries do by default, and a case fails when
   its block sends a request to a URL that is not `https`; `scripts/test_checks.py` covers
   it.
+- `clients/python`: `AtpClient` follows Section 7.1 for its base URL and its copy of the
+  discovery document. It accepted `http://authority.example` and `http://localhost:8080`;
+  a base URL is now an `https` URL, or an `http` URL whose host is a loopback address literal
+  (an IPv4 address in `127.0.0.0/8` or the IPv6 address `::1`); otherwise the constructor
+  raises `ValueError` naming Section 7.1. A request under an `http` URL is sent directly, not
+  through a proxy set in the environment. The client fetched the discovery document once and
+  kept it, so a key the authority removed (Section 8.2) kept verifying; it now requests the
+  document again once its copy is more than `refresh_after` seconds old (300 by default, the
+  Section 8.1 polling interval; at most 3600), counts the answer's `Age` header in the age of
+  a copy, and raises `AtpError` from `get_discovery` and `verify`, instead of returning a
+  result, when a new copy cannot be had: the request failed, or the copy arrived more than
+  3600 seconds old (`MAX_DISCOVERY_AGE`) or with an `Age` that is not a number of seconds. A
+  stored copy passed as `discovery` takes its age as `discovery_age`. `timeout` bounded each
+  socket operation, so an answer body of 353 bytes sent one byte at a time, 0.3 seconds
+  apart, took 107 seconds under `timeout=1`; it now bounds the whole request, and the client
+  closes the connection when it expires. The client read the whole answer body, 20 MB in the
+  reproduction; a body longer than `MAX_RESPONSE_BYTES` (1,048,576 bytes) now raises
+  `AtpError`. The tests cover a 20 MB answer, answers of exactly the bound and one byte past
+  it, answers sent a byte at a time, 0.1 seconds apart, from their status line and from their
+  body, the second also over `https`, a local `https` authority with its certificate trusted
+  and not trusted, the accepted and refused base URLs, a proxy set in the environment, a key
+  removed between two `verify` calls, `Age` values of 290, 301, 3600 and 3601 and malformed
+  ones, a failed request for a new copy, and stored copies 290 and 3601 seconds old.
+  `clients/README.md` documents the behavior, and that the TypeScript client fetches the
+  discovery document once, accepts an `http` base URL whose host is not a loopback address
+  and does not bound an answer body.
 - Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
   (the PyPI package of that name is unrelated), so neither ran. They now call the Section
   4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,
