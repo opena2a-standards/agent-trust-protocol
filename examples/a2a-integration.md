@@ -73,6 +73,8 @@ The `trustProof` object is the exact format defined in [ATP-SPEC Section 4.2](..
 
 The Python samples need Python 3.11 or later: `datetime.fromisoformat` reads the authority's nanosecond timestamps from 3.11 on.
 
+No sample follows a redirect. [ATP-SPEC Section 7.1](../ATP-SPEC.md#71-well-known-endpoint) forbids a client to follow a redirect to a URL that is not `https`, and `requests` and `fetch` follow redirects by default, so the Python samples pass `allow_redirects=False` and fail on a redirect answer, and the TypeScript samples pass `redirect: "error"`, under which `fetch` rejects a redirect. The samples treat a redirect from the agent the same way as one from the authority. The cURL commands pass no `-L`, so curl follows no redirect.
+
 ---
 
 ## Verification: Python
@@ -94,8 +96,10 @@ def verify_a2a_agent(
         {"trusted": True/False, "trustLevel": int, "score": float, "reason": str}
     """
     # 1. Fetch the agent card
-    resp = requests.get(agent_card_url, timeout=10)
+    resp = requests.get(agent_card_url, timeout=10, allow_redirects=False)
     resp.raise_for_status()
+    if resp.is_redirect:
+        raise requests.HTTPError(f"Agent card URL redirects to {resp.headers['Location']}")
     card = resp.json()
 
     # 2. Check for ATP trust proof
@@ -117,12 +121,16 @@ def verify_a2a_agent(
 
     # 5. Verify the trust proof against the authority this verifier trusts.
     #    The card's own atp.verifyAt is not used: the card chose it.
-    verification = requests.post(
+    check = requests.post(
         verify_url,
         json=proof,
         headers={"Content-Type": "application/json"},
         timeout=10,
-    ).json()
+        allow_redirects=False,
+    )
+    if check.is_redirect:
+        return {"trusted": False, "reason": f"Verifier redirects to {check.headers['Location']}"}
+    verification = check.json()
 
     if not verification.get("valid"):
         return {"trusted": False, "reason": verification.get("error", "Verification failed")}
@@ -164,7 +172,7 @@ When Agent B delegates a task to Agent A, it can include its own trust proof so 
 ```python
 def delegate_task(target_agent_url: str, task: dict, my_proof: dict) -> dict:
     """Send a task to another A2A agent, including our own trust proof."""
-    return requests.post(
+    resp = requests.post(
         f"{target_agent_url}/tasks/send",
         json={
             "jsonrpc": "2.0",
@@ -179,7 +187,11 @@ def delegate_task(target_agent_url: str, task: dict, my_proof: dict) -> dict:
             },
         },
         timeout=30,
-    ).json()
+        allow_redirects=False,
+    )
+    if resp.is_redirect:
+        raise requests.HTTPError(f"{target_agent_url} redirects to {resp.headers['Location']}")
+    return resp.json()
 ```
 
 ---
@@ -200,7 +212,7 @@ async function verifyA2AAgent(
   verifyUrl = "https://api.oa2a.org/api/v1/trust/verify"
 ): Promise<VerifyResult> {
   // 1. Fetch the agent card
-  const card = await fetch(agentCardUrl).then((r) => r.json());
+  const card = await fetch(agentCardUrl, { redirect: "error" }).then((r) => r.json());
 
   // 2. Check for ATP trust proof
   if (!card.atp?.trustProof) {
@@ -226,6 +238,7 @@ async function verifyA2AAgent(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(proof),
+    redirect: "error",
   }).then((r) => r.json());
 
   if (!verification.valid) {
@@ -316,8 +329,11 @@ def refresh_proof_periodically(did: str, interval_seconds: int = 3600):
                 "https://api.oa2a.org/api/v1/trust/proof",
                 params={"did": did},
                 timeout=10,
+                allow_redirects=False,
             )
             resp.raise_for_status()
+            if resp.is_redirect:
+                raise requests.HTTPError(f"ATP authority redirects to {resp.headers['Location']}")
             # The response wraps the proof: {"proof": {...}, "algorithm": ..., "publicKey": ...}.
             # The card carries the proof itself, the object POST /api/v1/trust/verify accepts.
             update_agent_card_proof(resp.json()["proof"])

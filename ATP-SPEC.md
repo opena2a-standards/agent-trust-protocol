@@ -1411,7 +1411,11 @@ The OpenA2A Registry is the reference implementation of ATP at Conformance Level
 ATP defines no client library. B.1 and B.2 call the Section 4.5 endpoints of the
 authority the verifier is configured to trust, here the reference authority at
 `https://api.oa2a.org`, with a plain HTTP client: B.1 needs Python 3.11 or later and
-`requests`, B.2 a runtime with `fetch` (Node.js 18 or later). They verify online,
+`requests`, B.2 a runtime with `fetch` (Node.js 18 or later). Section 7.1 forbids a
+client to follow a redirect to a URL that is not `https`, and `requests` and `fetch`
+follow redirects by default, so B.1 passes `allow_redirects=False`, under which a 3xx
+answer fails its status check, and B.2 passes `redirect: "error"`, under which `fetch`
+rejects a redirect instead of following it. They verify online,
 through `POST /api/v1/trust/verify`; a verifier that checks proofs offline performs the
 Section 4.4 steps itself, over the Section 4.3 canonical string with an issuer key from
 the Section 7.1 discovery document. `reject_task`, `accept_task` and `MCPClient` stand
@@ -1433,7 +1437,12 @@ AUTHORITY = "https://api.oa2a.org"  # the authority this verifier trusts
 def verified_proof(did: str) -> dict | None:
     """The current trust proof for did, or None unless it is about did, has not
     expired, is accepted by the authority, and carries a trustLevel 0-4."""
-    resp = requests.get(f"{AUTHORITY}/api/v1/trust/proof", params={"did": did}, timeout=10)
+    resp = requests.get(
+        f"{AUTHORITY}/api/v1/trust/proof",
+        params={"did": did},
+        timeout=10,
+        allow_redirects=False,  # Section 7.1: a redirect's 3xx fails the check below
+    )
     if resp.status_code != 200:
         return None
     proof = resp.json().get("proof") or {}  # the response wraps the proof
@@ -1443,7 +1452,9 @@ def verified_proof(did: str) -> dict | None:
         live = False
     if proof.get("did") != did or not live:
         return None
-    check = requests.post(f"{AUTHORITY}/api/v1/trust/verify", json=proof, timeout=10)
+    check = requests.post(
+        f"{AUTHORITY}/api/v1/trust/verify", json=proof, timeout=10, allow_redirects=False
+    )
     if check.status_code != 200 or check.json().get("valid") is not True:
         return None
     level = proof.get("trustLevel")
@@ -1470,8 +1481,10 @@ const AUTHORITY = "https://api.oa2a.org"; // the authority this client trusts
 // The current trust proof for did, or null unless it is about did, has not
 // expired, is accepted by the authority, and carries a trustLevel 0-4.
 async function verifiedProof(did: string): Promise<Record<string, any> | null> {
+  // redirect: "error" rejects a redirect instead of following it (Section 7.1)
   const resp = await fetch(
-    `${AUTHORITY}/api/v1/trust/proof?did=${encodeURIComponent(did)}`
+    `${AUTHORITY}/api/v1/trust/proof?did=${encodeURIComponent(did)}`,
+    { redirect: "error" }
   );
   if (resp.status !== 200) return null;
   const proof = (await resp.json()).proof ?? {}; // the response wraps the proof
@@ -1481,6 +1494,7 @@ async function verifiedProof(did: string): Promise<Record<string, any> | null> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(proof),
+    redirect: "error",
   });
   if (check.status !== 200 || (await check.json()).valid !== true) return null;
   const level = proof.trustLevel;

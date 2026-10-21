@@ -357,6 +357,20 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- Appendix B.1 and B.2 and the A2A and MCP integration guides: their `requests` and `fetch`
+  calls followed redirects, the default of both libraries, so a 301 to an `http` URL sent
+  the next request there, which Section 7.1 forbids. Given a 301 to `http` on both of its
+  requests, B.1 returned the proof that the `http` answers carried. Each of the 13 calls now
+  refuses a redirect: the Python calls pass `allow_redirects=False` and the TypeScript calls
+  `redirect: "error"`. A redirect fails B.1's status check, so the peer is rejected, and
+  makes B.2's `fetch` reject, so no connection is made; the guide samples raise
+  `requests.HTTPError`, return an untrusted result or reject, the agent card and task
+  requests included. The guides and Appendix B state the rule. The cURL commands of the
+  guides pass no `-L` and are unchanged. `scripts/check_guides.py` adds a case for
+  each call that answers it with a 301 to the same URL under `http`, its `requests` and
+  `fetch` stubs follow a redirect as those libraries do by default, and a case fails when
+  its block sends a request to a URL that is not `https`; `scripts/test_checks.py` covers
+  it.
 - Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
   (the PyPI package of that name is unrelated), so neither ran. They now call the Section
   4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,
