@@ -310,6 +310,28 @@ class TrustProofTests(unittest.TestCase):
         self.assertEqual(self.verify({**signed_proof(self.signer), "signatures": []}).category, "PARSE_ERROR")
         self.assertEqual(self.verify([]).category, "PARSE_ERROR")
 
+    def test_a_member_that_utf8_cannot_encode_is_a_parse_error(self):
+        # json.loads reads the escape \ud800 as a lone surrogate, for which
+        # str.encode("utf-8") raises.
+        served = json.loads('"did:opena2a:agent:x\\ud800"')
+        self.assertRaises(UnicodeEncodeError, served.encode, "utf-8")
+        signed = signed_proof(self.signer)
+        cases = {"did": served, "verdict": "passed\udc00", "issuerDid": AUTHORITY + "\ud800"}
+        for name, value in cases.items():
+            with self.subTest(name):
+                reason = f"{name} holds a lone surrogate, which UTF-8 cannot encode"
+                self.assertEqual(self.verify({**signed, name: value}), atp.VerifyResult(False, "PARSE_ERROR", reason))
+                with self.assertRaisesRegex(ValueError, reason):
+                    atp.canonical_string({**signed, name: value})
+        discovery = {
+            "authorityDid": AUTHORITY,
+            "version": "1.0",
+            "endpoints": {"trustProof": "/api/v1/trust/proof"},
+            "publicKeys": [self.signer.key(status="active", validFrom="2026-01-01T00:00:00Z")],
+        }
+        client = atp.AtpClient("https://authority.example", discovery=discovery)
+        self.assertRejected(client.verify({**signed, "did": served}, now=CLOCK), "PARSE_ERROR", "did holds a lone surrogate")
+
     def test_a_clock_that_cannot_be_read_raises(self):
         proof = signed_proof(self.signer)
         for now in ("yesterday", datetime(2026, 5, 24)):
@@ -639,6 +661,16 @@ class DiscoveryTests(unittest.TestCase):
         result = atp.verify_discovery({**self.document, "publicKeys": [key]})
         self.assertEqual(result.category, "PARSE_ERROR")
         self.assertIn("publicKeys[0].publicKeyHex", result.reason)
+
+    def test_a_key_algorithm_that_is_an_array_or_an_object_is_refused(self):
+        reason = "publicKeys[0].algorithm is not Ed25519 or ML-DSA-65"
+        for algorithm in ([], {}, ["Ed25519"], {"name": "Ed25519"}):
+            with self.subTest(algorithm=algorithm):
+                key = {**self.document["publicKeys"][0], "algorithm": algorithm}
+                document = {**self.document, "publicKeys": [key]}
+                self.assertEqual(atp.verify_discovery(document), atp.VerifyResult(False, "PARSE_ERROR", reason))
+                client = atp.AtpClient("https://authority.example", discovery=document)
+                self.assertEqual(client.verify({}), atp.VerifyResult(False, "PARSE_ERROR", f"discovery document: {reason}"))
 
     def test_other_malformed_documents(self):
         cases = {

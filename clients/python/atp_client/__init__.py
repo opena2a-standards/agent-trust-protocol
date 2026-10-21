@@ -301,12 +301,26 @@ class _Proof:
         )
 
 
+def _text(proof: dict[str, Any], name: str) -> str:
+    """A string member that enters the canonical string. json.loads reads the
+    escape \\ud800 as a lone surrogate, which UTF-8 cannot encode, so a member
+    that holds one has no canonical bytes for a signature to cover."""
+    value = proof.get(name)
+    if not isinstance(value, str):
+        raise _Reject("PARSE_ERROR", f"{name} is missing or not a string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _Reject("PARSE_ERROR", f"{name} holds a lone surrogate, which UTF-8 cannot encode") from None
+    return value
+
+
 def _parse_proof(proof: Any) -> _Proof:
     if not isinstance(proof, dict):
         raise _Reject("PARSE_ERROR", "the trust proof is not a JSON object")
-    for name in ("did", "verdict", "issuerDid"):
-        if not isinstance(proof.get(name), str):
-            raise _Reject("PARSE_ERROR", f"{name} is missing or not a string")
+    did = _text(proof, "did")
+    verdict = _text(proof, "verdict")
+    issuer = _text(proof, "issuerDid")
     level = _integer(proof.get("trustLevel"), "trustLevel")
     score = proof.get("trustScore")
     if type(score) not in (int, float):
@@ -319,7 +333,7 @@ def _parse_proof(proof: Any) -> _Proof:
         raise _Reject("PARSE_ERROR", "trustScore is not a finite number")
     issued = _instant(proof.get("issuedAt"), "issuedAt")
     expires = _instant(proof.get("expiresAt"), "expiresAt")
-    return _Proof(proof["did"], level, score, proof["verdict"], issued, expires, proof["issuerDid"])
+    return _Proof(did, level, score, verdict, issued, expires, issuer)
 
 
 def _signature_entries(proof: dict[str, Any]) -> list[dict[str, Any]]:
@@ -522,7 +536,8 @@ def _check_discovery(discovery: Any, trusted: set[str] | None) -> None:
         if not isinstance(key_id, str) or not key_id.startswith("did:") or "#" not in key_id:
             raise _Reject("PARSE_ERROR", f"{name}.keyId is not a DID with a fragment")
         algorithm = key.get("algorithm")
-        if algorithm not in KEY_SIZES:
+        # A JSON array or object cannot be looked up in KEY_SIZES, a dict.
+        if not isinstance(algorithm, str) or algorithm not in KEY_SIZES:
             raise _Reject("PARSE_ERROR", f"{name}.algorithm is not Ed25519 or ML-DSA-65")
         raw = key.get("publicKeyHex")
         if not isinstance(raw, str) or len(raw) != 2 * KEY_SIZES[algorithm] or not _HEX.fullmatch(raw):

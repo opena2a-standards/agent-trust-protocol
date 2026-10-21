@@ -38,7 +38,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   reason is `endpoints["x\ny"] does not start with /`, with no line break in it.
   `verify_discovery` refuses with `PARSE_ERROR`, naming the member, an
   `endpoints` value that is not a string, does not start with `/`, or holds `#`, whitespace
-  or a control character (Section 7.1). The client does not count a Section 7.1.1 issuer
+  or a control character (Section 7.1). A trust proof whose `did`, `verdict` or `issuerDid`
+  holds a lone surrogate, which UTF-8 cannot encode, and a discovery document with a
+  `publicKeys` entry whose `algorithm` is a JSON array or object are refused with
+  `PARSE_ERROR`, naming the member. The client does not count a Section 7.1.1 issuer
   key set, so `verify_discovery` refuses a discovery document that carries `issuerKeySet` with
   `SIGNATURE_INVALID` and `AtpClient.verify` verifies no proof of an authority that declares
   one; `verify_trust_proof` receives keys without the set and is for an authority that
@@ -59,8 +62,11 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   does, where `toFixed(6)` rounds a tie up; it counts transparency log positions with
   `BigInt`, so a proof from a log of more than 2^32 entries verifies; and it refuses a `did`,
   `verdict` or `issuerDid` that holds a lone surrogate, which UTF-8 cannot encode, with
-  `PARSE_ERROR`. Its tests check the 14 fixture copies against their manifest and that the
-  client gives each fixture its pinned verdict and category; `npm test` builds and runs them.
+  `PARSE_ERROR`, as the Python client does. `getTrustProof` throws a `TypeError` for a `did`
+  that holds a lone surrogate, before it sends a request. Its tests check the 14 fixture
+  copies against their manifest and that the client gives each fixture its pinned verdict and
+  category; `npm test` builds and runs them, and on a Node.js that cannot generate ML-DSA-65
+  keys, as 22.23.3 cannot, skips the one test that generates them and prints why.
   `clients/README.md` documents both clients.
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
 - Section 4.4.1: a two-authority proof for Level 3. It is the Section 4.2 proof with an
