@@ -15,8 +15,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   verify functions check a trust proof (Section 4.4 steps 1 to 5, Ed25519 and ML-DSA-65,
   without the issuer key set count of step 4), a discovery document, a signed tree head,
   inclusion and consistency proofs (RFC 9162) and a revocation response, and return a reject
-  category and reason. The client does not count a Section 7.1.1 issuer key set, so
-  `verify_discovery` refuses a discovery document that carries `issuerKeySet` with
+  category and reason. `verify_discovery` refuses with `PARSE_ERROR`, naming the member, an
+  `endpoints` value that is not a string, does not start with `/`, or holds `#`, whitespace
+  or a control character (Section 7.1). The client does not count a Section 7.1.1 issuer
+  key set, so `verify_discovery` refuses a discovery document that carries `issuerKeySet` with
   `SIGNATURE_INVALID` and `AtpClient.verify` verifies no proof of an authority that declares
   one; `verify_trust_proof` receives keys without the set and is for an authority that
   declares none. `clients/fixtures` holds byte copies of the 14 atp-conformance fixtures with
