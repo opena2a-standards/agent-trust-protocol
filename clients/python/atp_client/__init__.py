@@ -70,6 +70,9 @@ _RFC3339 = re.compile(
 _HEX = re.compile(r"(?:[0-9a-fA-F]{2})+")
 _BASE64 = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
 _WIRE_HASH = re.compile(r"SHA256:([0-9a-f]{64})")
+# What Section 7.1 bars from an endpoints value: "#", whitespace (str.isspace)
+# and control characters (Unicode category Cc, U+0000 to U+001F and U+007F to U+009F).
+_NOT_IN_ENDPOINT = re.compile(r"[#\s\x00-\x1f\x7f-\x9f]")
 
 
 @dataclass(frozen=True)
@@ -389,10 +392,12 @@ def _check_trust_proof(proof: Any, keys: list[Any], trusted: set[str], clock: in
 
 def verify_discovery(discovery: Any, trusted_issuers: str | Iterable[str] | None = None) -> VerifyResult:
     """Section 7.1: the members a verifier reads from a discovery document,
-    each publicKeys entry a hex key of its algorithm's size. With
-    trusted_issuers, authorityDid must be one of them. A document that carries
-    issuerKeySet is refused with SIGNATURE_INVALID: this client does not count
-    an issuer key set (Section 7.1.1), which Section 4.4 step 4 requires."""
+    each endpoints value a path that starts with "/" and holds no "#",
+    whitespace or control character, and each publicKeys entry a hex key of
+    its algorithm's size. With trusted_issuers, authorityDid must be one of
+    them. A document that carries issuerKeySet is refused with
+    SIGNATURE_INVALID: this client does not count an issuer key set (Section
+    7.1.1), which Section 4.4 step 4 requires."""
     trusted = None if trusted_issuers is None else _trusted(trusted_issuers)
     return _outcome(lambda: _check_discovery(discovery, trusted))
 
@@ -409,8 +414,16 @@ def _check_discovery(discovery: Any, trusted: set[str] | None) -> None:
         if _integer(discovery["conformanceLevel"], "conformanceLevel") not in (1, 2, 3):
             raise _Reject("PARSE_ERROR", "conformanceLevel is not 1, 2 or 3")
     endpoints = discovery.get("endpoints")
-    if not isinstance(endpoints, dict) or not endpoints or not all(isinstance(v, str) and v for v in endpoints.values()):
-        raise _Reject("PARSE_ERROR", "endpoints is not an object of non-empty strings")
+    if not isinstance(endpoints, dict) or not endpoints:
+        raise _Reject("PARSE_ERROR", "endpoints is missing, empty or not a JSON object")
+    for name, path in endpoints.items():
+        # A client appends the value to the authority URL (Section 7.1).
+        if not isinstance(path, str):
+            raise _Reject("PARSE_ERROR", f"endpoints.{name} is not a string")
+        if not path.startswith("/"):
+            raise _Reject("PARSE_ERROR", f"endpoints.{name} does not start with /")
+        if _NOT_IN_ENDPOINT.search(path):
+            raise _Reject("PARSE_ERROR", f"endpoints.{name} holds #, whitespace or a control character")
     keys = discovery.get("publicKeys")
     if not isinstance(keys, list) or not keys:
         raise _Reject("PARSE_ERROR", "publicKeys is missing or empty")

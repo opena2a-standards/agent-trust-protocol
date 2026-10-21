@@ -470,6 +470,51 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(result.category, "PARSE_ERROR")
                 self.assertIn(reason, result.reason)
 
+    def check(self, value, name="trustProof"):
+        """verify_discovery on the document with endpoints[name] set to value."""
+        endpoints = {**self.document["endpoints"], name: value}
+        return atp.verify_discovery({**self.document, "endpoints": endpoints})
+
+    def assert_refused(self, value, reason):
+        result = self.check(value)
+        self.assertFalse(result.valid)
+        self.assertEqual(result.category, "PARSE_ERROR")
+        self.assertEqual(result.reason, f"endpoints.trustProof {reason}")
+
+    def test_an_endpoint_value_without_a_leading_slash_is_refused(self):
+        # Section 7.1: appended to https://api.oa2a.org, the first runs into
+        # the host name, the second extends it and the third replaces it.
+        for value in ("api/v1/trust/proof", ".attacker.example/x", "@attacker.example/x", ""):
+            with self.subTest(value=value):
+                self.assert_refused(value, "does not start with /")
+
+    def test_an_endpoint_value_with_a_fragment_is_refused(self):
+        self.assert_refused("/a#b", "holds #, whitespace or a control character")
+
+    def test_an_endpoint_value_with_whitespace_is_refused(self):
+        for value in ("/a b", "/a\tb", "/a\nb", "/a b", "/a　b"):
+            with self.subTest(value=value):
+                self.assert_refused(value, "holds #, whitespace or a control character")
+
+    def test_an_endpoint_value_with_a_control_character_is_refused(self):
+        for value in ("/a\x00b", "/a\x01b", "/a\x7fb", "/a\x9fb"):
+            with self.subTest(value=value):
+                self.assert_refused(value, "holds #, whitespace or a control character")
+
+    def test_an_endpoint_value_that_is_not_a_string_is_refused(self):
+        for value in (42, None, ["/api/v1/trust/proof"]):
+            with self.subTest(value=value):
+                self.assert_refused(value, "is not a string")
+
+    def test_the_reason_names_the_endpoint_member(self):
+        result = self.check("api/v1/trust/revocations", name="revocations")
+        self.assertEqual(result.reason, "endpoints.revocations does not start with /")
+
+    def test_endpoint_values_that_are_paths_are_accepted(self):
+        for value in ("/", "/api/v1/trust/proof?v=1", "/api/v1/did/{did}", "/a%20b"):
+            with self.subTest(value=value):
+                self.assertTrue(self.check(value).valid)
+
     def test_an_authority_outside_the_trusted_set_is_rejected(self):
         result = atp.verify_discovery(self.document, ["did:opena2a:authority:partner.example"])
         self.assertEqual(result.category, "UNTRUSTED_ISSUER")

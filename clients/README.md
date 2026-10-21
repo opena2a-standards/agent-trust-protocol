@@ -36,7 +36,7 @@ The verify functions make no request:
 | Function | Checks | Section |
 |---|---|---|
 | `verify_trust_proof(proof, keys, trusted_issuers, now=None)` | Steps 1 to 5 in order, without the issuer key set count of step 4: expiry, issuer, key lookup by `keyId`, every signature over the canonical string (Ed25519 and ML-DSA-65), at least one Ed25519 signature by a key of `issuerDid`, then trust level, score, verdict and the 24-hour window | 4.3, 4.4 |
-| `verify_discovery(document, trusted_issuers=None)` | The members a verifier reads, and each key's size for its algorithm; a document that carries `issuerKeySet` is refused | 7.1, 7.1.1 |
+| `verify_discovery(document, trusted_issuers=None)` | The members a verifier reads, each `endpoints` value a path that starts with `/` and holds no `#`, whitespace or control character, and each key's size for its algorithm; a document that carries `issuerKeySet` is refused | 7.1, 7.1.1 |
 | `verify_signed_tree_head(sth, keys)` | The Ed25519 signature over the 32 root-hash bytes | 5.6 |
 | `verify_inclusion_proof(proof, keys)` | The tree head, then the RFC 9162 Section 2.1.3.2 root | 5.4 |
 | `verify_consistency_proof(proof, keys)` | Both tree heads, then the RFC 9162 Section 2.1.4.2 roots | 5.5 |
