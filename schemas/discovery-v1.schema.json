@@ -95,6 +95,29 @@
       "type": "integer",
       "minimum": 0,
       "description": "First logIndex whose leaf is hashed per section 5.2 of ATP 1.1 (timestamp || entry type byte || JCS(data)); absent means the whole log conforms."
+    },
+    "issuerKeySet": {
+      "type": "object",
+      "required": [
+        "threshold",
+        "keyIds"
+      ],
+      "properties": {
+        "threshold": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "keyIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:@/-]+#[A-Za-z0-9._-]+$"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "description": "Section 7.1.1 issuer key set: an m-of-n set of the authority's Ed25519 signing keys, threshold being m and keyIds the n keys. Section 4.4 step 4 accepts a proof of the authority only when at least threshold distinct keys of the set signed it. The rules this schema cannot express (each keyIds entry the keyId of an Ed25519 entry of publicKeys, no keyId twice, no two listed keys with the same publicKeyHex, threshold at most the number of keyIds) are checked by scripts/validate_examples.py on each mapped discovery example this schema accepts."
     }
   },
   "additionalProperties": false,

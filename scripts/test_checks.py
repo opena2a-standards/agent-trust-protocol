@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, Sigstore co-signature, threat model,
-signed timestamp, ATX status, fixture coverage, A2A agent card path and
-Verifiable Credential form checks in validate_examples.py, check_guides.py, the
-conformance scripts (run against fixture_authority.py; needs bash, curl and
-jq), the error fixture_authority.py stops with when it cannot read an example
-it serves or listen on its port, the registry generation and --check mode of
-gen_registries.py, and the test-suite sentences of the
-.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+issuer key set, signed timestamp, ATX status, fixture coverage, A2A agent card
+path and Verifiable Credential form checks in validate_examples.py,
+check_guides.py, the conformance scripts (run against fixture_authority.py;
+needs bash, curl and jq), the error fixture_authority.py stops with when it
+cannot read an example it serves or listen on its port, the registry
+generation and --check mode of gen_registries.py, and the test-suite sentences
+of the .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
 import calendar
 import contextlib
@@ -847,6 +847,155 @@ class ThreatModelTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("threats FAIL", out.getvalue())
         self.assertIn("row cites no section", out.getvalue())
+
+
+KEY_SET_HEADING = "#### 7.1.1 Issuer key set"
+
+
+class IssuerKeySetTest(unittest.TestCase):
+    """Section 7.1.1: the discovery schema admits the example's issuer key set
+    and refuses one of another shape, issuer_key_set_errors() reports each
+    rule the schema cannot express, main() reports a mapped discovery example
+    that breaks one, and Sections 2.1, 4.4 and 10.1 name the set."""
+
+    def setUp(self):
+        self.spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.validator = Draft202012Validator(
+            json.loads((ROOT / "schemas" / "discovery-v1.schema.json").read_text(encoding="utf-8"))
+        )
+        self.example = json.loads(validate_examples.extract_block(ROOT / "ATP-SPEC.md", KEY_SET_HEADING))
+        self.key_ids = self.example["issuerKeySet"]["keyIds"]
+
+    def edited(self, edit):
+        document = copy.deepcopy(self.example)
+        edit(document)
+        return document
+
+    def test_example_is_a_2_of_3_set_the_schema_and_the_rules_accept(self):
+        self.assertEqual(self.example["issuerKeySet"]["threshold"], 2)
+        self.assertEqual(len(self.key_ids), 3)
+        self.assertTrue(self.validator.is_valid(self.example))
+        self.assertEqual(validate_examples.issuer_key_set_errors(self.example), [])
+
+    def test_discovery_without_a_set_passes(self):
+        discovery = json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 7.1 Well-Known Endpoint")
+        )
+        self.assertNotIn("issuerKeySet", discovery)
+        self.assertEqual(validate_examples.issuer_key_set_errors(discovery), [])
+
+    def test_threshold_equal_to_the_number_of_keys_passes(self):
+        document = self.edited(lambda d: d["issuerKeySet"].update(threshold=3))
+        self.assertEqual(validate_examples.issuer_key_set_errors(document), [])
+
+    def test_schema_refuses_a_set_of_another_shape(self):
+        def without(name):
+            return lambda d: d["issuerKeySet"].pop(name)
+
+        def setting(name, value):
+            return lambda d: d["issuerKeySet"].update({name: value})
+
+        cases = {
+            "threshold 0": setting("threshold", 0),
+            "threshold -1": setting("threshold", -1),
+            "threshold 1.5": setting("threshold", 1.5),
+            "threshold as a string": setting("threshold", "2"),
+            "no threshold": without("threshold"),
+            "no keyIds": without("keyIds"),
+            "no keys": setting("keyIds", []),
+            "keyIds as a string": setting("keyIds", self.key_ids[0]),
+            "a keyId without a fragment": setting("keyIds", ["did:opena2a:authority:example.org"]),
+            "a member beside threshold and keyIds": setting("m", 2),
+            "a set that is a list": lambda d: d.update(issuerKeySet=[2, self.key_ids]),
+        }
+        for label, edit in cases.items():
+            with self.subTest(label):
+                self.assertFalse(self.validator.is_valid(self.edited(edit)))
+
+    def test_rules_the_schema_cannot_express_fail(self):
+        """Each document is valid against the discovery schema and breaks one
+        Section 7.1.1 rule, which issuer_key_set_errors() names."""
+        ml_dsa = {
+            "keyId": "did:opena2a:authority:example.org#pqc-1",
+            "algorithm": "ML-DSA-65",
+            "publicKeyHex": "00ff",
+            "status": "active",
+            "validFrom": "2026-10-01T00:00:00Z",
+        }
+
+        def with_ml_dsa(d):
+            d["publicKeys"].append(ml_dsa)
+            d["issuerKeySet"]["keyIds"] = [self.key_ids[0], ml_dsa["keyId"]]
+
+        def same_public_key(d):
+            d["publicKeys"][1]["publicKeyHex"] = d["publicKeys"][0]["publicKeyHex"]
+
+        absent = "did:opena2a:authority:example.org#key-4"
+        cases = {
+            "threshold above the keys": (
+                lambda d: d["issuerKeySet"].update(threshold=4),
+                "issuerKeySet threshold 4 is more than the 3 keys it lists",
+            ),
+            "threshold above one key": (
+                lambda d: d["issuerKeySet"].update(keyIds=self.key_ids[:1]),
+                "issuerKeySet threshold 2 is more than the 1 key it lists",
+            ),
+            "one key listed twice": (
+                lambda d: d["issuerKeySet"].update(keyIds=[self.key_ids[0], self.key_ids[0]]),
+                f"issuerKeySet lists {self.key_ids[0]} twice",
+            ),
+            "a key that is not in publicKeys": (
+                lambda d: d["issuerKeySet"]["keyIds"].append(absent),
+                f"issuerKeySet lists {absent}, which is not the keyId of a publicKeys entry",
+            ),
+            "an ML-DSA-65 key": (
+                with_ml_dsa,
+                f"issuerKeySet lists {ml_dsa['keyId']}, an ML-DSA-65 key; Section 7.1.1 lists Ed25519 keys",
+            ),
+            "two keys with the same publicKeyHex": (
+                same_public_key,
+                f"issuerKeySet lists {self.key_ids[1]} and {self.key_ids[0]}, which have the same publicKeyHex",
+            ),
+        }
+        for label, (edit, error) in cases.items():
+            with self.subTest(label):
+                document = self.edited(edit)
+                self.assertTrue(self.validator.is_valid(document))
+                self.assertEqual(validate_examples.issuer_key_set_errors(document), [error])
+
+    def test_main_reports_a_mapped_example_that_breaks_a_rule(self):
+        self.assertEqual(self.spec.count('"threshold": 2,'), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(ROOT / "README.md", root / "README.md")
+            (root / "ATP-SPEC.md").write_text(
+                self.spec.replace('"threshold": 2,', '"threshold": 4,'), encoding="utf-8"
+            )
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        self.assertEqual(code, 1)
+        failure = f"example FAIL   ATP-SPEC.md @ {KEY_SET_HEADING!r} vs schemas/discovery-v1.schema.json"
+        self.assertEqual([line for line in lines if "FAIL" in line or "INVALID" in line], [failure], lines)
+        self.assertEqual(
+            lines[lines.index(failure) + 1], "    $: issuerKeySet threshold 4 is more than the 3 keys it lists"
+        )
+        self.assertIn("example OK     ATP-SPEC.md @ '### 7.1 Well-Known Endpoint'", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_sections_2_1_4_4_and_10_1_name_the_set(self):
+        lines = self.spec.splitlines()
+        step_4 = next(line for line in lines if line.startswith("4. **Signature:**"))
+        self.assertIn("issuer key set (Section 7.1.1)", step_4)
+        count = next(line for line in lines if line.startswith("**Issuer key set count.**"))
+        self.assertIn("at least `threshold` distinct", count)
+        row = next(line for line in lines if line.startswith("| Signing key compromise |"))
+        self.assertIn("m-of-n issuer key set (Section 7.1.1)", row)
+        coverage = next(line for line in lines if line.startswith(validate_examples.COVERAGE_LIST))
+        self.assertIn("issuer key set count (Section 7.1.1)", coverage)
 
 
 # A Section 4.3 with a table of served timestamps; {row} is on line 6.
@@ -2265,6 +2414,7 @@ class SchemaCheckTest(unittest.TestCase):
 
     EXAMPLES = {
         "### 7.1 Well-Known Endpoint": "discovery-v1",
+        KEY_SET_HEADING: "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
         "#### 4.3.1 Sigstore co-signature": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",

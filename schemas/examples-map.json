@@ -35,6 +35,11 @@
     "schema": "schemas/discovery-v1.schema.json"
   },
   {
+    "file": "ATP-SPEC.md",
+    "heading": "#### 7.1.1 Issuer key set",
+    "schema": "schemas/discovery-v1.schema.json"
+  },
+  {
     "file": "examples/atx-vc-example.json",
     "schema": "schemas/atx-vc-v1.schema.json"
   }

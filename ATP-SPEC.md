@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -453,7 +453,7 @@ A verifier MUST perform the following checks in order:
 1. **Expiry:** `expiresAt` MUST be in the future. Expired proofs MUST be rejected.
 2. **Issuer:** `issuerDid` MUST resolve to a known trust authority.
 3. **Key lookup:** `signatures[*].keyId` MUST resolve to a valid, non-revoked public key. A Sigstore entry is checked by Section 4.3.1 rules 3 and 4 instead.
-4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload (a Sigstore entry under the Section 4.3.1 rules), and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4). Every proof MUST carry a verifying Ed25519 entry whose `keyId` resolves to a key of `issuerDid` (Section 4.3). A Sigstore entry never satisfies this, so a proof whose only signatures are Sigstore entries is rejected.
+4. **Signature:** Every entry in `signatures[]` MUST verify against the canonical payload (a Sigstore entry under the Section 4.3.1 rules), and a proof that declares an ML-DSA-65 entry MUST also carry a verifying Ed25519 entry (the family signature gate, AAP Section 9.4). Every proof MUST carry a verifying Ed25519 entry whose `keyId` resolves to a key of `issuerDid` (Section 4.3). A Sigstore entry never satisfies this, so a proof whose only signatures are Sigstore entries is rejected. When the discovery document of `issuerDid` declares an issuer key set (Section 7.1.1), the proof MUST also meet that set, as the issuer key set count after this list defines.
 5. **Semantic validation:**
    - `trustLevel` MUST be 0-4
    - `trustScore` MUST be on the Section 4.1 scale (0.0-1.0)
@@ -462,6 +462,15 @@ A verifier MUST perform the following checks in order:
    - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
 7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present. A Sigstore co-signature (Section 4.3.1) is not an authority signature.
+
+**Issuer key set count.** A proof meets an issuer key set when at least `threshold` distinct
+keys of the set signed it. Each entry of `keyIds` counts once when an Ed25519 entry of
+`signatures[]` whose `keyId` equals it verifies, however many entries carry that `keyId`; an
+entry whose `keyId` is not in `keyIds`, an ML-DSA-65 entry and a Sigstore entry count toward
+no key. A proof that does not meet the set is rejected at step 4 with category
+`SIGNATURE_INVALID`, and so is every proof of an authority whose set breaks the Section 7.1.1
+rules. The keys of a set are one authority's keys, so they never count as the distinct
+authorities of step 7.
 
 Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation
 of the agent itself is Section 8.1: a verifier that reads the revocation list applies an
@@ -965,6 +974,75 @@ The discovery document MAY carry `leafFormatSince` (integer, the first `logIndex
 under Section 5.2 of this revision). A log built before this revision MUST publish it;
 absent, every leaf in the log conforms to Section 5.2.
 
+#### 7.1.1 Issuer key set
+
+The discovery document MAY carry `issuerKeySet`, an m-of-n set of the authority's Ed25519
+signing keys. When it does, a proof that names the authority in `issuerDid` verifies only
+when at least m different keys of the set signed it (Section 4.4 step 4): a party holding the
+private keys of fewer than m of them cannot produce a proof that verifies.
+
+| Member | Value |
+|---|---|
+| `threshold` | m, an integer from 1 to the number of entries of `keyIds`. |
+| `keyIds` | The n keys of the set, at least one. Each entry is the `keyId` of an Ed25519 entry of `publicKeys`; no `keyId` is listed twice, and no two entries name keys with the same `publicKeyHex`, so each entry is a different key. |
+
+The example is a discovery document that declares a 2-of-3 set. Like the Section 7.1
+example, it is illustrative.
+
+```json
+{
+  "authorityDid": "did:opena2a:authority:example.org",
+  "version": "1.0",
+  "conformanceLevel": 1,
+  "endpoints": {
+    "trustProof": "/api/v1/trust/proof",
+    "trustVerify": "/api/v1/trust/verify"
+  },
+  "publicKeys": [
+    {
+      "keyId": "did:opena2a:authority:example.org#key-1",
+      "algorithm": "Ed25519",
+      "publicKeyHex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "status": "active",
+      "validFrom": "2026-10-01T00:00:00Z"
+    },
+    {
+      "keyId": "did:opena2a:authority:example.org#key-2",
+      "algorithm": "Ed25519",
+      "publicKeyHex": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+      "status": "active",
+      "validFrom": "2026-10-01T00:00:00Z"
+    },
+    {
+      "keyId": "did:opena2a:authority:example.org#key-3",
+      "algorithm": "Ed25519",
+      "publicKeyHex": "ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf",
+      "status": "active",
+      "validFrom": "2026-10-01T00:00:00Z"
+    }
+  ],
+  "issuerKeySet": {
+    "threshold": 2,
+    "keyIds": [
+      "did:opena2a:authority:example.org#key-1",
+      "did:opena2a:authority:example.org#key-2",
+      "did:opena2a:authority:example.org#key-3"
+    ]
+  }
+}
+```
+
+A set that breaks one of these rules is met by no proof: a verifier rejects every proof of the
+authority at Section 4.4 step 4 and never ignores the member, which would accept a proof that
+one key signed. A verifier counts against the set the document declares when it verifies, so
+an authority MUST NOT publish a set, raise its `threshold` or remove a key from `keyIds` until
+every proof it served in the previous 24 hours (the Section 10.2 maximum) meets the new set.
+The one exception is a key the authority revokes (Section 8.2): it leaves `keyIds` in the
+update that removes it from `publicKeys`, since step 3 rejects the proofs it signed whatever
+the set holds. The set protects against the compromise of signing keys, not of the discovery
+document, whose authenticity rides on the transport: a verifier that configures an
+authority's keys out of band configures its key set the same way.
+
 ### 7.2 Batch Queries
 
 For efficiency, clients SHOULD use batch queries when verifying multiple agents:
@@ -1134,7 +1212,7 @@ the section it cites:
 
 | Threat | Defense | Conformance Level |
 |--------|---------|-------------------|
-| Signing key compromise | Key revocation (Section 8.2), which Section 4.4 step 3 enforces, and the 24-hour proof validity maximum (Section 10.2) | Level 1+ |
+| Signing key compromise | Key revocation (Section 8.2), which Section 4.4 step 3 enforces; the 24-hour proof validity maximum (Section 10.2); and, where the authority declares one, an m-of-n issuer key set (Section 7.1.1), which Section 4.4 step 4 counts | Level 1+ |
 | Silent trust manipulation | Transparency log with Merkle proofs (Section 5) | Level 2+ |
 | Single point of failure | Federation consensus (Section 6.2) | Level 3 |
 | Revocation failure | Revocation API (Section 8.1) + federation propagation (Section 6.4.2) | Level 2+ |

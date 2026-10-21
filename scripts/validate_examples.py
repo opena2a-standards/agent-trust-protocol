@@ -26,6 +26,12 @@ ATX example that is missing, not UTF-8 or not a JSON object is the ATX check's
 failure (below); the form is then reported as not compared, not as a second
 failure.
 
+A schema-valid discovery example that declares a Section 7.1.1 issuer key set
+lists in `keyIds` only `keyId` values of Ed25519 entries of its `publicKeys`,
+none twice and no two whose `publicKeyHex` is the same, and its `threshold` is
+at most the number of entries of `keyIds`. A discovery example without the
+member declares no set and passes this check.
+
 The revocation schema's `reason` is checked against the Section 8.1.1 registry:
 its codes are the table's, and free text is refused. A registry file that is
 missing, not UTF-8 or not JSON is one failure of this check.
@@ -274,10 +280,53 @@ def atx_vc_form_errors(
     return errors + list(member_differences(atx_to_vc(members, rows), vc))
 
 
+def issuer_key_set_errors(discovery: dict) -> list[str]:
+    """Section 7.1.1: each entry of `issuerKeySet.keyIds` is the `keyId` of an
+    Ed25519 entry of `publicKeys`, no `keyId` is listed twice, no two listed
+    keys have the same `publicKeyHex` (so each entry is a different key), and
+    `threshold` is at most the number of entries of `keyIds`. A document
+    without the member declares no set. Reads a document the discovery schema
+    accepts."""
+    key_set = discovery.get("issuerKeySet")
+    if key_set is None:
+        return []
+    keys: dict = {}
+    for key in discovery["publicKeys"]:
+        keys.setdefault(key["keyId"], key)
+    errors, listed, holders = [], set(), {}
+    for key_id in key_set["keyIds"]:
+        key = keys.get(key_id)
+        if key_id in listed:
+            errors.append(f"issuerKeySet lists {key_id} twice")
+        elif key is None:
+            errors.append(f"issuerKeySet lists {key_id}, which is not the keyId of a publicKeys entry")
+        elif key["algorithm"] != "Ed25519":
+            errors.append(
+                f"issuerKeySet lists {key_id}, an {key['algorithm']} key; "
+                "Section 7.1.1 lists Ed25519 keys"
+            )
+        elif key["publicKeyHex"] in holders:
+            errors.append(
+                f"issuerKeySet lists {key_id} and {holders[key['publicKeyHex']]}, "
+                "which have the same publicKeyHex"
+            )
+        else:
+            holders[key["publicKeyHex"]] = key_id
+        listed.add(key_id)
+    count = len(key_set["keyIds"])
+    if key_set["threshold"] > count:
+        errors.append(
+            f"issuerKeySet threshold {key_set['threshold']} is more than the "
+            f"{count} key{'' if count == 1 else 's'} it lists"
+        )
+    return errors
+
+
 # Checks a schema cannot express, keyed by the schema an example is mapped to.
 SEMANTIC_CHECKS = {
     "schemas/trust-proof-v1.schema.json": trust_proof_window_errors,
     "schemas/atx-vc-v1.schema.json": atx_vc_form_errors,
+    "schemas/discovery-v1.schema.json": issuer_key_set_errors,
 }
 
 # Section 8.1.1: values the revocation schema must refuse as a `reason`: the

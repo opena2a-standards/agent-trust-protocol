@@ -40,6 +40,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   certificate chain, or without a Rekor entry carrying an inclusion proof, and a proof whose
   only signatures are Sigstore entries. Section 2.1 lists co-signature verification as not
   yet covered by byte-stable fixtures.
+- Section 7.1.1: the issuer key set, the multi-key threshold signing the Section 10.1 threat
+  model once listed without defining it. A discovery document MAY carry `issuerKeySet`, an
+  m-of-n set of the authority's Ed25519 keys: `threshold` is m, and `keyIds` lists the n keys,
+  each the `keyId` of an Ed25519 entry of `publicKeys`, none twice and no two with the same
+  `publicKeyHex`, with m at most n. Section 4.4 step 4 requires a proof of an authority that
+  declares a set to be signed by at least `threshold` distinct keys of it: a key counts once
+  however many entries carry its `keyId`, an entry outside the set, an ML-DSA-65 entry and a
+  Sigstore entry count toward no key, and a proof short of the threshold is rejected with
+  `SIGNATURE_INVALID`, as is every proof of an authority whose set breaks the rules. Keys of
+  one set never count as the distinct authorities of step 7. An authority publishes a set,
+  raises its threshold or removes a key only when every proof it served in the previous 24
+  hours meets the new set; a key it revokes leaves the set at once. The Section 10.1 row for
+  signing key compromise names the set beside key revocation and the 24-hour validity.
+  `schemas/discovery-v1.schema.json` gains the member; `scripts/validate_examples.py` checks
+  each mapped discovery example the schema accepts against the rules the schema cannot
+  express, and the Section 7.1.1 example, a 2-of-3 set, is validated in CI. Section 2.1 lists
+  the count as not yet covered by fixtures.
 - Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
   for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
   `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,
@@ -377,11 +394,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   lines of a JSON code block as sentences, so the sample's algorithm name is not reported as
   ML-DSA-65 without hybrid mode; lines of other code blocks are still checked.
 - Section 10.1: the threat model listed "multi-key threshold signing" as the Level 1 defense
-  against signing key compromise, and the specification defines no threshold signing. The
-  row now names the defenses it does define: key revocation (Section 8.2, enforced at
-  Section 4.4 step 3) and the 24-hour proof validity maximum (Section 10.2). Every other
-  defense in the table now cites its section too. `scripts/validate_examples.py` fails when a
-  defense cites no section or cites one that is not a heading of the specification.
+  against signing key compromise, and the specification defined no threshold signing. The
+  row now names the defenses the specification defines: key revocation (Section 8.2, enforced
+  at Section 4.4 step 3), the 24-hour proof validity maximum (Section 10.2) and the Section
+  7.1.1 issuer key set (see Added). Every other defense in the table now cites its section
+  too. `scripts/validate_examples.py` fails when a defense cites no section or cites one that
+  is not a heading of the specification.
 - Conformance scripts, follow-up: T1.5 requires `@context` to be a non-empty string or array
   (`false` passed). An RFC 3339 timestamp needs a UTC offset from 00:00 to 23:59 and nothing
   after it, so `+99:99` and a trailing newline no longer pass T1.8, T1.10, T2.2 and T2.3.
