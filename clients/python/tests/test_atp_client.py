@@ -1092,6 +1092,19 @@ class ClientTests(unittest.TestCase):
             with self.subTest(url), self.assertRaises(ValueError):
                 atp.AtpClient(url)
 
+    def test_a_base_url_with_a_query_or_fragment_raises_even_an_empty_one(self):
+        # urlsplit reports an empty query or fragment as "", as it does an absent one. Each
+        # request appends its path to the base URL, so under one that ends in "#" the
+        # discovery request went to / and the answer there was taken as the document.
+        self.server.routes = {"/": (200, self.discovery)}
+        for suffix in ("?", "#", "/?", "/#", "?#", "/?a=1", "#top"):
+            with self.subTest(suffix):
+                with self.assertRaisesRegex(ValueError, "without a query or fragment"):
+                    atp.AtpClient(self.url + suffix).get_discovery()
+                with self.assertRaisesRegex(ValueError, "without a query or fragment"):
+                    atp.AtpClient("https://authority.example" + suffix)
+        self.assertEqual(self.server.requests, [])
+
     def test_an_http_base_url_needs_a_loopback_address_literal(self):
         # Section 7.1: an https authority URL, or an http one whose host is in
         # 127.0.0.0/8 or is ::1; the name localhost is not an address literal.

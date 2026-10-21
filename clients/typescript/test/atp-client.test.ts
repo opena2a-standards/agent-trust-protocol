@@ -838,4 +838,17 @@ describe("AtpClient", () => {
       assert.throws(() => new atp.AtpClient(url), TypeError, url);
     }
   });
+
+  it("throws for a base URL with a query or fragment, even an empty one", async () => {
+    // url.search and url.hash are "" for an empty query or fragment, as for an absent one.
+    // Each request appends its path to the base URL, so under one that ends in "#" the
+    // discovery request went to / and the answer there was taken as the document.
+    authority.routes = new Map<string, Route>([["/", { status: 200, body: discovery }]]);
+    const refused = { name: "TypeError", message: /without a query or fragment/ };
+    for (const suffix of ["?", "#", "/?", "/#", "?#", "/?a=1", "#top"]) {
+      await assert.rejects(async () => new atp.AtpClient(client.baseUrl + suffix).getDiscovery(), refused, suffix);
+      assert.throws(() => new atp.AtpClient(`https://authority.example${suffix}`), refused, suffix);
+    }
+    assert.deepEqual(authority.requests, []);
+  });
 });

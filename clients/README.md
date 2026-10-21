@@ -31,10 +31,12 @@ if not result.valid:
 it, and raises `AtpError` for a proof about another DID. Redirects are not followed. The base
 URL is an `https` URL, as Section 7.1 requires, or an `http` URL whose host is a loopback
 address literal, an IPv4 address in `127.0.0.0/8` or the IPv6 address `::1`; otherwise the
-constructor raises `ValueError`, for `http://localhost` too. A request under an `http` URL is
-sent directly, not through a proxy. A request that has not finished within `timeout` seconds
-(10 when absent) raises `AtpError`, also when the authority keeps sending a byte at a time,
-and so does an answer body longer than `MAX_RESPONSE_BYTES`, 1,048,576 bytes.
+constructor raises `ValueError`, for `http://localhost` too. The constructor also raises
+`ValueError` for a base URL that holds a `?` or `#`, even with nothing after it, since the
+client appends each request's path to the base URL. A request under an `http` URL is sent
+directly, not through a proxy. A request that has not finished within `timeout` seconds (10
+when absent) raises `AtpError`, also when the authority keeps sending a byte at a time, and
+so does an answer body longer than `MAX_RESPONSE_BYTES`, 1,048,576 bytes.
 
 The client keeps the discovery document it receives and requests it again once its copy is
 more than `refresh_after` seconds old: 300 when absent, the Section 8.1 polling interval, and
@@ -153,9 +155,10 @@ a `Date` or an RFC 3339 string, and
 request timeout in milliseconds (10000 when absent). Unlike the Python client, it fetches the
 discovery document once and keeps it, accepts an `http` base URL whose host is not a loopback
 address, and does not bound the length of an answer body. Where the Python client raises
-`ValueError`, this one throws a `TypeError`: `getTrustProof` throws one for a `did` that holds
-a lone surrogate, before it sends a request. An `AtpError` carries `status`, `null` when the
-authority gave no HTTP status.
+`ValueError`, this one throws a `TypeError`: the constructor throws one for a base URL that
+holds a `?` or `#`, even with nothing after it, and `getTrustProof` throws one for a `did`
+that holds a lone surrogate, before it sends a request. An `AtpError` carries `status`,
+`null` when the authority gave no HTTP status.
 
 Not checked by this client, though the Python client checks them: Section 4.4 step 7, since
 `verifyTrustProof` has no counterpart of `second_authorities` and so never applies it; and
