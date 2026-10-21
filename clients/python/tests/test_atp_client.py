@@ -719,6 +719,136 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertIn("issuerKeySet", result.reason)
 
 
+class ReasonTextTests(unittest.TestCase):
+    """A reason shows text it takes from the input unchanged when that text is
+    printable ASCII without a space, a quote or a backslash, and in JSON
+    string form otherwise; an endpoints member name that is not an identifier
+    is written endpoints["name"]. The tests check the reason given for text
+    that holds control characters, and for other text, and that each reason
+    is printable ASCII."""
+
+    # A line feed, a carriage return, an escape, DEL, NEL (a C1 control) and
+    # the Unicode line separator.
+    CONTROLS = "\n\r\x1b\x7f\x85 "
+    NOT_A_VERDICT = "is not one of passed, warning, blocked, listed, verified, unknown"
+
+    def setUp(self):
+        self.document = fixture("discovery-valid")["discoveryResponse"]
+        self.issuer = "did:opena2a:authority:a" + self.CONTROLS + "b"
+        self.signer = Signer(self.issuer + "#key-1")
+
+    def assertReason(self, result, category, reason):
+        self.assertFalse(result.valid, result)
+        self.assertEqual(result.category, category, result)
+        self.assertEqual(result.reason, reason)
+        self.assertTrue(result.reason.isascii() and result.reason.isprintable(), ascii(result.reason))
+
+    def test_an_endpoints_member_named_with_a_line_feed_is_escaped(self):
+        document = {**self.document, "endpoints": {"x\ny": "z"}}
+        self.assertReason(atp.verify_discovery(document), "PARSE_ERROR", 'endpoints["x\\ny"] does not start with /')
+        client = atp.AtpClient("https://authority.example", discovery=document)
+        result = client.verify(signed_proof(Signer()), now=CLOCK)
+        self.assertReason(result, "PARSE_ERROR", 'discovery document: endpoints["x\\ny"] does not start with /')
+
+    def test_an_endpoints_member_name_that_is_not_an_identifier_is_in_json_string_form(self):
+        name = "x" + self.CONTROLS
+        cases = {
+            (name, 42): f"endpoints[{json.dumps(name)}] is not a string",
+            (name, "z"): f"endpoints[{json.dumps(name)}] does not start with /",
+            (name, "/a#b"): f"endpoints[{json.dumps(name)}] holds #, whitespace or a control character",
+            ("trust-proof", "z"): 'endpoints["trust-proof"] does not start with /',
+            ("", "z"): 'endpoints[""] does not start with /',
+        }
+        for (key, value), reason in cases.items():
+            with self.subTest(reason):
+                result = atp.verify_discovery({**self.document, "endpoints": {key: value}})
+                self.assertReason(result, "PARSE_ERROR", reason)
+
+    def test_an_authority_did_with_control_characters_is_in_json_string_form(self):
+        result = atp.verify_discovery({**self.document, "authorityDid": self.issuer}, AUTHORITY)
+        self.assertReason(result, "UNTRUSTED_ISSUER", f"authorityDid {json.dumps(self.issuer)} is not a trusted issuer")
+
+    def test_an_issuer_did_with_control_characters_is_in_json_string_form(self):
+        shown = json.dumps(self.issuer)
+        proof = signed_proof(self.signer, issuerDid=self.issuer)
+        result = atp.verify_trust_proof(proof, [self.signer.key()], AUTHORITY, now=CLOCK)
+        self.assertReason(result, "UNTRUSTED_ISSUER", f"issuerDid {shown} is not a trusted issuer")
+        other = Signer("did:opena2a:authority:other.example#key-1")
+        proof = signed_proof(other, issuerDid=self.issuer)
+        result = atp.verify_trust_proof(proof, [other.key()], self.issuer, now=CLOCK)
+        self.assertReason(result, "SIGNATURE_INVALID", f"no Ed25519 signature by a key of {shown} verified")
+
+    def test_a_signature_algorithm_and_key_id_with_control_characters_are_in_json_string_form(self):
+        proof = signed_proof(Signer())
+        algorithm = "Ed25519" + self.CONTROLS
+        proof["signatures"][0]["algorithm"] = algorithm
+        result = atp.verify_trust_proof(proof, [Signer().key()], AUTHORITY, now=CLOCK)
+        reason = f"signatures[0] has algorithm {json.dumps(algorithm)}, not Ed25519 or ML-DSA-65"
+        self.assertReason(result, "SIGNATURE_INVALID", reason)
+        signer = Signer(AUTHORITY + "#key-" + self.CONTROLS)
+        shown = json.dumps(signer.key_id)
+        result = atp.verify_trust_proof(signed_proof(signer), [Signer().key()], AUTHORITY, now=CLOCK)
+        reason = f"signatures[0] keyId {shown} does not resolve to a non-revoked Ed25519 key"
+        self.assertReason(result, "SIGNATURE_INVALID", reason)
+        proof = signed_proof(signer)
+        proof["signatures"][0]["value"] = flip_first_byte(proof["signatures"][0]["value"])
+        result = atp.verify_trust_proof(proof, [signer.key()], AUTHORITY, now=CLOCK)
+        self.assertReason(result, "SIGNATURE_INVALID", f"the Ed25519 signature of {shown} did not verify")
+
+    def test_a_verdict_is_unchanged_only_without_a_space_a_quote_a_backslash_or_a_control_character(self):
+        signer = Signer()
+        cases = {
+            "approved": f"verdict approved {self.NOT_A_VERDICT}",
+            "passed" + self.CONTROLS: f"verdict {json.dumps('passed' + self.CONTROLS)} {self.NOT_A_VERDICT}",
+            "not passed": f'verdict "not passed" {self.NOT_A_VERDICT}',
+            'say "passed"': f'verdict "say \\"passed\\"" {self.NOT_A_VERDICT}',
+            # A line feed, and a backslash followed by n, give two reasons.
+            "a\nb": f'verdict "a\\nb" {self.NOT_A_VERDICT}',
+            "a\\nb": f'verdict "a\\\\nb" {self.NOT_A_VERDICT}',
+        }
+        for verdict, reason in cases.items():
+            with self.subTest(verdict=verdict):
+                proof = signed_proof(signer, verdict=verdict)
+                result = atp.verify_trust_proof(proof, [signer.key()], AUTHORITY, now=CLOCK)
+                self.assertReason(result, "SEMANTIC_INVALID", reason)
+
+    def test_dids_with_control_characters_at_step_7_are_in_json_string_form(self):
+        issuer = json.dumps(self.issuer)
+        second = {COSIGNER: [Signer(COSIGNER + "#key-1").key()]}
+        proof = signed_proof(self.signer, issuerDid=self.issuer)
+        result = atp.verify_trust_proof(proof, [self.signer.key()], self.issuer, now=CLOCK, second_authorities=second)
+        reason = (
+            "no Ed25519 signature by a second authority verified (step 7): trustLevel 3 needs one by an "
+            f"authority of second_authorities other than {issuer}"
+        )
+        self.assertReason(result, "SIGNATURE_INVALID", reason)
+        # A second authority whose key is the issuer's.
+        cosigner = "did:opena2a:authority:c" + self.CONTROLS + "d"
+        same = Signer(cosigner + "#key-1")
+        same.private = self.signer.private
+        proof = signed_proof(self.signer, same, issuerDid=self.issuer)
+        second = {cosigner: [same.key()]}
+        result = atp.verify_trust_proof(proof, [self.signer.key()], self.issuer, now=CLOCK, second_authorities=second)
+        reason = (
+            f"no second authority distinct from {issuer} signed (step 7): "
+            f"{json.dumps(cosigner)} shares a public key with {issuer}"
+        )
+        self.assertReason(result, "SIGNATURE_INVALID", reason)
+
+    def test_a_tree_head_signed_by_with_control_characters_is_in_json_string_form(self):
+        signed_by = AUTHORITY + "#key-" + self.CONTROLS
+        head = {
+            "treeSize": 1,
+            "timestamp": "2026-05-23T00:00:00Z",
+            "rootHash": wire(bytes(32)),
+            "signedBy": signed_by,
+            "signature": Signer().sign(bytes(32)),
+        }
+        result = atp.verify_signed_tree_head(head, [Signer().key()])
+        reason = f"signedTreeHead.signedBy {json.dumps(signed_by)} does not resolve to a non-revoked Ed25519 key"
+        self.assertReason(result, "SIGNATURE_INVALID", reason)
+
+
 class Authority(http.server.BaseHTTPRequestHandler):
     """Answers each path from the server's routes: a (status, body) pair, or
     (status, None, headers) for an answer without a body."""

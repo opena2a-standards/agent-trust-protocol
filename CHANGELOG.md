@@ -31,7 +31,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   verify functions check a trust proof (Section 4.4 steps 1 to 5, Ed25519 and ML-DSA-65,
   without the issuer key set count of step 4), a discovery document, a signed tree head,
   inclusion and consistency proofs (RFC 9162) and a revocation response, and return a reject
-  category and reason. `verify_discovery` refuses with `PARSE_ERROR`, naming the member, an
+  category and reason. Text a reason takes from the input, such as a DID, a `keyId`, an
+  algorithm or a `verdict`, is unchanged when it is printable ASCII without a space, a quote
+  or a backslash, and in JSON string form otherwise, and an `endpoints` member name that is
+  not an identifier is written `endpoints["name"]`: for `"endpoints": {"x\ny": "z"}` the
+  reason is `endpoints["x\ny"] does not start with /`, with no line break in it.
+  `verify_discovery` refuses with `PARSE_ERROR`, naming the member, an
   `endpoints` value that is not a string, does not start with `/`, or holds `#`, whitespace
   or a control character (Section 7.1). The client does not count a Section 7.1.1 issuer
   key set, so `verify_discovery` refuses a discovery document that carries `issuerKeySet` with

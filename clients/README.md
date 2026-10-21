@@ -46,6 +46,12 @@ The verify functions make no request:
 Each returns a `VerifyResult`: `valid`, and for a rejection a `category` (`PARSE_ERROR`,
 `EXPIRED`, `UNTRUSTED_ISSUER`, `SIGNATURE_INVALID`, `SEMANTIC_INVALID` or `PROOF_INVALID`) and
 a `reason` naming the member or step. `canonical_string(proof)` returns the Section 4.3 string.
+Text the reason takes from the input, such as a DID, a `keyId` or a `verdict`, is unchanged
+when it is printable ASCII without a space, a quote or a backslash, and in JSON string form
+otherwise, so a control character in it is escaped. An `endpoints` member name is written
+`endpoints.name` when it is an identifier (ASCII letters, digits and `_`, not starting with a
+digit) and `endpoints["name"]` otherwise: for `"endpoints": {"x\ny": "z"}` the reason is
+`endpoints["x\ny"] does not start with /`.
 
 Not checked: Sigstore co-signatures (Section 4.3.1), so a proof carrying one is rejected as
 step 4 requires of a verifier that does not implement that section; and the issuer key set
