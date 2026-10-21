@@ -24,6 +24,15 @@ for limit in ATP_CONNECT_TIMEOUT ATP_MAX_TIME; do
 done
 CONNECT_TIMEOUT="${ATP_CONNECT_TIMEOUT:-10}"
 MAX_TIME="${ATP_MAX_TIME:-30}"
+# Every body has a size limit, ATP_MAX_BODY_BYTES bytes, 1048576 (1 MiB) unless
+# set: a whole number of at least 1 and of at most 18 digits after any leading
+# zeros, so one byte more is still within bash's 64-bit arithmetic. 10# reads a
+# number with a leading 0 as decimal, not octal.
+[[ "${ATP_MAX_BODY_BYTES:-1}" =~ ^0*[1-9][0-9]{0,17}$ ]] || {
+  echo "error: ATP_MAX_BODY_BYTES must be a whole number of bytes from 1 to 999999999999999999" >&2
+  exit "$SETUP_ERROR"
+}
+MAX_BODY_BYTES=$((10#${ATP_MAX_BODY_BYTES:-1048576}))
 for schema in discovery-v1 trust-proof-v1 revocation-list-v1; do
   [ -r "$SCHEMAS_DIR/$schema.schema.json" ] || {
     echo "error: $SCHEMAS_DIR/$schema.schema.json not found; run the script from a checkout of the repository" >&2
@@ -61,26 +70,65 @@ unmet() {
   return 1
 }
 
-# fetch NAME URL [curl options]: set NAME to the body curl receives for URL, or
-# to nothing when the request fails. Fail with a reason as the next test_case's
-# detail when curl rejects the URL or gets no answer within the time limit;
-# otherwise succeed, and the check of NAME says what the body lacks.
+# Section 7.1 transport rule: a request goes only under an https URL, or under
+# an http URL whose host is a loopback address literal, an IPv4 address in
+# 127.0.0.0/8 written as four decimal numbers or [::1]. The name localhost is
+# not one: a name is resolved, and can resolve to another machine.
+OCTET='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+HTTPS_URL='^[Hh][Tt][Tt][Pp][Ss]://'
+LOOPBACK_HTTP_URL='^[Hh][Tt][Tt][Pp]://(127\.'"$OCTET"'\.'"$OCTET"'\.'"$OCTET"'|\[::1\])(:[0-9]*)?([/?#]|$)'
+
+# transport_allowed URL: succeed when the Section 7.1 transport rule allows a
+# request under URL.
+transport_allowed() {
+  [[ "$1" =~ $HTTPS_URL || "$1" =~ $LOOPBACK_HTTP_URL ]]
+}
+
+# fetch NAME URL [curl options]: set NAME to the body curl receives for URL,
+# without its trailing newlines, or to nothing when the request fails or the
+# body is larger than MAX_BODY_BYTES. Fail with a reason as the next test_case's
+# detail, without a request, when the transport rule refuses URL, and with one
+# when curl rejects the URL, gets no answer within the time limit or receives a
+# body larger than the size limit; otherwise succeed, and the check of NAME says
+# what the body lacks.
 #
 # Every request turns URL globbing off (-g): a URL holds the authority URL and
 # values the authority serves, and curl would otherwise read {a,b} and [x-y] in
 # it as patterns and send one request per expansion. --path-as-is sends . and ..
 # segments as written instead of removing them, and --url keeps a URL that
-# starts with - from being read as an option.
+# starts with - from being read as an option. -q, which has to come first, keeps
+# curl from reading a .curlrc, which could turn off the certificate check or
+# turn on following redirects. An http URL, which names a loopback address, is
+# requested with no proxy, so the request goes to that address and not to a
+# proxy that would request it from its own machine.
+#
+# head passes on at most one byte more than MAX_BODY_BYTES of the body and then
+# stops reading, which ends curl's transfer, so a larger body is neither read to
+# its end nor held in memory. curl's own --max-filesize stops a body sent
+# without a Content-Length only from curl 8.4.0. The "." printed after the body
+# keeps its trailing newlines, which the byte count includes, and curl's exit
+# status follows it.
 fetch() {
-  local name="$1" url="$2" body status
+  local name="$1" url="$2" body status direct=()
   shift 2
-  body=$(curl -gsf --path-as-is --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" "$@" --url "$url")
-  status=$?
+  if ! transport_allowed "$url"; then
+    printf -v "$name" '%s' ""
+    unmet "the authority URL is neither https nor http to a loopback address literal (Section 7.1)"
+    return
+  fi
+  [[ "$url" =~ $HTTPS_URL ]] || direct=(--noproxy '*')
+  body=$(curl -q -gsf --path-as-is --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+      "${direct[@]}" "$@" --url "$url" | head -c "$((MAX_BODY_BYTES + 1))"
+    printf '.%s' "${PIPESTATUS[0]}")
+  status=${body##*.}
+  body=${body%.*}
+  (( $(printf '%s' "$body" | wc -c) <= MAX_BODY_BYTES )) || status=larger
   [ "$status" = 0 ] || body=""
-  printf -v "$name" '%s' "$body"
+  printf -v "$name" '%s' "$(printf '%s' "$body")"
   case "$status" in
     3) unmet "the authority URL is not a valid URL" ;;
     28) unmet "no answer within the time limit: $CONNECT_TIMEOUT s to connect, $MAX_TIME s in all" ;;
+    larger) unmet "the body is larger than the size limit: $MAX_BODY_BYTES bytes" ;;
   esac
 }
 

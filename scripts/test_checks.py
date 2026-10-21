@@ -22,9 +22,11 @@ import os
 import re
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -2470,6 +2472,55 @@ T1 = dict(zip(range(1, 15), LEVEL1))
 T2 = dict(zip(range(1, 4), LEVEL2))
 COSIGNED = validate_examples.sigstore_example()["signatures"]
 SHARED_CURL_OPTIONS = ("--path-as-is", "--connect-timeout", "--max-time")
+TRANSPORT_REFUSED = "the authority URL is neither https nor http to a loopback address literal (Section 7.1)"
+SIZE_LIMIT = "the body is larger than the size limit: {} bytes"
+FRAMINGS = ("Content-Length", "chunked", "ended by closing")
+
+
+class BodyAnswer(socketserver.BaseRequestHandler):
+    """Reads a request and answers it as its BodyServer says."""
+
+    def handle(self):
+        request = b""
+        while b"\r\n\r\n" not in request:
+            piece = self.request.recv(65536)
+            if not piece:
+                return
+            request += piece
+        body, framing, chunked = self.server.body, self.server.framing, self.server.framing == "chunked"
+        field = {"Content-Length": b"Content-Length: %d" % len(body), "chunked": b"Transfer-Encoding: chunked",
+                 "ended by closing": b"Connection: close"}[framing]
+        count = 0
+        try:
+            self.request.sendall(b"HTTP/1.1 200 OK\r\n%s\r\n\r\n" % field)
+            for at in range(0, len(body), 65536):
+                piece = body[at:at + 65536]
+                self.request.sendall(b"%x\r\n%s\r\n" % (len(piece), piece) if chunked else piece)
+                count += len(piece)
+            if chunked:
+                self.request.sendall(b"0\r\n\r\n")
+        except OSError:
+            pass
+        self.server.sent.append(count)
+
+
+class BodyServer(socketserver.ThreadingTCPServer):
+    """A server on 127.0.0.1 that answers every request with body, framed as
+    one of FRAMINGS: with a Content-Length, in chunks of up to 65536 bytes, or
+    ended by closing the connection. sent gets, for each request, the number
+    of bytes of body it wrote before the connection broke or the body ended.
+    stop() waits for every answer to end."""
+
+    def __init__(self, body: bytes, framing: str):
+        super().__init__(("127.0.0.1", 0), BodyAnswer)
+        self.body, self.framing, self.sent = body, framing, []
+        self.url = f"http://127.0.0.1:{self.server_address[1]}"
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.shutdown()
+        # Joins the threads that answer requests (block_on_close).
+        self.server_close()
 
 
 def without_comment(line):
@@ -2721,10 +2772,12 @@ class ConformanceScriptTest(unittest.TestCase):
 
     def test_pattern_in_the_authority_host_or_port_is_not_a_valid_url(self):
         """With URL globbing off, curl rejects a brace list or bracket range in
-        the host or port: no request is sent, and every test fails."""
+        the host or port: no request is sent, and every test fails. The URLs
+        are https ones: the Section 7.1 transport rule refuses an http URL
+        whose host is not a loopback address literal before curl reads it."""
         port = self.authority.server_address[1]
-        for url in (f"http://127.0.0.[1-1]:{port}", f"http://127.0.0.{{1}}:{port}",
-                    f"http://127.0.0.1:{{{port}}}"):
+        for url in (f"https://127.0.0.[1-1]:{port}", f"https://127.0.0.{{1}}:{port}",
+                    f"https://127.0.0.1:{{{port}}}"):
             with self.subTest(url):
                 run, failed = self.run_scripts(url=url)
                 self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
@@ -2733,6 +2786,74 @@ class ConformanceScriptTest(unittest.TestCase):
                 for name in (T1[1], T2[1], T2[3]):
                     self.assertIn(f"FAIL: {name} (the authority URL is not a valid URL)",
                                   run.stdout)
+
+    def test_transport_rule_allows_https_and_http_to_a_loopback_address_literal(self):
+        allowed = [
+            "https://api.oa2a.org", "HTTPS://api.oa2a.org", "http://127.0.0.1", "Http://127.0.0.1?x",
+            "http://127.0.0.1:8080/atp", "http://127.255.255.254:8080", "http://[::1]:8080",
+        ]
+        refused = [
+            "http://api.oa2a.org", "http://localhost:8080", "http://127.1", "http://127.0.0.01",
+            "http://127.0.0.256", "http://128.0.0.1", "http://127.0.0.1.attacker.example",
+            "http://127.0.0.1@attacker.example", "http://127.0.0.1:@attacker.example",
+            "http://[::ffff:127.0.0.1]", "http://127.0.0.[1-1]", "api.oa2a.org", "ftp://127.0.0.1",
+            " https://api.oa2a.org",
+        ]
+        script = '. "$1"; shift; for url; do transport_allowed "$url" && echo allowed || echo refused; done'
+        run = subprocess.run(
+            ["bash", "-c", script, "bash", str(CONFORMANCE / "lib.sh"), *allowed, *refused],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(
+            list(zip(allowed + refused, run.stdout.split())),
+            [(url, "allowed") for url in allowed] + [(url, "refused") for url in refused],
+            run.stderr,
+        )
+
+    def test_authority_url_the_transport_rule_refuses_gets_no_request(self):
+        """No request goes under an authority URL that is neither https nor
+        http to a loopback address literal, and each test that would send one
+        says why. curl reaches the fixture authority under each of these URLs
+        when it requests them, so the authority's empty request list shows
+        that none was sent."""
+        port = self.authority.server_address[1]
+        for url in (f"http://localhost:{port}", f"http://LOCALHOST:{port}", f"http://127.1:{port}",
+                    f"http://127.0.0.01:{port}", f"127.0.0.1:{port}"):
+            with self.subTest(url):
+                run, failed = self.run_scripts(url=url)
+                self.assertEqual(failed, LEVEL1 + LEVEL2, run.stdout)
+                self.assertEqual(run.returncode, len(LEVEL1 + LEVEL2), run.stdout)
+                self.assertEqual(self.authority.requests, [])
+                for name in (T1[1], T2[1], T2[3]):
+                    self.assertIn(f"FAIL: {name} ({TRANSPORT_REFUSED})", run.stdout)
+
+    def test_http_authority_url_is_requested_without_a_proxy(self):
+        """A request under an http authority URL goes to its loopback address,
+        not to a proxy the environment names, which would request the URL
+        from its own machine."""
+        proxy = fixture_authority.serve()
+        self.addCleanup(proxy.server_close)
+        self.addCleanup(proxy.shutdown)
+        self.probe([], env={"http_proxy": proxy.url, "no_proxy": "", "NO_PROXY": ""})
+        self.assertEqual(proxy.requests, [])
+        self.assertTrue(self.authority.requests)
+
+    def test_curlrc_is_not_read(self):
+        """curl runs with -q, so a .curlrc, which could turn the certificate
+        check off or turn following redirects on, changes no request. This one
+        sends each request as PUT, which the fixture authority answers with
+        HTTP 501, when curl reads it."""
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        (Path(home.name) / ".curlrc").write_text('request = "PUT"\n', encoding="utf-8")
+        self.probe([], env={"CURL_HOME": home.name})
+
+    def test_every_curl_call_starts_with_q(self):
+        """curl reads -q only as the first option of a call."""
+        for script in ("lib.sh", "level1.sh", "level2.sh"):
+            for call in curl_calls((CONFORMANCE / script).read_text(encoding="utf-8")):
+                with self.subTest(script=script, call=call):
+                    self.assertEqual(call.split()[:1], ["-q"])
 
     def test_unanswered_request_fails_at_the_time_limit(self):
         """A server that accepts the connection and never answers holds each
@@ -2751,6 +2872,48 @@ class ConformanceScriptTest(unittest.TestCase):
                 f"FAIL: {name} (no answer within the time limit: 5 s to connect, 1 s in all)",
                 run.stdout,
             )
+
+    def test_body_larger_than_the_size_limit_fails(self):
+        """A body of the size limit passes and one of a byte more fails, sent
+        with a Content-Length, in chunks or ended by closing the connection,
+        under the default limit and under ATP_MAX_BODY_BYTES, which 010000
+        sets to 10000 bytes, not to the octal 4096. JSON allows the spaces that
+        pad the body; its last byte is a newline, which the count includes."""
+        for limit, env in ((1048576, {}), (10000, {"ATP_MAX_BODY_BYTES": "010000"})):
+            for framing in FRAMINGS:
+                for size in (limit, limit + 1):
+                    with self.subTest(limit=limit, framing=framing, size=size):
+                        server = BodyServer(b"{}".ljust(size - 1) + b"\n", framing)
+                        self.addCleanup(server.stop)
+                        run, failed = self.run_scripts(url=server.url, env=env)
+                        server.stop()
+                        self.assertEqual(server.sent, [size] * 3, run.stdout)
+                        for name in (T1[1], T2[1], T2[3]):
+                            failure = f"FAIL: {name} ({SIZE_LIMIT.format(limit)})"
+                            if size > limit:
+                                self.assertIn(failure, run.stdout)
+                            else:
+                                self.assertNotIn(failure, run.stdout)
+                        if size == limit:
+                            self.assertIn(f"PASS: {T1[1]}", run.stdout)
+                            self.assertIn(f"PASS: {T2[1]}", run.stdout)
+
+    def test_body_larger_than_the_size_limit_is_not_read_to_its_end(self):
+        """The scripts stop reading a body after one byte more than the size
+        limit, so the server cannot write all 64 MiB of one, whatever its
+        framing, and each request fails at the limit."""
+        body = b"{}".ljust(64 * 1024 * 1024)
+        for framing in FRAMINGS:
+            with self.subTest(framing):
+                server = BodyServer(body, framing)
+                self.addCleanup(server.stop)
+                run, failed = self.run_scripts(url=server.url)
+                server.stop()
+                self.assertEqual(len(server.sent), 3, run.stdout)
+                for count in server.sent:
+                    self.assertLess(count, len(body))
+                for name in (T1[1], T2[1], T2[3]):
+                    self.assertIn(f"FAIL: {name} ({SIZE_LIMIT.format(1048576)})", run.stdout)
 
     def test_bracketed_trust_proof_endpoint_is_one_request(self):
         """curl does not expand a pattern in endpoints.trustProof: the declared
@@ -3000,6 +3163,35 @@ class SetupErrorTest(unittest.TestCase):
                     timeout=60,
                     env={"PATH": os.environ.get("PATH", ""), "ATP_MAX_TIME": value,
                          "ATP_CONNECT_TIMEOUT": value},
+                )
+                self.assertEqual(run.stderr, "")
+                self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_size_limit_that_is_not_a_whole_number_of_bytes_from_1_exits_69(self):
+        """0 leaves room for no body but an empty one. 18 digits keep one byte
+        more than the limit within bash's 64-bit arithmetic, which the largest
+        numbers of 19 digits exceed."""
+        for value in ("0", "000", "1.5", "-1", "+1", "1e6", "ten", " 1", "1000000000000000000"):
+            with self.subTest(value):
+                self.assert_setup_error(
+                    CONFORMANCE, os.environ.get("PATH", ""),
+                    "error: ATP_MAX_BODY_BYTES must be a whole number of bytes from 1 to 999999999999999999",
+                    env={"ATP_MAX_BODY_BYTES": value},
+                )
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_size_limit_from_1_to_999999999999999999_runs_the_tests(self):
+        """bash reads 009 as an octal number, which it cannot be, unless told
+        it is decimal."""
+        for value in ("1", "009", "999999999999999999", "0999999999999999999"):
+            with self.subTest(value):
+                run = subprocess.run(
+                    [shutil.which("bash"), str(CONFORMANCE / "level1.sh"), "http://127.0.0.1:9"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={"PATH": os.environ.get("PATH", ""), "ATP_MAX_BODY_BYTES": value},
                 )
                 self.assertEqual(run.stderr, "")
                 self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
