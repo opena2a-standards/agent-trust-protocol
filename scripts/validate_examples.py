@@ -113,6 +113,19 @@ JSON, or not a trust proof the schema accepts, is the examples map's failure
 when the map lists it, and the check is then reported as not compared, not as
 a second failure; when the map does not list it, it is this check's failure.
 
+The Section 4.4.2 proof meets the issuer key set of the Section 7.1.1
+example: under the keys of that example, which declares a set, the proof
+names the example's authorityDid in issuerDid, passes Section 4.4 steps 3, 4
+and 7, and carries verifying Ed25519 entries of at least `threshold` distinct
+keys of the set, a key counting once however many entries carry its keyId
+and no other entry counting. The proof without its last entry, and the proof
+with its first entry in place of its last, each break the count and no other
+rule. A Section 4.4.2 or Section 7.1.1 example that is missing, not JSON or
+not accepted by its schema, and a Section 7.1.1 set that breaks a Section
+7.1.1 rule, is the examples map's failure when the map lists the example, and
+the check is then reported as not compared; when the map does not list it, it
+is this check's failure.
+
 A code block opens on a line of three or more backticks or tildes and closes
 only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
@@ -205,6 +218,16 @@ class SourceUnusable(Exception):
     not the shape the check needs. The check that owns that file or example
     fails on it, so the comparison is skipped instead of failing a second time
     for the same cause."""
+
+
+class ExampleUnusable(SourceUnusable):
+    """A SourceUnusable for the ATP-SPEC.md example under `heading`, so a
+    check that reads two examples can say which one the examples map
+    reports."""
+
+    def __init__(self, heading: str, message: str):
+        super().__init__(message)
+        self.heading = heading
 
 
 def atx_example() -> dict:
@@ -1468,6 +1491,15 @@ def key_did(key_id: str) -> str:
     return key_id.split("#", 1)[0]
 
 
+def entry_signature(entry: dict) -> bytes:
+    """The bytes the base64 `value` of a signatures[] entry encodes; none when
+    it is not base64 or not a string, which then verifies under no key."""
+    try:
+        return base64.b64decode(entry.get("value"), validate=True)
+    except (binascii.Error, TypeError, ValueError):
+        return b""
+
+
 def two_authority_errors(proof: dict, keys: dict) -> list[str]:
     """Section 4.4 steps 3, 4 and 7 for a trust proof, with `keys` (each keyId
     mapped to the 32-byte Ed25519 public key it names) as the keys of the
@@ -1498,11 +1530,7 @@ def two_authority_errors(proof: dict, keys: dict) -> list[str]:
                 f"signatures[{position}]: keyId {key_id!r} names no key the verifier knows (step 3)"
             )
             continue
-        try:
-            value = base64.b64decode(entry.get("value"), validate=True)
-        except (binascii.Error, TypeError, ValueError):
-            value = b""
-        if ed25519_verifies(keys[key_id], message, value):
+        if ed25519_verifies(keys[key_id], message, entry_signature(entry)):
             signers.add(key_did(key_id))
         else:
             errors.append(f"signatures[{position}] does not verify under {key_id!r} (step 4)")
@@ -1541,25 +1569,31 @@ def two_authority_keys(text: str) -> tuple[dict, list[str]]:
     return keys, errors
 
 
+def spec_example(heading: str, schema: str, kind: str) -> dict:
+    """The ATP-SPEC.md example under `heading`, one that `schema` (a path from
+    the repository root) accepts. A specification without the heading or its
+    ```json block, and a block that is not JSON or that the schema refuses,
+    raises ExampleUnusable; the message for a refused block names `kind`, as
+    in "a trust proof". The examples map reads the block and validates it
+    against that schema, which reports each."""
+    try:
+        example = json.loads(extract_block(ROOT / "ATP-SPEC.md", heading))
+    except NoExample as exc:
+        raise ExampleUnusable(heading, f"ATP-SPEC.md: {exc}") from None
+    except json.JSONDecodeError:
+        raise ExampleUnusable(heading, f"the {heading!r} example is not JSON") from None
+    validator = Draft202012Validator(json.loads((ROOT / schema).read_text(encoding="utf-8")))
+    if not validator.is_valid(example):
+        raise ExampleUnusable(heading, f"the {heading!r} example is not {kind} the schema accepts")
+    return example
+
+
 def two_authority_example() -> dict:
     """The Section 4.4.1 example. A specification without the heading or its
     ```json block, and a block that is not JSON or not a trust proof the
     trust-proof schema accepts, raises SourceUnusable: the examples map reads
     the block and validates it against that schema, which reports each."""
-    try:
-        proof = json.loads(extract_block(ROOT / "ATP-SPEC.md", TWO_AUTHORITY_HEADING))
-    except NoExample as exc:
-        raise SourceUnusable(f"ATP-SPEC.md: {exc}") from None
-    except json.JSONDecodeError:
-        raise SourceUnusable(f"the {TWO_AUTHORITY_HEADING!r} example is not JSON") from None
-    schema = json.loads(
-        (ROOT / "schemas" / "trust-proof-v1.schema.json").read_text(encoding="utf-8")
-    )
-    if not Draft202012Validator(schema).is_valid(proof):
-        raise SourceUnusable(
-            f"the {TWO_AUTHORITY_HEADING!r} example is not a trust proof the schema accepts"
-        )
-    return proof
+    return spec_example(TWO_AUTHORITY_HEADING, "schemas/trust-proof-v1.schema.json", "a trust proof")
 
 
 def two_authority_check(text: str) -> list[str]:
@@ -1583,6 +1617,120 @@ def two_authority_check(text: str) -> list[str]:
         ]
         if SINGLE_AUTHORITY not in two_authority_errors({**proof, "signatures": alone}, keys):
             errors.append("the example with the entries of issuerDid alone does not fail step 7")
+    return errors
+
+
+# Section 4.4.2: a proof that meets the issuer key set of the Section 7.1.1
+# example, verified under the keys that example publishes.
+KEY_SET_PROOF_HEADING = "#### 4.4.2 Issuer key set proof"
+KEY_SET_HEADING = "#### 7.1.1 Issuer key set"
+
+
+def discovery_keys(discovery: dict) -> dict:
+    """The Ed25519 keys of a discovery document the discovery schema accepts:
+    each keyId mapped to the bytes of its publicKeyHex, or to no bytes, which
+    verify nothing, when the hex has an odd number of digits. Of two entries
+    with one keyId the first is read, as issuer_key_set_errors() reads it."""
+    first: dict = {}
+    for key in discovery["publicKeys"]:
+        first.setdefault(key["keyId"], key)
+    keys = {}
+    for key_id, key in first.items():
+        if key["algorithm"] == "Ed25519":
+            try:
+                keys[key_id] = bytes.fromhex(key["publicKeyHex"])
+            except ValueError:
+                keys[key_id] = b""
+    return keys
+
+
+def key_set_count_errors(proof: dict, discovery: dict) -> list[str]:
+    """The Section 4.4 issuer key set count for a trust proof of the authority
+    whose discovery document, one the discovery schema accepts, is
+    `discovery`. A document without `issuerKeySet` declares no set, which
+    every proof meets. No proof meets a set that breaks a Section 7.1.1 rule,
+    and each rule it breaks is an error. Otherwise a key of the set counts
+    once when an Ed25519 entry whose keyId is the key's verifies over the
+    Section 4.3 canonical string, however many entries carry that keyId; no
+    other entry counts, and fewer than `threshold` keys is an error."""
+    key_set = discovery.get("issuerKeySet")
+    if key_set is None:
+        return []
+    broken = issuer_key_set_errors(discovery)
+    if broken:
+        return [f"step 4: no proof meets an issuer key set that breaks Section 7.1.1: {error}"
+                for error in broken]
+    try:
+        message = canonical_string(proof).encode("utf-8")
+    except ValueError as exc:
+        return [f"no Section 4.3 canonical string: {exc}"]
+    keys, signed = discovery_keys(discovery), set()
+    for entry in proof["signatures"]:
+        key_id = entry.get("keyId")
+        if (
+            entry.get("algorithm") == "Ed25519"
+            and key_id in key_set["keyIds"]
+            and key_id not in signed
+            and ed25519_verifies(keys[key_id], message, entry_signature(entry))
+        ):
+            signed.add(key_id)
+    count, threshold = len(signed), key_set["threshold"]
+    if count < threshold:
+        return [
+            f"step 4: {count} key{'' if count == 1 else 's'} of the issuer key set signed the "
+            f"proof, fewer than its threshold of {threshold}"
+        ]
+    return []
+
+
+def key_set_proof_example() -> dict:
+    """The Section 4.4.2 example. Raises ExampleUnusable as spec_example()
+    does."""
+    return spec_example(KEY_SET_PROOF_HEADING, "schemas/trust-proof-v1.schema.json", "a trust proof")
+
+
+def key_set_discovery_example() -> dict:
+    """The Section 7.1.1 example, whose keys and set the Section 4.4.2 proof
+    is verified under. Raises ExampleUnusable as spec_example() does, and
+    when the example declares a set that breaks a Section 7.1.1 rule: the
+    examples map checks the rules on that example and reports each."""
+    discovery = spec_example(KEY_SET_HEADING, "schemas/discovery-v1.schema.json", "a discovery document")
+    if issuer_key_set_errors(discovery):
+        raise ExampleUnusable(
+            KEY_SET_HEADING, f"the {KEY_SET_HEADING!r} example's issuerKeySet breaks a Section 7.1.1 rule"
+        )
+    return discovery
+
+
+def key_set_proof_check() -> list[str]:
+    """Section 4.4.2 against Section 4.4 steps 3, 4 and 7 and the issuer key
+    set count, with the keys and the set of the Section 7.1.1 example as those
+    of the one authority the verifier knows: that example declares a set, the
+    proof names its authorityDid in issuerDid and passes, and two edits of the
+    proof break the count and no other rule: the proof without its last
+    entry, and the proof with its first entry in place of its last. Raises
+    ExampleUnusable when key_set_proof_example() or
+    key_set_discovery_example() does."""
+    proof = key_set_proof_example()
+    discovery = key_set_discovery_example()
+    if "issuerKeySet" not in discovery:
+        return [f"the {KEY_SET_HEADING!r} example declares no issuerKeySet"]
+    if proof["issuerDid"] != discovery["authorityDid"]:
+        return [
+            f"the example's issuerDid {proof['issuerDid']!r} is not the authorityDid "
+            f"{discovery['authorityDid']!r} of the {KEY_SET_HEADING!r} example"
+        ]
+    keys = discovery_keys(discovery)
+    errors = two_authority_errors(proof, keys) + key_set_count_errors(proof, discovery)
+    if not errors:
+        signatures = proof["signatures"]
+        for label, edited in (
+            ("without its last entry", signatures[:-1]),
+            ("with its first entry in place of its last", signatures[:-1] + signatures[:1]),
+        ):
+            edit = {**proof, "signatures": edited}
+            if two_authority_errors(edit, keys) or not key_set_count_errors(edit, discovery):
+                errors.append(f"the example {label} does not break the count alone")
     return errors
 
 
@@ -1644,6 +1792,7 @@ def extract_block(md_path: pathlib.Path, heading: str) -> str:
 
 # Schemas the checks read by name; the examples map names the others.
 SCHEMAS_READ_BY_NAME = (
+    "schemas/discovery-v1.schema.json",
     "schemas/revocation-list-v1.schema.json",
     "schemas/trust-proof-v1.schema.json",
 )
@@ -1805,6 +1954,28 @@ def main() -> int:
         failures += 1
     elif level3_errors is not None:
         print("level3 OK      ATP-SPEC.md Section 4.4.1 vs Section 4.4 steps 3, 4 and 7")
+
+    try:
+        key_set_errors = key_set_proof_check()
+    except ExampleUnusable as exc:
+        key_set_errors = [str(exc)]
+        if any(
+            entry["file"] == "ATP-SPEC.md" and entry.get("heading") == exc.heading
+            for entry in entries
+        ):
+            # The examples map reads and checks the block, so it fails there, once.
+            print(
+                "keyset SKIP    ATP-SPEC.md Section 4.4.2 vs the Section 7.1.1 issuer key set: "
+                f"not compared, {exc}"
+            )
+            key_set_errors = None
+    if key_set_errors:
+        print("keyset FAIL    ATP-SPEC.md Section 4.4.2 vs the Section 7.1.1 issuer key set")
+        for err in key_set_errors:
+            print(f"    {err}")
+        failures += 1
+    elif key_set_errors is not None:
+        print("keyset OK      ATP-SPEC.md Section 4.4.2 vs the Section 7.1.1 issuer key set")
 
     timestamp_errors = signed_timestamp_errors(spec)
     if timestamp_errors:

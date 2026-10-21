@@ -107,7 +107,7 @@ Two complementary suites test these levels:
 | `revocation-list-valid.json` | 2 | §8.1 revocation response (structural; its free-text `reason` predates §8.1.1 and is processed as `unspecified`) | ACCEPT |
 | `revocation-list-malformed-timestamp.json` | 2 | §8.1 RFC 3339 timestamp rule | REJECT[PARSE_ERROR] |
 
-Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority; the Section 4.4.1 proof is co-signed under two RFC 8032 test keys and is not a suite fixture); the Section 7.1 transport rule and the maximum age of a verifier's copy of the discovery document (1.1; client behaviour over the network, which a byte-stable fixture cannot carry); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
+Not yet covered by fixtures (self-attested against the spec text until fixtures exist; this list is authoritative, and the suite's `notCovered` list can lag it): Section 4.3 signing of a proof served with fractional-second timestamps (1.1); §4.3.1 Sigstore co-signature verification (1.1; this repository's schema checks cover the entry's shape only, and a byte-stable fixture needs a bundle signed through Fulcio and logged in Rekor); §4.4 step 3 rejection of a proof signed by a revoked authority key (Section 8.2); §4.4 step 4 rejection of a proof whose only Ed25519 entry is signed by a key of a DID other than its `issuerDid`; the §4.4 step 4 issuer key set count (Section 7.1.1): a proof signed by `threshold` distinct keys of the set, one signed by fewer, and one whose entries carry the same `keyId` twice (1.1; the Section 4.4.2 proof and its two edits are the three cases, signed under RFC 8032 test keys, and are not suite fixtures); Section 5.2 leaf recomputation from a served entry (1.1); §6 Level 3 federation cosignature (blocked on a second production authority; the Section 4.4.1 proof is co-signed under two RFC 8032 test keys and is not a suite fixture); the Section 7.1 transport rule and the maximum age of a verifier's copy of the discovery document (1.1; client behaviour over the network, which a byte-stable fixture cannot carry); §8.1 response authenticity (the body is unsigned by design — see §8.1); §8.1 entries without a `transparencyLogIndex` (1.1); and §8.1.1 revocation reason codes, a registered code and an unrecognised one processed as `unspecified` (1.1; the `revocation-list-valid` fixture predates them, and the revocation schema refuses its free-text `reason`).
 
 **Live-endpoint scripts** ([`conformance/`](./conformance/) in this repository) — `level1.sh` and `level2.sh` exercise a *running* authority's discovery, resolution, signing, transparency, and revocation endpoints. Fixtures prove wire-format interoperability; the scripts prove an operating deployment. A public authority SHOULD pass both.
 
@@ -461,7 +461,7 @@ A verifier MUST perform the following checks in order:
    - `issuedAt` MUST be before `expiresAt`
    - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
-7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present: the Ed25519 entry step 4 requires, under a key of `issuerDid`, and an Ed25519 entry that verifies in step 4 under a key of a second trust authority. The second authority is a known trust authority, as step 2 requires of `issuerDid`: the verifier knows it from its own configuration, never because the proof or the issuer's discovery document names it. Two authorities are distinct only when their DIDs differ and no public key is a key of both, so a key published under two DIDs never counts as a second authority. An ML-DSA-65 entry, the second signature of hybrid mode, is not a second authority, and a Sigstore co-signature (Section 4.3.1) is not an authority signature. Section 4.4.1 is a proof that passes this step.
+7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present: the Ed25519 entry step 4 requires, under a key of `issuerDid`, and an Ed25519 entry that verifies in step 4 under a key of a second trust authority. The second authority is a known trust authority, as step 2 requires of `issuerDid`: the verifier knows it from its own configuration, never because the proof or the issuer's discovery document names it. Two authorities are distinct only when their DIDs differ and no public key is a key of both, so a key published under two DIDs never counts as a second authority. An ML-DSA-65 entry, the second signature of hybrid mode, is not a second authority, and a Sigstore co-signature (Section 4.3.1) is not an authority signature. A proof that fails this step is rejected with category `SIGNATURE_INVALID`. Section 4.4.1 is a proof that passes this step.
 
 **Issuer key set count.** A proof meets an issuer key set when at least `threshold` distinct
 keys of the set signed it. Each entry of `keyIds` counts once when an Ed25519 entry of
@@ -470,7 +470,8 @@ entry whose `keyId` is not in `keyIds`, an ML-DSA-65 entry and a Sigstore entry 
 no key. A proof that does not meet the set is rejected at step 4 with category
 `SIGNATURE_INVALID`, and so is every proof of an authority whose set breaks the Section 7.1.1
 rules. The keys of a set are one authority's keys, so they never count as the distinct
-authorities of step 7.
+authorities of step 7. Section 4.4.2 is a proof that meets the set of the Section 7.1.1
+example.
 
 Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation
 of the agent itself is Section 8.1: a verifier that reads the revocation list applies an
@@ -522,7 +523,54 @@ Under the keys in the table both entries verify (step 4), and their DIDs and the
 differ, so the proof passes step 7. Without the co-signer's entry it is the Section 4.2
 proof, which carries one authority's signature and so fails step 7.
 `scripts/validate_examples.py` in this repository verifies both signatures, and checks that
-the proof passes step 7 and fails it without the co-signer's entry.
+the proof passes step 7 and fails it without the co-signer's entry. The Python client in
+[`clients/`](./clients/README.md) applies step 7 when `verify_trust_proof` is given
+`second_authorities`; its tests verify this proof with the co-signer's key there, and reject
+it at step 7 without the co-signer's entry.
+
+#### 4.4.2 Issuer key set proof
+
+The proof below is signed over the Section 4.3 canonical string by two keys of the 2-of-3
+issuer key set of the Section 7.1.1 example: `#key-1` and `#key-2` of
+`did:opena2a:authority:example.org`, the authority its `issuerDid` names. The three keys of
+that example are fixture keys: `#key-1` is the RFC 8032 Section 7.1 TEST 2 key, `#key-2` the
+TEST 3 key and `#key-3` the TEST SHA(abc) key. RFC 8032 publishes the secret key of each, so
+anyone can sign with them: the proof shows the wire form and the count, not a key set in
+operation. Its trust level is 2, so step 7 does not apply to it.
+
+```json
+{
+  "did": "did:opena2a:mcp_server:agent_conformance_test_001",
+  "trustLevel": 2,
+  "trustScore": 0.7432,
+  "verdict": "listed",
+  "issuedAt": "2026-10-12T12:00:00Z",
+  "expiresAt": "2026-10-13T06:00:00Z",
+  "issuerDid": "did:opena2a:authority:example.org",
+  "signatures": [
+    {
+      "keyId": "did:opena2a:authority:example.org#key-1",
+      "algorithm": "Ed25519",
+      "value": "SklhfFzLGK1jvjFRb7bm40AKkyKBGCAiW5ALtQFSI2ZScvSQODbfU7A2Gi3I9dx6EkiqviQiU3XUmC+q9PA+DA=="
+    },
+    {
+      "keyId": "did:opena2a:authority:example.org#key-2",
+      "algorithm": "Ed25519",
+      "value": "mCHwLqppDWbFQ8dpks+I5ukxBC5+FCIIC3O3fyKmrNH5Tv2sDwAyRdJkXesf22ZdrdJ+Yl21C1qkiwgTGyu1CQ=="
+    }
+  ]
+}
+```
+
+Under the keys of the Section 7.1.1 example both entries verify (step 4), and they carry two
+different keys of the set, so the proof meets its `threshold` of 2. Two edits of the proof are
+rejected at step 4 with category `SIGNATURE_INVALID`, each because one key of the set signed
+it: the proof without the `#key-2` entry, and the proof with the `#key-1` entry in place of
+the `#key-2` entry, whose two entries carry the same `keyId` and count as one key. The proof
+and its two edits are the three cases Section 2.1 lists for the count.
+`scripts/validate_examples.py` in this repository verifies both signatures, and checks that
+the proof meets the set and that each edit breaks the count and no other rule of steps 3, 4
+and 7.
 
 ### 4.5 Proof Retrieval
 
@@ -1061,7 +1109,7 @@ private keys of fewer than m of them cannot produce a proof that verifies.
 | `keyIds` | The n keys of the set, at least one. Each entry is the `keyId` of an Ed25519 entry of `publicKeys`; no `keyId` is listed twice, and no two entries name keys with the same `publicKeyHex`, so each entry is a different key. |
 
 The example is a discovery document that declares a 2-of-3 set. Like the Section 7.1
-example, it is illustrative.
+example, it is illustrative. Section 4.4.2 is a proof that two of its keys signed.
 
 ```json
 {

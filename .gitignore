@@ -4,6 +4,10 @@ __pycache__/
 clients/python/build/
 clients/python/*.egg-info/
 
+# What npm and tsc write into clients/typescript when it is built there.
+clients/typescript/node_modules/
+clients/typescript/dist/
+
 # Local credential files, so one is never committed by accident.
 .env
 .env.*

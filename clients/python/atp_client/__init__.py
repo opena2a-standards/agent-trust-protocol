@@ -3,8 +3,9 @@
 AtpClient fetches a trust authority's discovery document (Section 7.1) and its
 trust proofs (Section 4.5). The verify functions make no network call: they
 check a trust proof (Section 4.4 steps 1 to 5, except the issuer key set count
-of step 4), a discovery document (Section 7.1), a signed tree head (Section
-5.6), an inclusion proof (Section 5.4), a consistency proof (Section 5.5) and a
+of step 4, and step 7 when given the second authorities the verifier knows), a
+discovery document (Section 7.1), a signed tree head (Section 5.6), an
+inclusion proof (Section 5.4), a consistency proof (Section 5.5) and a
 revocation response (Section 8.1). Each returns a VerifyResult; a rejected
 input carries one of CATEGORIES and a reason that names the member or the step
 that failed. The client does not count an issuer key set (Section 7.1.1), so
@@ -24,7 +25,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -215,6 +216,17 @@ def _key_bytes(keys: list[Any], key_id: str, algorithm: str) -> bytes | None:
     return None
 
 
+def _public_keys(keys: Iterable[Any]) -> set[bytes]:
+    """The raw public keys of keys, whatever their algorithm and status, to
+    tell whether two authorities share one (Section 4.4 step 7)."""
+    found = set()
+    for entry in keys:
+        raw = entry.get("publicKeyHex") if isinstance(entry, dict) else None
+        if isinstance(raw, str) and _HEX.fullmatch(raw):
+            found.add(bytes.fromhex(raw))
+    return found
+
+
 def _signature_valid(algorithm: str, public: bytes, signature: bytes, message: bytes) -> bool:
     try:
         if algorithm == "Ed25519":
@@ -316,24 +328,40 @@ def verify_trust_proof(
     trusted_issuers: str | Iterable[str],
     *,
     now: datetime | str | None = None,
+    second_authorities: Mapping[str, Iterable[Any]] | None = None,
 ) -> VerifyResult:
     """Section 4.4 steps 1 to 5, offline, in order: expiry, issuer, key lookup,
-    signatures, semantic validation. keys are Section 7.1 publicKeys entries
-    (keyId, algorithm, publicKeyHex, optional status) and trusted_issuers the
-    issuer DIDs the verifier trusts; now (default: the current time) is the
-    clock for step 1. Step 6, the transparency log, is verify_inclusion_proof;
-    step 7, co-signing by a second authority at conformance Level 3, is not
-    checked. A Sigstore co-signature (Section 4.3.1) is not verified, so step 4
-    rejects a proof that carries one. The issuer key set count of step 4
-    (Section 7.1.1) is not applied: pass only the keys of an authority whose
-    discovery document carries no issuerKeySet, which verify_discovery
-    checks. Raises ValueError for a now that is not a timezone-aware datetime
-    or an RFC 3339 string."""
+    signatures, semantic validation; then step 7 when second_authorities is
+    given. keys are Section 7.1 publicKeys entries (keyId, algorithm,
+    publicKeyHex, optional status) and trusted_issuers the issuer DIDs the
+    verifier trusts; now (default: the current time) is the clock for step 1.
+    Step 6, the transparency log, is verify_inclusion_proof.
+
+    second_authorities, for a conformance Level 3 verifier, maps the DID of
+    each authority the verifier knows as a second authority to that
+    authority's publicKeys entries. A signature whose keyId names one of those
+    DIDs, other than issuerDid, resolves only among that authority's entries.
+    Step 7 then rejects a proof at trust level 3 or 4 with SIGNATURE_INVALID
+    unless an Ed25519 signature verified under a key of one of them that
+    shares no public key with the entries of keys whose keyId names
+    issuerDid. Without second_authorities, step 7 is not checked.
+
+    A Sigstore co-signature (Section 4.3.1) is not verified, so step 4 rejects
+    a proof that carries one. The issuer key set count of step 4 (Section
+    7.1.1) is not applied: pass only the keys of an authority whose discovery
+    document carries no issuerKeySet, which verify_discovery checks. Raises
+    ValueError for a now that is not a timezone-aware datetime or an RFC 3339
+    string."""
     clock = _clock(now)
-    return _outcome(lambda: _check_trust_proof(proof, list(keys), _trusted(trusted_issuers), clock))
+    second = None
+    if second_authorities is not None:
+        second = {did: list(entries) for did, entries in second_authorities.items()}
+    return _outcome(lambda: _check_trust_proof(proof, list(keys), _trusted(trusted_issuers), clock, second))
 
 
-def _check_trust_proof(proof: Any, keys: list[Any], trusted: set[str], clock: int) -> None:
+def _check_trust_proof(
+    proof: Any, keys: list[Any], trusted: set[str], clock: int, second: dict[str, list[Any]] | None
+) -> None:
     parsed = _parse_proof(proof)
     signatures = _signature_entries(proof)
     if proof.get("transparencyLogIndex") is not None:
@@ -355,23 +383,30 @@ def _check_trust_proof(proof: Any, keys: list[Any], trusted: set[str], clock: in
             )
         if algorithm not in KEY_SIZES:
             raise _Reject("SIGNATURE_INVALID", f"signatures[{index}] has algorithm {algorithm}, not Ed25519 or ML-DSA-65")
-        public = _key_bytes(keys, entry["keyId"], algorithm)
+        # A second authority's keys come from the verifier, never from the
+        # issuer, so a keyId naming one resolves among its keys alone (step 7).
+        key_did = entry["keyId"].partition("#")[0]
+        authority = key_did if second is not None and key_did in second and key_did != parsed.issuer else None
+        public = _key_bytes(keys if authority is None else second[authority], entry["keyId"], algorithm)
         if public is None:
             raise _Reject(
                 "SIGNATURE_INVALID",
                 f"signatures[{index}] keyId {entry['keyId']} does not resolve to a non-revoked {algorithm} key",
             )
-        resolved.append((index, entry, public))
+        resolved.append((index, entry, public, authority))
 
     message = parsed.canonical().encode("utf-8")
     issuer_signed = False
-    for index, entry, public in resolved:
+    second_signers = set()
+    for index, entry, public, authority in resolved:
         signature = _base64(entry.get("value"), f"signatures[{index}].value", "SIGNATURE_INVALID")
         if not _signature_valid(entry["algorithm"], public, signature, message):
             raise _Reject("SIGNATURE_INVALID", f"the {entry['algorithm']} signature of {entry['keyId']} did not verify")
         key_did, _, fragment = entry["keyId"].partition("#")
         if entry["algorithm"] == "Ed25519" and fragment and key_did == parsed.issuer:
             issuer_signed = True
+        elif entry["algorithm"] == "Ed25519" and fragment and authority is not None:
+            second_signers.add(authority)
     if not issuer_signed:
         raise _Reject("SIGNATURE_INVALID", f"no Ed25519 signature by a key of {parsed.issuer} verified")
 
@@ -385,6 +420,27 @@ def _check_trust_proof(proof: Any, keys: list[Any], trusted: set[str], clock: in
         raise _Reject("SEMANTIC_INVALID", "issuedAt is not before expiresAt")
     if parsed.expires - parsed.issued > MAX_VALIDITY_MICROSECONDS:
         raise _Reject("SEMANTIC_INVALID", "the validity window from issuedAt to expiresAt is longer than 24 hours")
+
+    if second is None or parsed.level < 3:
+        return
+    if not second_signers:
+        raise _Reject(
+            "SIGNATURE_INVALID",
+            f"no Ed25519 signature by a second authority verified (step 7): trustLevel {parsed.level} "
+            f"needs one by an authority of second_authorities other than {parsed.issuer}",
+        )
+    # Two authorities are distinct only when no public key is a key of both.
+    issuer_keys = _public_keys(
+        entry
+        for entry in keys
+        if isinstance(entry, dict)
+        and isinstance(entry.get("keyId"), str)
+        and entry["keyId"].partition("#")[0] == parsed.issuer
+    )
+    sharing = sorted(did for did in second_signers if _public_keys(second[did]) & issuer_keys)
+    if len(sharing) == len(second_signers):
+        detail = "; ".join(f"{did} shares a public key with {parsed.issuer}" for did in sharing)
+        raise _Reject("SIGNATURE_INVALID", f"no second authority distinct from {parsed.issuer} signed (step 7): {detail}")
 
 
 # Discovery (Section 7.1)
@@ -691,7 +747,9 @@ class AtpClient:
         """verify_trust_proof against this authority: its discovery document's
         publicKeys, and its authorityDid as the one trusted issuer. A discovery
         document that verify_discovery refuses, one that declares an issuer
-        key set among them, rejects the proof with that category."""
+        key set among them, rejects the proof with that category. Step 7 is
+        not applied, and a signature whose key the document does not list is
+        rejected at step 3."""
         discovery = self.get_discovery()
         checked = verify_discovery(discovery)
         if not checked.valid:

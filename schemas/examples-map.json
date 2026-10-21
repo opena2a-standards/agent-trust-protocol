@@ -16,6 +16,11 @@
   },
   {
     "file": "ATP-SPEC.md",
+    "heading": "#### 4.4.2 Issuer key set proof",
+    "schema": "schemas/trust-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
     "heading": "### 5.4 Inclusion Proof",
     "schema": "schemas/inclusion-proof-v1.schema.json"
   },

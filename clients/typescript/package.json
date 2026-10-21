@@ -1,0 +1,33 @@
+{
+  "name": "@opena2a/atp-client",
+  "description": "Fetch Agent Trust Protocol trust proofs and verify them offline",
+  "license": "Apache-2.0",
+  "private": true,
+  "homepage": "https://github.com/opena2a-org/agent-trust-protocol/blob/main/ATP-SPEC.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opena2a-org/agent-trust-protocol.git",
+    "directory": "clients/typescript"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/atp-client.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "6.0.3"
+  }
+}

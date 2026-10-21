@@ -8,6 +8,22 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- `clients/python`: `verify_trust_proof` applies Section 4.4 step 7 (conformance Level 3)
+  when it is given `second_authorities`, which maps the DID of each authority the verifier
+  knows as a second authority to that authority's Section 7.1 `publicKeys` entries. A
+  signature whose `keyId` names one of those DIDs resolves only among that authority's
+  entries, so a key the issuer lists under the co-signer's `keyId` does not verify the
+  co-signer's entry. A proof at trust level 3 or 4 is then rejected with `SIGNATURE_INVALID`
+  unless an Ed25519 signature verified under a key of one of those authorities, and that
+  authority shares no public key with the issuer's entries in `keys`. Without
+  `second_authorities` step 7 is not checked, as before, and the 14 fixture copies keep their
+  pinned verdicts. The tests cover a proof two authorities sign at trust levels 3 and 4, the
+  issuer's entry twice, a second key of the issuer, a signer outside the mapping, a key shared
+  with the issuer (also in upper-case hex, and revoked), a forged and an unlisted co-signer
+  key, ML-DSA-65 entries, `AtpClient.verify` with one authority's discovery document, and the
+  Section 4.4.1 proof under the keys of its table, which fails step 7 without the co-signer's
+  entry. `clients/README.md` documents the parameter. A second authority deployed under its
+  own keys, and a proof it co-signs pinned in the atp-conformance suite, are not yet done.
 - `clients/python`: a Python client, installed with `pip install ./clients/python` (not
   published). `AtpClient` fetches the discovery document (falling back to
   `/.well-known/opena2a` on 404) and a trust proof (unwrapped from `proof`, refused when it is
@@ -24,7 +40,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   declares none. `clients/fixtures` holds byte copies of the 14 atp-conformance fixtures with
   their SHA-256 manifest; the tests check the copies against it and that the client gives each
   fixture its pinned verdict and category. `clients/README.md` documents the client and the
-  fixture copies. A TypeScript client is not yet written.
+  fixture copies.
+- `clients/typescript`: a TypeScript client, `@opena2a/atp-client`, built in that directory
+  with `npm ci` and `npm run build` and added to a project with
+  `npm install <path to clients/typescript>` (not published). It has the Python client's
+  functions, named in camelCase (`getTrustProof`, `verify`, `verifyTrustProof` and the
+  others), and no runtime dependencies: it checks Ed25519 and ML-DSA-65 signatures with the
+  Node.js `crypto` module. It does not make two of the Python client's checks:
+  `verifyTrustProof` has no counterpart of `second_authorities`, so it never applies
+  Section 4.4 step 7, and `verifyDiscovery` accepts any non-empty string as an `endpoints`
+  value, where `verify_discovery` requires a Section 7.1 path. It writes `trustScore` into
+  the canonical string from the number's exact binary value with a tie to even, as `%.6f`
+  does, where `toFixed(6)` rounds a tie up; it counts transparency log positions with
+  `BigInt`, so a proof from a log of more than 2^32 entries verifies; and it refuses a `did`,
+  `verdict` or `issuerDid` that holds a lone surrogate, which UTF-8 cannot encode, with
+  `PARSE_ERROR`. Its tests check the 14 fixture copies against their manifest and that the
+  client gives each fixture its pinned verdict and category; `npm test` builds and runs them.
+  `clients/README.md` documents both clients.
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
 - Section 4.4.1: a two-authority proof for Level 3. It is the Section 4.2 proof with an
   Ed25519 entry of `did:opena2a:authority:cosigner.example` added over the same Section 4.3
@@ -81,6 +113,25 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   each mapped discovery example the schema accepts against the rules the schema cannot
   express, and the Section 7.1.1 example, a 2-of-3 set, is validated in CI. Section 2.1 lists
   the count as not yet covered by fixtures.
+- Section 4.4.2: a proof that meets an issuer key set, and two edits of it that the count
+  rejects. Two keys of the 2-of-3 set of the Section 7.1.1 example, `#key-1` and `#key-2`,
+  sign it over the Section 4.3 canonical string. The example's three keys are the RFC 8032
+  Section 7.1 TEST 2, TEST 3 and TEST SHA(abc) keys, and RFC 8032 publishes their secret keys,
+  so the proof shows the wire form and the count, not a key set in operation. Without its
+  `#key-2` entry, and with its `#key-1` entry in place of that entry (one `keyId` twice, which
+  counts once), one key of the set signed it, and Section 4.4 step 4 rejects it.
+  `scripts/validate_examples.py` verifies both signatures under the keys of the Section 7.1.1
+  example, and checks that the proof meets the set and that each edit breaks the count and no
+  other rule of steps 3, 4 and 7; the examples map validates the block against the
+  trust-proof schema, and `schemas/discovery-v1.schema.json` joins the schemas the checks read
+  by name, so a run without it is one failure line. `scripts/test_checks.py` covers the count
+  (a key counts once however many entries carry it, and when any one of them verifies; an
+  entry that does not verify, an entry outside the set, an ML-DSA-65 entry and a Sigstore
+  entry count toward no key; a threshold of 1 is met by one key and a threshold of 3 is not
+  met by two; no proof meets a set that breaks a Section 7.1.1 rule, and every proof meets a
+  document without a set), and its `checks.jq` agreement test runs on the proof. Sections 4.4
+  and 7.1.1 point to the proof, and Section 2.1 still lists the three cases as not yet covered
+  by suite fixtures.
 - Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
   for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
   `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,
@@ -180,6 +231,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 4.4 step 7 names its reject category: a proof that fails the step is rejected with
+  `SIGNATURE_INVALID`, the category of the step 4 rejections. Step 7 named no category.
+  Section 4.4.1 names the Python client's step 7 check beside `scripts/validate_examples.py`.
 - Section 4.4 step 7: the two-authority rule says when two signatures come from distinct
   authorities. They are two Ed25519 entries that verify in step 4, one under a key of
   `issuerDid` and one under a key of a second known trust authority, which the verifier knows
