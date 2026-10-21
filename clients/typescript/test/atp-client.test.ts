@@ -72,6 +72,24 @@ function runFixture(document: Fixture): atp.VerifyResult {
   throw new Error(`unknown fixtureType ${document.fixtureType}`);
 }
 
+// The @types/node release for Node.js 22 lists no "ml-dsa-65" key type.
+const generate = generateKeyPairSync as (type: string) => { publicKey: KeyObject; privateKey: KeyObject };
+
+/**
+ * Why a test that generates ML-DSA-65 keys is skipped, or false where this
+ * Node.js generates them. Node.js 22.23.3 verifies ML-DSA-65 signatures, so
+ * the fixture tests run there, but refuses to generate the keys.
+ */
+const NO_ML_DSA_KEYS = ((): string | false => {
+  try {
+    generate("ml-dsa-65");
+    return false;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `Node.js ${process.version} cannot generate ML-DSA-65 keys: ${detail}`;
+  }
+})();
+
 /** A key generated for one test, with the Section 7.1 entry naming it. */
 class Signer {
   readonly keyId: string;
@@ -80,8 +98,6 @@ class Signer {
   readonly #privateKey: KeyObject;
 
   constructor(keyId = `${AUTHORITY}#key-1`, algorithm: Algorithm = "Ed25519") {
-    // The @types/node release for Node.js 22 lists no "ml-dsa-65" key type.
-    const generate = generateKeyPairSync as (type: string) => { publicKey: KeyObject; privateKey: KeyObject };
     const pair = generate(algorithm === "Ed25519" ? "ed25519" : "ml-dsa-65");
     const jwk = pair.publicKey.export({ format: "jwk" }) as { x?: unknown; pub?: unknown };
     const encoded = algorithm === "Ed25519" ? jwk.x : jwk.pub;
@@ -304,7 +320,7 @@ describe("verifyTrustProof", () => {
     assertRejected(result, "SIGNATURE_INVALID", `no Ed25519 signature by a key of ${AUTHORITY}`);
   });
 
-  it("step 4: a hybrid proof needs both signatures to verify", () => {
+  it("step 4: a hybrid proof needs both signatures to verify", { skip: NO_ML_DSA_KEYS }, () => {
     const pqc = new Signer(`${AUTHORITY}#key-1-pqc`, "ML-DSA-65");
     const hybridKeys = [signer.key(), pqc.key()];
     const proof = signedProof([signer, pqc]);
@@ -747,6 +763,22 @@ describe("AtpClient", () => {
       name: "AtpError",
       message: /did not answer with a trust proof/,
     });
+  });
+
+  it("getTrustProof throws a TypeError for a did that UTF-8 cannot encode, before any request", async () => {
+    for (const did of [`${AGENT}\uD800`, `${AGENT}\uDC00x`]) {
+      await assert.rejects(client.getTrustProof(did), {
+        name: "TypeError",
+        message: "did holds a lone surrogate, which UTF-8 cannot encode",
+      });
+    }
+    assert.deepEqual(authority.requests, []);
+    // A surrogate pair is one character, which UTF-8 encodes, so its request is sent.
+    await assert.rejects(
+      client.getTrustProof(`${AGENT}\u{1F600}`),
+      (error: unknown) => error instanceof atp.AtpError && error.status === 404,
+    );
+    assert.deepEqual(authority.requests, ["/api/v1/trust/proof?did=did%3Aopena2a%3Aagent%3Aexample-agent%F0%9F%98%80"]);
   });
 
   it("falls back to the legacy discovery path on 404", async () => {

@@ -3558,6 +3558,68 @@ class GuideBlocksTest(unittest.TestCase):
             ["spec b.2: proof about another DID is refused"],
         )
 
+    def test_a_call_that_follows_redirects_fails(self):
+        """Each requests and fetch call of the A2A and MCP guides and of Appendix
+        B.1 and B.2 refuses a redirect (Section 7.1). Without allow_redirects=False
+        or redirect: "error" the call follows one, as both libraries do by
+        default, and the case that redirects that call to http fails."""
+        for guide, old, new, block, case in (
+            ("spec", "        allow_redirects=False,  # Section 7.1: a redirect's 3xx fails the check below\n",
+             "", check_guides.SPEC_PEER, "spec b.1: a redirect of the proof request is not followed"),
+            ("spec", "json=proof, timeout=10, allow_redirects=False", "json=proof, timeout=10",
+             check_guides.SPEC_PEER, "spec b.1: a redirect of the verify request is not followed"),
+            ("spec", '    { redirect: "error" }\n', "",
+             check_guides.SPEC_MCP, "spec b.2: a redirect of the proof request is not followed"),
+            ("spec", '    body: JSON.stringify(proof),\n    redirect: "error",\n',
+             "    body: JSON.stringify(proof),\n",
+             check_guides.SPEC_MCP, "spec b.2: a redirect of the verify request is not followed"),
+            ("a2a", "requests.get(agent_card_url, timeout=10, allow_redirects=False)",
+             "requests.get(agent_card_url, timeout=10)",
+             check_guides.A2A_PY, "a2a python: a redirect of the card request is not followed"),
+            ("a2a", "        timeout=10,\n        allow_redirects=False,\n    )\n    if check.is_redirect:",
+             "        timeout=10,\n    )\n    if check.is_redirect:",
+             check_guides.A2A_PY, "a2a python: a redirect of the verify request is not followed"),
+            ("a2a", "        timeout=30,\n        allow_redirects=False,\n", "        timeout=30,\n",
+             check_guides.DELEGATE, "a2a python: delegate_task does not follow a redirect"),
+            ("a2a", 'fetch(agentCardUrl, { redirect: "error" })', "fetch(agentCardUrl)",
+             check_guides.A2A_TS, "a2a typescript: a redirect of the card request is not followed"),
+            ("a2a", '    body: JSON.stringify(proof),\n    redirect: "error",\n',
+             "    body: JSON.stringify(proof),\n",
+             check_guides.A2A_TS, "a2a typescript: a redirect of the verify request is not followed"),
+            ("a2a", "                timeout=10,\n                allow_redirects=False,\n",
+             "                timeout=10,\n",
+             check_guides.REFRESH, "a2a refresh: a redirect is not followed"),
+            ("mcp", "        timeout=10,\n        allow_redirects=False,\n", "        timeout=10,\n",
+             check_guides.MCP_PY, "mcp python: a redirect is not followed"),
+            ("mcp", 'fetch(url, { redirect: "error" })', "fetch(url)",
+             check_guides.MCP_TS, "mcp typescript: a redirect is not followed"),
+            ("mcp", "        timeout=15,\n        allow_redirects=False,\n", "        timeout=15,\n",
+             check_guides.MCP_BATCH, "mcp batch: a redirect is not followed"),
+        ):
+            with self.subTest(case):
+                texts = self.edited(guide, old, new)
+                self.assertEqual(self.failing_cases(texts, block), [case])
+
+    def test_a_request_to_a_url_that_is_not_https_fails_its_case(self):
+        """A block that sends a request to an http URL fails its case even when
+        it handles the refused connection and prints what the case expects."""
+        block = (
+            "import requests\n\n"
+            "try:\n"
+            "    requests.get('http://api.oa2a.org/.well-known/atp', timeout=10)\n"
+            "except requests.ConnectionError:\n"
+            "    print('handled')\n"
+        )
+        texts = {**self.texts, "mcp": self.texts["mcp"] + f"\n## Extra\n\n```python\n{block}```\n"}
+        case = check_guides.Case("extra: handled", ("mcp", "## Extra", 0), 0, ("handled",))
+        with mock.patch.object(check_guides, "CASES", [case]):
+            errors = check_guides.run(texts, select=lambda case: True)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(
+            errors[0].startswith("extra: handled: sent GET http://api.oa2a.org/.well-known/atp, "),
+            errors[0],
+        )
+
     def test_batch_guides_state_the_recorded_refusal(self):
         self.assertEqual(check_guides.batch_note_errors(self.texts), [])
         self.assertIn("batchRejection", check_guides.RECORDED)
@@ -3626,6 +3688,32 @@ class GuideBlocksTest(unittest.TestCase):
         proof_url = "https://api.oa2a.org/api/v1/trust/proof?did=x"
         self.assertIsNone(check_guides.answer({}, "GET", "https://verifier.example.net/v", ""))
         self.assertIsNone(check_guides.answer({"unreachable": True}, "GET", proof_url, ""))
+
+    def test_stub_answers_a_redirected_url_with_a_301_to_the_same_url_under_http(self):
+        scenario = {"redirect": [check_guides.PROOF_URL]}
+        url = check_guides.PROOF_URL + "?did=x"
+        self.assertEqual(check_guides.answer(scenario, "GET", url, ""), (301, ""))
+        self.assertEqual(
+            check_guides.location(scenario, url), "http://api.oa2a.org/api/v1/trust/proof?did=x"
+        )
+        self.assertIsNone(check_guides.location(scenario, check_guides.VERIFY_URL))
+        self.assertIsNone(check_guides.location({}, url))
+        self.assertIsNone(check_guides.answer(scenario, "GET", check_guides.location(scenario, url), ""))
+
+    def test_exchange_follows_a_redirect_as_requests_and_fetch_do_by_default(self):
+        """Followed, a POST answered 301 goes to the Location as a GET, which the
+        stub refuses and the request log records; not followed, the 301 is the
+        answer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            scenario = Path(tmp) / ".scenario.json"
+            scenario.write_text(json.dumps({"redirect": [check_guides.VERIFY_URL]}), encoding="utf-8")
+            plain = "http://api.oa2a.org/api/v1/trust/verify"
+            with mock.patch.dict(os.environ, {check_guides.SCENARIO_ENV: str(scenario)}):
+                followed = check_guides.exchange("POST", check_guides.VERIFY_URL, "{}", follow=True)
+                kept = check_guides.exchange("POST", check_guides.VERIFY_URL, "{}", follow=False)
+            self.assertEqual(followed, (None, plain))
+            self.assertEqual(kept, ((301, "", plain), check_guides.VERIFY_URL))
+            self.assertEqual(check_guides.requests_not_https(Path(tmp)), [f"GET {plain}"])
 
     def test_stub_answers_a_since_timestamp_on_advisories_with_the_recorded_400(self):
         status, body = check_guides.answer(

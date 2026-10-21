@@ -868,9 +868,13 @@ export class AtpClient {
 
   /**
    * The current trust proof for did (Section 4.5). A proof the authority
-   * wraps under "proof" is unwrapped; a proof about another DID throws.
+   * wraps under "proof" is unwrapped; a proof about another DID throws. A did
+   * that holds a lone surrogate, which UTF-8 cannot encode, throws a TypeError
+   * before any request is sent.
    */
   async getTrustProof(did: string): Promise<JsonObject> {
+    // encodeURIComponent would throw a URIError for a lone surrogate.
+    if (!did.isWellFormed()) throw new TypeError("did holds a lone surrogate, which UTF-8 cannot encode");
     const body = await this.#get(`/api/v1/trust/proof?did=${encodeURIComponent(did)}`);
     const proof = isObject(body) ? (Object.hasOwn(body, "proof") ? body["proof"] : body) : null;
     if (!isObject(proof) || member(proof, "did") !== did) {

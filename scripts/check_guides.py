@@ -27,6 +27,16 @@ the case's scenario, built from scripts/guide_responses.json. A request to any
 other host fails as a refused connection, so a block that follows a URL it
 should not follow fails its case.
 
+A scenario can list URLs under "redirect"; the stub answers a request to one
+with a 301 whose Location is the same URL under http. The requests and fetch
+stubs follow a redirect as requests and fetch do by default (a POST answered
+301 is sent again as a GET), unless the block passes allow_redirects=False or
+redirect: "error" (fetch then rejects, as Node.js does) or "manual"; the curl
+stub, like curl without -L, does not follow one. Every request a block sends
+is logged, and a block that sends one to a URL that is not https fails its
+case, whatever it does with the refused connection: Section 7.1 forbids the
+request.
+
 Needs bash, jq, and Node.js 22.6 or later (the TypeScript blocks run with
 type stripping).
 """
@@ -57,6 +67,8 @@ SPEC_EXAMPLES = ("\n### B.1 ", "\n### B.3 ")
 RECORDED = json.loads((SCRIPTS / "guide_responses.json").read_text(encoding="utf-8"))
 AUTHORITY = "api.oa2a.org"
 SCENARIO_ENV = "ATP_GUIDE_SCENARIO"
+REQUEST_LOG = ".requests.log"
+REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 TIMEOUT = 60
 
 FS = "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
@@ -64,6 +76,10 @@ GH = "did:opena2a:mcp_server:@modelcontextprotocol/server-github"
 WEATHER = "did:opena2a:agent:weather-agent"
 REQUESTER = "did:opena2a:agent:requester-agent"
 CARD_URL = "https://weather.example.com/.well-known/agent-card.json"
+TASKS_URL = "https://weather.example.com/tasks/send"
+PROOF_URL = f"https://{AUTHORITY}/api/v1/trust/proof"
+VERIFY_URL = f"https://{AUTHORITY}/api/v1/trust/verify"
+BATCH_URL = f"https://{AUTHORITY}/api/v1/trust/batch"
 RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -217,11 +233,14 @@ def reply(name, **body_changes):
 
 
 def answer(scenario, method, url, data):
-    """The stub authority: (status, body text), or None for a refused connection."""
+    """The stub authority: (status, body text), or None for a refused connection.
+    A URL the scenario redirects is answered 301; location() names where to."""
     parts = urllib.parse.urlsplit(url)
     query = urllib.parse.parse_qs(parts.query)
     if parts.scheme != "https":
         return None
+    if location(scenario, url) is not None:
+        return 301, ""
     if parts.netloc == AUTHORITY and not scenario.get("unreachable"):
         route = (method, parts.path)
         if route == ("GET", "/api/v1/trust/proof"):
@@ -277,9 +296,51 @@ def parse_json(data):
         return None
 
 
+def location(scenario, url):
+    """The Location of the stub's answer to url: the same URL under http when
+    url is https and the scenario lists it, without its query, under
+    "redirect"; else None."""
+    parts = urllib.parse.urlsplit(url)
+    listed = urllib.parse.urlunsplit(parts._replace(query="", fragment=""))
+    if parts.scheme == "https" and listed in scenario.get("redirect", ()):
+        return urllib.parse.urlunsplit(parts._replace(scheme="http"))
+    return None
+
+
 def answer_from_env(method, url, data):
-    scenario = json.loads(Path(os.environ[SCENARIO_ENV]).read_text(encoding="utf-8"))
-    return answer(scenario, method, url, data)
+    """The stub's answer to one request of a guide block, from the case's
+    scenario: (status, body text, Location or None), or None for a refused
+    connection. The request is first appended to the case's request log."""
+    scenario_file = Path(os.environ[SCENARIO_ENV])
+    with scenario_file.with_name(REQUEST_LOG).open("a", encoding="utf-8") as log:
+        log.write(f"{method} {url}\n")
+    scenario = json.loads(scenario_file.read_text(encoding="utf-8"))
+    result = answer(scenario, method, url, data)
+    return None if result is None else (*result, location(scenario, url))
+
+
+def exchange(method, url, data, follow):
+    """One call of the HTTP client of a guide block: the stub's last answer, as
+    answer_from_env gives it, and the URL that gave it (None and the refused
+    URL for a refused connection). With follow, a redirect is followed as
+    requests and fetch follow one by default: the request goes to the Location,
+    a POST answered 301, 302 or 303 as a GET without its body. The stub
+    redirects only to http URLs, which it refuses, so no chain loops."""
+    while True:
+        result = answer_from_env(method, url, data)
+        if result is None or not follow or result[0] not in REDIRECT_STATUSES or not result[2]:
+            return result, url
+        if method == "POST" and result[0] in (301, 302, 303):
+            method, data = "GET", ""
+        url = urllib.parse.urljoin(url, result[2])
+
+
+def requests_not_https(work):
+    """The requests a case run in work sent to a URL that is not https, as the
+    "METHOD URL" lines of its request log."""
+    log = work / REQUEST_LOG
+    sent = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return [line for line in sent if urllib.parse.urlsplit(line.partition(" ")[2]).scheme != "https"]
 
 
 # --- Stubs for curl, requests and fetch -------------------------------------
@@ -333,7 +394,7 @@ def curl_main(argv):
         if write_out:
             sys.stdout.write(expand_write_out(write_out, 0))
         return curl_error(7, f"Failed to connect to {urllib.parse.urlsplit(url).netloc}", silent)
-    status, text = result
+    status, text = result[:2]  # without -L, which the stub refuses, curl follows no redirect
     if fail and status >= 400:
         return curl_error(22, f"The requested URL returned error: {status}", silent)
     if out:
@@ -380,11 +441,13 @@ class HTTPError(RequestException):
 
 
 class Response:
-    def __init__(self, url, status, text):
+    def __init__(self, url, status, text, location=None):
         self.url = url
         self.status_code = status
         self.text = text
         self.ok = status < 400
+        self.headers = {{"Location": location}} if location else {{}}
+        self.is_redirect = bool(location) and status in _guides.REDIRECT_STATUSES
 
     def json(self):
         return _json.loads(self.text)
@@ -394,11 +457,12 @@ class Response:
             raise HTTPError(f"{{self.status_code}} Error for url: {{self.url}}")
 
 
-def request(method, url, params=None, json=None, data=None, headers=None, timeout=None):
+def request(method, url, params=None, json=None, data=None, headers=None, timeout=None,
+            allow_redirects=True):
     if params:
         url += ("&" if "?" in url else "?") + _parse.urlencode(params)
     body = _json.dumps(json) if json is not None else (data or "")
-    result = _guides.answer_from_env(method, url, body)
+    result, url = _guides.exchange(method, url, body, follow=allow_redirects)
     if result is None:
         raise ConnectionError(f"connection refused: {{url}}")
     return Response(url, *result)
@@ -416,28 +480,36 @@ FETCH_STUB = '''import {{ execFileSync }} from "node:child_process";
 
 globalThis.fetch = async (input, init = {{}}) => {{
   const method = (init.method || "GET").toUpperCase();
-  const out = execFileSync({python}, [{script}, "--answer", method, String(input)], {{
+  const redirect = init.redirect || "follow";
+  const out = execFileSync({python}, [{script}, "--answer", method, String(input), redirect], {{
     input: init.body ?? "",
   }});
   const result = JSON.parse(out.toString());
   if (result.refused) {{
-    throw new TypeError(`fetch failed: connection refused: ${{input}}`);
+    throw new TypeError(`fetch failed: connection refused: ${{result.url}}`);
   }}
-  return new Response(result.body, {{
-    status: result.status,
-    headers: {{ "Content-Type": "application/json" }},
-  }});
+  if (result.unexpectedRedirect) {{
+    // What Node.js fetch throws for a redirect under redirect: "error"
+    throw new TypeError("fetch failed", {{ cause: new Error("unexpected redirect") }});
+  }}
+  const headers = {{ "Content-Type": "application/json" }};
+  if (result.location) headers.Location = result.location;
+  return new Response(result.body, {{ status: result.status, headers }});
 }};
 '''
 
 
 def answer_main(argv):
-    method, url = argv
-    result = answer_from_env(method, url, sys.stdin.read())
+    """The fetch stub's call: the method, URL and redirect mode of a fetch, its
+    body on stdin."""
+    method, url, mode = argv
+    result, url = exchange(method, url, sys.stdin.read(), follow=mode == "follow")
     if result is None:
-        print(json.dumps({"refused": True}))
+        print(json.dumps({"refused": True, "url": url}))
+    elif mode == "error" and result[0] in REDIRECT_STATUSES and result[2]:
+        print(json.dumps({"unexpectedRedirect": True}))
     else:
-        print(json.dumps({"status": result[0], "body": result[1]}))
+        print(json.dumps({"status": result[0], "body": result[1], "location": result[2]}))
     return 0
 
 
@@ -515,8 +587,24 @@ MCP_DRIVER = (
     "try {\n"
     "  await connectToServer(" + json.dumps(FS) + ', "https://mcp.example.com");\n'
     "} catch (error) {\n"
-    "  console.log(`refused: ${error.message}`);\n"
+    "  const cause = error.cause ? ` (${error.cause.message})` : '';\n"
+    "  console.log(`refused: ${error.message}${cause}`);\n"
     "}\n"
+)
+DELEGATE_DRIVER = (
+    "import requests\n\n"
+    "try:\n"
+    "    delegate_task('https://weather.example.com', {'text': 'forecast'}, {})\n"
+    "except requests.HTTPError as error:\n"
+    "    print('delegation refused:', error)\n"
+)
+REFRESH_REDIRECT_DRIVER = (
+    "def update_agent_card_proof(new_proof):\n"
+    "    print('stored', new_proof)\n\n\n"
+    "try:\n"
+    f"    refresh_proof_periodically({FS!r})\n"
+    "except requests.HTTPError as error:\n"
+    "    print('refresh failed:', error)\n"
 )
 
 
@@ -616,6 +704,12 @@ CASES = [
     Case("mcp typescript: expired proof refuses", MCP_TS, 0,
          ("Connection refused: Trust proof expired",),
          lambda b: {"proofs": {FS: proof(expired=True)}}),
+    Case("mcp python: a redirect is not followed", MCP_PY, 1,
+         ("HTTPError", "ATP authority redirects to http://api.oa2a.org/api/v1/trust/proof?did="),
+         lambda b: {"proofs": {FS: proof()}, "redirect": [PROOF_URL]}),
+    Case("mcp typescript: a redirect is not followed", MCP_TS, 1,
+         ("fetch failed", "unexpected redirect"),
+         lambda b: {"proofs": {FS: proof()}, "redirect": [PROOF_URL]}),
     Case("mcp batch: answers matched by DID, missing server refused", MCP_BATCH, 0,
          ("@modelcontextprotocol/server-filesystem: OK (level 3)",
           "@modelcontextprotocol/server-github: OK (level 2)",
@@ -623,6 +717,9 @@ CASES = [
          lambda b: {"batch": [batch_result(GH, 2, "listed"), batch_result(FS, 3, "passed")]}),
     Case("mcp batch: authority rejecting the request raises", MCP_BATCH, 1,
          ("HTTPError", "400")),
+    Case("mcp batch: a redirect is not followed", MCP_BATCH, 1,
+         ("HTTPError", "ATP authority redirects to http://api.oa2a.org/api/v1/trust/batch"),
+         lambda b: {"redirect": [BATCH_URL]}),
     Case("mcp tool gating: an unread level allows no tool", TOOLS, 0, ("True False False",),
          driver='print(can_use_tool("read_file", 2), can_use_tool("write_file", 2),'
                 ' can_use_tool("read_file", None))\n'),
@@ -646,7 +743,18 @@ CASES = [
     Case("a2a python: a card without atp.did is not trusted", A2A_PY, 0,
          ("Agent not trusted: Trust proof is not about the agent the card names",),
          lambda b: {"cards": {CARD_URL: card(b, without_did=True)}}, reads=(CARD,)),
+    Case("a2a python: a redirect of the card request is not followed", A2A_PY, 1,
+         ("HTTPError",
+          "Agent card URL redirects to http://weather.example.com/.well-known/agent-card.json"),
+         lambda b: {"cards": {CARD_URL: card(b)}, "redirect": [CARD_URL]}, reads=(CARD,)),
+    Case("a2a python: a redirect of the verify request is not followed", A2A_PY, 0,
+         ("Agent not trusted: Verifier redirects to http://api.oa2a.org/api/v1/trust/verify",),
+         lambda b: {"cards": {CARD_URL: card(b)}, "redirect": [VERIFY_URL]}, reads=(CARD,)),
     Case("a2a python: delegate_task defines cleanly", DELEGATE, 0),
+    Case("a2a python: delegate_task does not follow a redirect", DELEGATE, 0,
+         ("delegation refused: https://weather.example.com redirects to "
+          "http://weather.example.com/tasks/send",),
+         lambda b: {"redirect": [TASKS_URL]}, driver=DELEGATE_DRIVER),
     Case("a2a typescript: the guide's card is trusted", A2A_TS, 0,
          ("Trusted: level 3, score 0.82",),
          lambda b: {"cards": {CARD_URL: card(b)}}, reads=(CARD,)),
@@ -666,6 +774,12 @@ CASES = [
     Case("a2a typescript: a card without atp.did is not trusted", A2A_TS, 0,
          ("Not trusted: Trust proof is not about the agent the card names",),
          lambda b: {"cards": {CARD_URL: card(b, without_did=True)}}, reads=(CARD,)),
+    Case("a2a typescript: a redirect of the card request is not followed", A2A_TS, 1,
+         ("fetch failed", "unexpected redirect"),
+         lambda b: {"cards": {CARD_URL: card(b)}, "redirect": [CARD_URL]}, reads=(CARD,)),
+    Case("a2a typescript: a redirect of the verify request is not followed", A2A_TS, 1,
+         ("fetch failed", "unexpected redirect"),
+         lambda b: {"cards": {CARD_URL: card(b)}, "redirect": [VERIFY_URL]}, reads=(CARD,)),
     Case("a2a curl: the card's proof verifies", A2A_CURL, 0, ('"valid": true',),
          lambda b: {"cards": {CARD_URL: card(b)}}, reads=(CARD,)),
     Case("a2a refresh: the stored proof is what verify accepts", REFRESH, 0, ("valid True",),
@@ -679,6 +793,10 @@ CASES = [
              " json=CARD['trustProof'], timeout=10).json()\n"
              "print('valid', check.get('valid'), check.get('error', ''))\n"
          )),
+    Case("a2a refresh: a redirect is not followed", REFRESH, 0,
+         ("refresh failed: ATP authority redirects to http://api.oa2a.org/api/v1/trust/proof?did=",),
+         lambda b: {"proofs": {FS: proof()}, "redirect": [PROOF_URL]},
+         driver=REFRESH_REDIRECT_DRIVER),
     # ATP-SPEC.md Appendix B
     Case("spec b.1: level 3 peer is accepted", SPEC_PEER, 0, ("task accepted",),
          lambda b: {"proofs": {REQUESTER: at(3, did=REQUESTER)}}, driver=PEER_DRIVER),
@@ -701,6 +819,14 @@ CASES = [
          driver=PEER_DRIVER),
     Case("spec b.1: unknown peer is rejected", SPEC_PEER, 0,
          ("task rejected: Trust proof verification failed",), driver=PEER_DRIVER),
+    Case("spec b.1: a redirect of the proof request is not followed", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",),
+         lambda b: {"proofs": {REQUESTER: at(3, did=REQUESTER)}, "redirect": [PROOF_URL]},
+         driver=PEER_DRIVER),
+    Case("spec b.1: a redirect of the verify request is not followed", SPEC_PEER, 0,
+         ("task rejected: Trust proof verification failed",),
+         lambda b: {"proofs": {REQUESTER: at(3, did=REQUESTER)}, "redirect": [VERIFY_URL]},
+         driver=PEER_DRIVER),
     Case("spec b.2: listed server connects", SPEC_MCP, 0,
          ("connected to https://mcp.example.com",),
          lambda b: {"proofs": {FS: proof()}}, driver=MCP_DRIVER),
@@ -717,6 +843,12 @@ CASES = [
          lambda b: {"proofs": {FS: proof(trustLevel=None)}}, driver=MCP_DRIVER),
     Case("spec b.2: unknown server is refused", SPEC_MCP, 0,
          ("refused: MCP server trust proof invalid",), driver=MCP_DRIVER),
+    Case("spec b.2: a redirect of the proof request is not followed", SPEC_MCP, 0,
+         ("refused: fetch failed (unexpected redirect)",),
+         lambda b: {"proofs": {FS: proof()}, "redirect": [PROOF_URL]}, driver=MCP_DRIVER),
+    Case("spec b.2: a redirect of the verify request is not followed", SPEC_MCP, 0,
+         ("refused: fetch failed (unexpected redirect)",),
+         lambda b: {"proofs": {FS: proof()}, "redirect": [VERIFY_URL]}, driver=MCP_DRIVER),
 ]
 
 
@@ -787,6 +919,10 @@ def run_case(case, blocks, root, node):
     if run.returncode != case.expect_code:
         errors.append(f"exit {run.returncode}, expected {case.expect_code}")
     errors += [f"output lacks {text!r}" for text in case.expect if text not in output]
+    errors += [
+        f"sent {line}, a request to a URL that is not https (ATP-SPEC Section 7.1)"
+        for line in requests_not_https(work)
+    ]
     if case.expect_json:
         expected = json.loads(blocks.get(case.expect_json).body)
         printed = parse_json(run.stdout)

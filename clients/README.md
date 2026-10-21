@@ -46,6 +46,15 @@ The verify functions make no request:
 Each returns a `VerifyResult`: `valid`, and for a rejection a `category` (`PARSE_ERROR`,
 `EXPIRED`, `UNTRUSTED_ISSUER`, `SIGNATURE_INVALID`, `SEMANTIC_INVALID` or `PROOF_INVALID`) and
 a `reason` naming the member or step. `canonical_string(proof)` returns the Section 4.3 string.
+Text the reason takes from the input, such as a DID, a `keyId` or a `verdict`, is unchanged
+when it is printable ASCII without a space, a quote or a backslash, and in JSON string form
+otherwise, so a control character in it is escaped. An `endpoints` member name is written
+`endpoints.name` when it is an identifier (ASCII letters, digits and `_`, not starting with a
+digit) and `endpoints["name"]` otherwise: for `"endpoints": {"x\ny": "z"}` the reason is
+`endpoints["x\ny"] does not start with /`.
+A `did`, `verdict` or `issuerDid` that holds a lone surrogate, which `json.loads` reads from
+an escape such as `\ud800`, has no UTF-8 encoding to sign: `verify_trust_proof` rejects it
+with `PARSE_ERROR` and `canonical_string` raises `ValueError`.
 
 Not checked: Sigstore co-signatures (Section 4.3.1), so a proof carrying one is rejected as
 step 4 requires of a verifier that does not implement that section; and the issuer key set
@@ -94,8 +103,9 @@ list (step 3).
 ## TypeScript
 
 The package, `@opena2a/atp-client`, declares Node.js 22 or later (its tests were run on
-26.12.0) and has no runtime dependencies: it uses the `crypto` module and `fetch` of Node.js.
-ML-DSA-65 signatures need a Node.js whose `crypto` module has ML-DSA-65 keys, as 26.12.0 has.
+22.23.3, 24.13.1 and 26.12.0) and has no runtime dependencies: it uses the `crypto` module
+and `fetch` of Node.js. ML-DSA-65 signatures need a Node.js whose `crypto` module has
+ML-DSA-65 keys, as 26.12.0 has.
 `npm ci` installs the build's two dev dependencies, `typescript` and `@types/node`, at the
 versions `package-lock.json` pins:
 
@@ -126,9 +136,9 @@ unchecked and return a `VerifyResult` whose `category` is `null` for a valid inp
 a `Date` or an RFC 3339 string, and
 `new AtpClient(url, { discovery, timeoutMs })` takes a stored discovery document and a
 request timeout in milliseconds (10000 when absent). Where the Python client raises
-`ValueError`, this one throws a `TypeError`; an `AtpError` carries `status`, `null` when the
-authority gave no HTTP status. One check is its own: a `did`, `verdict` or `issuerDid` that
-holds a lone surrogate, which UTF-8 cannot encode, is a `PARSE_ERROR`.
+`ValueError`, this one throws a `TypeError`: `getTrustProof` throws one for a `did` that holds
+a lone surrogate, before it sends a request. An `AtpError` carries `status`, `null` when the
+authority gave no HTTP status.
 
 Not checked by this client, though the Python client checks them: Section 4.4 step 7, since
 `verifyTrustProof` has no counterpart of `second_authorities` and so never applies it; and
@@ -160,7 +170,9 @@ npm test
 ```
 
 `npm test` builds `src/` and `test/` into `dist/` and runs `dist/test/atp-client.test.js`
-with the Node.js test runner.
+with the Node.js test runner. On a Node.js that cannot generate ML-DSA-65 keys, as 22.23.3
+cannot, it skips the one test that generates them and prints why; the fixture tests still
+verify the hybrid fixture's ML-DSA-65 signature there.
 
 To take a new fixture set, copy `fixtures/*.json` and `MANIFEST.sha256` from that repository
 and update the commit above.

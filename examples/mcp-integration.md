@@ -16,6 +16,8 @@ The proof endpoint answers an envelope, `{"proof": {...}, "algorithm": ..., "pub
 
 The Python samples need Python 3.11 or later: `datetime.fromisoformat` reads the authority's nanosecond timestamps from 3.11 on.
 
+No sample follows a redirect. [ATP-SPEC Section 7.1](../ATP-SPEC.md#71-well-known-endpoint) forbids a client to follow a redirect to a URL that is not `https`, and `requests` and `fetch` follow redirects by default, so the Python samples pass `allow_redirects=False` and raise `requests.HTTPError` on a redirect answer, and the TypeScript sample passes `redirect: "error"`, under which `fetch` rejects a redirect. The cURL command passes no `-L`, so curl follows no redirect.
+
 ---
 
 ## Quick Check: cURL
@@ -64,12 +66,15 @@ def check_mcp_trust(server_name: str, min_level: int = 2) -> dict:
         "https://api.oa2a.org/api/v1/trust/proof",
         params={"did": did},
         timeout=10,
+        allow_redirects=False,
     )
 
     if resp.status_code == 404:
         return {"allowed": False, "trustLevel": None, "reason": "Server not found in registry"}
 
     resp.raise_for_status()
+    if resp.is_redirect:
+        raise requests.HTTPError(f"ATP authority redirects to {resp.headers['Location']}")
     # The trust fields sit under "proof", not at the top level of the response
     proof = resp.json().get("proof") or {}
 
@@ -131,7 +136,7 @@ async function checkMcpTrust(
   const did = `did:opena2a:mcp_server:${serverName}`;
   const url = `https://api.oa2a.org/api/v1/trust/proof?did=${encodeURIComponent(did)}`;
 
-  const resp = await fetch(url);
+  const resp = await fetch(url, { redirect: "error" });
 
   if (resp.status === 404) {
     return { allowed: false, trustLevel: null, reason: "Server not found in registry" };
@@ -205,8 +210,11 @@ def check_mcp_servers_batch(server_names: list[str], min_level: int = 2) -> dict
         "https://api.oa2a.org/api/v1/trust/batch",
         json={"agents": [{"did": did} for did in dids.values()]},
         timeout=15,
+        allow_redirects=False,
     )
     resp.raise_for_status()
+    if resp.is_redirect:
+        raise requests.HTTPError(f"ATP authority redirects to {resp.headers['Location']}")
 
     # Match answers by DID, not by position
     answers = {answer.get("did"): answer for answer in resp.json().get("results", [])}

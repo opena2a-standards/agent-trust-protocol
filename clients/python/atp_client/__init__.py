@@ -74,12 +74,22 @@ _WIRE_HASH = re.compile(r"SHA256:([0-9a-f]{64})")
 # What Section 7.1 bars from an endpoints value: "#", whitespace (str.isspace)
 # and control characters (Unicode category Cc, U+0000 to U+001F and U+007F to U+009F).
 _NOT_IN_ENDPOINT = re.compile(r"[#\s\x00-\x1f\x7f-\x9f]")
+# Text a reason shows unchanged: printable ASCII other than a space, a quote and
+# a backslash, so it cannot be taken for text in JSON string form, which starts
+# with a quote.
+_PLAIN = re.compile(r"[\x21\x23-\x5b\x5d-\x7e]+")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass(frozen=True)
 class VerifyResult:
     """valid is True when every check passed. Otherwise category is one of
-    CATEGORIES and reason says which member or step failed."""
+    CATEGORIES and reason says which member or step failed. Text that reason
+    takes from the input, such as a DID, a keyId or a verdict, is unchanged
+    when it is printable ASCII without a space, a quote or a backslash, and
+    in JSON string form otherwise, so a control character in it is escaped.
+    An endpoints member name is written endpoints.name when it is an
+    identifier and endpoints["name"] otherwise."""
 
     valid: bool
     category: str | None = None
@@ -110,6 +120,21 @@ def _outcome(check: Callable[[], None]) -> VerifyResult:
     except _Reject as rejection:
         return VerifyResult(False, rejection.category, rejection.reason)
     return VerifyResult(True)
+
+
+def _shown(text: str) -> str:
+    """text, taken from the input under verification, as a reason shows it:
+    unchanged when _PLAIN matches it, otherwise in JSON string form with
+    every character outside printable ASCII escaped. Either way the result
+    is printable ASCII."""
+    return text if _PLAIN.fullmatch(text) else json.dumps(text)
+
+
+def _member(parent: str, name: Any) -> str:
+    """How a reason names member name of parent: parent.name when name is an
+    identifier, otherwise parent["name"] with name in JSON string form."""
+    name = name if isinstance(name, str) else str(name)
+    return f"{parent}.{name}" if _IDENTIFIER.fullmatch(name) else f"{parent}[{json.dumps(name)}]"
 
 
 # Wire values
@@ -276,12 +301,26 @@ class _Proof:
         )
 
 
+def _text(proof: dict[str, Any], name: str) -> str:
+    """A string member that enters the canonical string. json.loads reads the
+    escape \\ud800 as a lone surrogate, which UTF-8 cannot encode, so a member
+    that holds one has no canonical bytes for a signature to cover."""
+    value = proof.get(name)
+    if not isinstance(value, str):
+        raise _Reject("PARSE_ERROR", f"{name} is missing or not a string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _Reject("PARSE_ERROR", f"{name} holds a lone surrogate, which UTF-8 cannot encode") from None
+    return value
+
+
 def _parse_proof(proof: Any) -> _Proof:
     if not isinstance(proof, dict):
         raise _Reject("PARSE_ERROR", "the trust proof is not a JSON object")
-    for name in ("did", "verdict", "issuerDid"):
-        if not isinstance(proof.get(name), str):
-            raise _Reject("PARSE_ERROR", f"{name} is missing or not a string")
+    did = _text(proof, "did")
+    verdict = _text(proof, "verdict")
+    issuer = _text(proof, "issuerDid")
     level = _integer(proof.get("trustLevel"), "trustLevel")
     score = proof.get("trustScore")
     if type(score) not in (int, float):
@@ -294,7 +333,7 @@ def _parse_proof(proof: Any) -> _Proof:
         raise _Reject("PARSE_ERROR", "trustScore is not a finite number")
     issued = _instant(proof.get("issuedAt"), "issuedAt")
     expires = _instant(proof.get("expiresAt"), "expiresAt")
-    return _Proof(proof["did"], level, score, proof["verdict"], issued, expires, proof["issuerDid"])
+    return _Proof(did, level, score, verdict, issued, expires, issuer)
 
 
 def _signature_entries(proof: dict[str, Any]) -> list[dict[str, Any]]:
@@ -368,10 +407,10 @@ def _check_trust_proof(
         _integer(proof["transparencyLogIndex"], "transparencyLogIndex", minimum=0)
 
     if parsed.expires <= clock:
-        raise _Reject("EXPIRED", f"the trust proof expired at {proof['expiresAt']}")
+        raise _Reject("EXPIRED", f"the trust proof expired at {_shown(proof['expiresAt'])}")
 
     if parsed.issuer not in trusted:
-        raise _Reject("UNTRUSTED_ISSUER", f"issuerDid {parsed.issuer} is not a trusted issuer")
+        raise _Reject("UNTRUSTED_ISSUER", f"issuerDid {_shown(parsed.issuer)} is not a trusted issuer")
 
     resolved = []
     for index, entry in enumerate(signatures):
@@ -382,7 +421,9 @@ def _check_trust_proof(
                 f"signatures[{index}] is a Sigstore co-signature (Section 4.3.1), which this client does not verify",
             )
         if algorithm not in KEY_SIZES:
-            raise _Reject("SIGNATURE_INVALID", f"signatures[{index}] has algorithm {algorithm}, not Ed25519 or ML-DSA-65")
+            raise _Reject(
+                "SIGNATURE_INVALID", f"signatures[{index}] has algorithm {_shown(algorithm)}, not Ed25519 or ML-DSA-65"
+            )
         # A second authority's keys come from the verifier, never from the
         # issuer, so a keyId naming one resolves among its keys alone (step 7).
         key_did = entry["keyId"].partition("#")[0]
@@ -391,7 +432,7 @@ def _check_trust_proof(
         if public is None:
             raise _Reject(
                 "SIGNATURE_INVALID",
-                f"signatures[{index}] keyId {entry['keyId']} does not resolve to a non-revoked {algorithm} key",
+                f"signatures[{index}] keyId {_shown(entry['keyId'])} does not resolve to a non-revoked {algorithm} key",
             )
         resolved.append((index, entry, public, authority))
 
@@ -401,21 +442,23 @@ def _check_trust_proof(
     for index, entry, public, authority in resolved:
         signature = _base64(entry.get("value"), f"signatures[{index}].value", "SIGNATURE_INVALID")
         if not _signature_valid(entry["algorithm"], public, signature, message):
-            raise _Reject("SIGNATURE_INVALID", f"the {entry['algorithm']} signature of {entry['keyId']} did not verify")
+            raise _Reject(
+                "SIGNATURE_INVALID", f"the {entry['algorithm']} signature of {_shown(entry['keyId'])} did not verify"
+            )
         key_did, _, fragment = entry["keyId"].partition("#")
         if entry["algorithm"] == "Ed25519" and fragment and key_did == parsed.issuer:
             issuer_signed = True
         elif entry["algorithm"] == "Ed25519" and fragment and authority is not None:
             second_signers.add(authority)
     if not issuer_signed:
-        raise _Reject("SIGNATURE_INVALID", f"no Ed25519 signature by a key of {parsed.issuer} verified")
+        raise _Reject("SIGNATURE_INVALID", f"no Ed25519 signature by a key of {_shown(parsed.issuer)} verified")
 
     if not 0 <= parsed.level <= 4:
         raise _Reject("SEMANTIC_INVALID", f"trustLevel {parsed.level} is outside 0 to 4")
     if not 0.0 <= parsed.score <= 1.0:
         raise _Reject("SEMANTIC_INVALID", f"trustScore {parsed.score} is outside 0.0 to 1.0")
     if parsed.verdict not in VERDICTS:
-        raise _Reject("SEMANTIC_INVALID", f"verdict {parsed.verdict} is not one of {', '.join(VERDICTS)}")
+        raise _Reject("SEMANTIC_INVALID", f"verdict {_shown(parsed.verdict)} is not one of {', '.join(VERDICTS)}")
     if parsed.issued >= parsed.expires:
         raise _Reject("SEMANTIC_INVALID", "issuedAt is not before expiresAt")
     if parsed.expires - parsed.issued > MAX_VALIDITY_MICROSECONDS:
@@ -427,7 +470,7 @@ def _check_trust_proof(
         raise _Reject(
             "SIGNATURE_INVALID",
             f"no Ed25519 signature by a second authority verified (step 7): trustLevel {parsed.level} "
-            f"needs one by an authority of second_authorities other than {parsed.issuer}",
+            f"needs one by an authority of second_authorities other than {_shown(parsed.issuer)}",
         )
     # Two authorities are distinct only when no public key is a key of both.
     issuer_keys = _public_keys(
@@ -439,8 +482,9 @@ def _check_trust_proof(
     )
     sharing = sorted(did for did in second_signers if _public_keys(second[did]) & issuer_keys)
     if len(sharing) == len(second_signers):
-        detail = "; ".join(f"{did} shares a public key with {parsed.issuer}" for did in sharing)
-        raise _Reject("SIGNATURE_INVALID", f"no second authority distinct from {parsed.issuer} signed (step 7): {detail}")
+        issuer = _shown(parsed.issuer)
+        detail = "; ".join(f"{_shown(did)} shares a public key with {issuer}" for did in sharing)
+        raise _Reject("SIGNATURE_INVALID", f"no second authority distinct from {issuer} signed (step 7): {detail}")
 
 
 # Discovery (Section 7.1)
@@ -473,13 +517,14 @@ def _check_discovery(discovery: Any, trusted: set[str] | None) -> None:
     if not isinstance(endpoints, dict) or not endpoints:
         raise _Reject("PARSE_ERROR", "endpoints is missing, empty or not a JSON object")
     for name, path in endpoints.items():
+        member = _member("endpoints", name)
         # A client appends the value to the authority URL (Section 7.1).
         if not isinstance(path, str):
-            raise _Reject("PARSE_ERROR", f"endpoints.{name} is not a string")
+            raise _Reject("PARSE_ERROR", f"{member} is not a string")
         if not path.startswith("/"):
-            raise _Reject("PARSE_ERROR", f"endpoints.{name} does not start with /")
+            raise _Reject("PARSE_ERROR", f"{member} does not start with /")
         if _NOT_IN_ENDPOINT.search(path):
-            raise _Reject("PARSE_ERROR", f"endpoints.{name} holds #, whitespace or a control character")
+            raise _Reject("PARSE_ERROR", f"{member} holds #, whitespace or a control character")
     keys = discovery.get("publicKeys")
     if not isinstance(keys, list) or not keys:
         raise _Reject("PARSE_ERROR", "publicKeys is missing or empty")
@@ -491,7 +536,8 @@ def _check_discovery(discovery: Any, trusted: set[str] | None) -> None:
         if not isinstance(key_id, str) or not key_id.startswith("did:") or "#" not in key_id:
             raise _Reject("PARSE_ERROR", f"{name}.keyId is not a DID with a fragment")
         algorithm = key.get("algorithm")
-        if algorithm not in KEY_SIZES:
+        # A JSON array or object cannot be looked up in KEY_SIZES, a dict.
+        if not isinstance(algorithm, str) or algorithm not in KEY_SIZES:
             raise _Reject("PARSE_ERROR", f"{name}.algorithm is not Ed25519 or ML-DSA-65")
         raw = key.get("publicKeyHex")
         if not isinstance(raw, str) or len(raw) != 2 * KEY_SIZES[algorithm] or not _HEX.fullmatch(raw):
@@ -500,7 +546,7 @@ def _check_discovery(discovery: Any, trusted: set[str] | None) -> None:
             raise _Reject("PARSE_ERROR", f"{name}.status is not active, retired or revoked")
         _instant(key.get("validFrom"), f"{name}.validFrom")
     if trusted is not None and authority not in trusted:
-        raise _Reject("UNTRUSTED_ISSUER", f"authorityDid {authority} is not a trusted issuer")
+        raise _Reject("UNTRUSTED_ISSUER", f"authorityDid {_shown(authority)} is not a trusted issuer")
     # Section 4.4 step 4 requires a proof to meet a declared set, and no proof
     # meets a set that breaks Section 7.1.1; not counting sets, the client
     # refuses every one, whatever it holds.
@@ -587,7 +633,9 @@ def _check_tree_head(name: str, root: bytes, signed_by: str, signature: Any, key
     key signedBy resolves to."""
     public = _key_bytes(keys, signed_by, "Ed25519")
     if public is None:
-        raise _Reject("SIGNATURE_INVALID", f"{name}.signedBy {signed_by} does not resolve to a non-revoked Ed25519 key")
+        raise _Reject(
+            "SIGNATURE_INVALID", f"{name}.signedBy {_shown(signed_by)} does not resolve to a non-revoked Ed25519 key"
+        )
     if not _signature_valid("Ed25519", public, _base64(signature, f"{name}.signature", "SIGNATURE_INVALID"), root):
         raise _Reject("SIGNATURE_INVALID", f"the {name} signature did not verify")
 
