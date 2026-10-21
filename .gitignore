@@ -1,5 +1,9 @@
 __pycache__/
 
+# What pip writes into clients/python when it builds the package there.
+clients/python/build/
+clients/python/*.egg-info/
+
 # Local credential files, so one is never committed by accident.
 .env
 .env.*

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opena2a-atp-client"
+version = "0.1.0"
+description = "Fetch Agent Trust Protocol trust proofs and verify them offline"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = ["cryptography>=48"]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Specification = "https://github.com/opena2a-org/agent-trust-protocol/blob/main/ATP-SPEC.md"
+
+[tool.setuptools]
+packages = ["atp_client"]
+
+[tool.setuptools.package-data]
+atp_client = ["py.typed"]
