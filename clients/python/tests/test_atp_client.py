@@ -3,7 +3,9 @@
 Every conformance fixture in clients/fixtures must get the verdict and reject
 category its expected block pins. The other tests sign proofs, tree heads and
 trees with keys generated here and check each Section 4.4 step, the RFC 9162
-proof algorithms and the client's requests against a local server.
+proof algorithms and the client's requests against a local server. Step 7 is
+also checked on the Section 4.4.1 proof of ATP-SPEC.md, with the keys of its
+table.
 
 Run from clients/python, with the package installed:
     python -m unittest discover -s tests
@@ -27,13 +29,30 @@ from cryptography.hazmat.primitives.asymmetric.mldsa import MLDSA65PrivateKey
 import atp_client as atp
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "fixtures"
+SPEC = pathlib.Path(__file__).resolve().parents[3] / "ATP-SPEC.md"
 AUTHORITY = "did:opena2a:authority:authority.example"
+COSIGNER = "did:opena2a:authority:cosigner.example"
 AGENT = "did:opena2a:agent:example-agent"
 CLOCK = "2026-05-24T00:00:00Z"
 
 
 def fixture(name: str) -> dict:
     return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def two_authority_proof() -> tuple[dict, list[dict]]:
+    """The Section 4.4.1 proof of ATP-SPEC.md, and the rows of its key table
+    as Section 7.1 publicKeys entries, in table order."""
+    text = SPEC.read_text(encoding="utf-8")
+    section = text[text.index("\n#### 4.4.1 Two-authority proof (Level 3)\n") :]
+    section = section[: section.index("\n### ")]
+    keys = []
+    for line in section.splitlines():
+        cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+        if line.startswith("|") and len(cells) == 3 and cells[1].startswith("did:"):
+            keys.append({"keyId": cells[1], "algorithm": "Ed25519", "publicKeyHex": cells[2]})
+    start = section.index("```json\n") + len("```json\n")
+    return json.loads(section[start : section.index("\n```", start)]), keys
 
 
 def run_fixture(document: dict) -> atp.VerifyResult:
@@ -296,6 +315,170 @@ class TrustProofTests(unittest.TestCase):
         for now in ("yesterday", datetime(2026, 5, 24)):
             with self.subTest(repr(now)), self.assertRaises(ValueError):
                 self.verify(proof, now=now)
+
+
+class SecondAuthorityTests(unittest.TestCase):
+    """Section 4.4 step 7, which verify_trust_proof applies when it is given
+    second_authorities: a proof at trust level 3 or 4 needs an Ed25519
+    signature by a second authority the verifier knows, one that shares no
+    public key with the issuer."""
+
+    NONE_SIGNED = "no Ed25519 signature by a second authority verified (step 7)"
+    SHARES = f"{COSIGNER} shares a public key with {AUTHORITY}"
+
+    def setUp(self):
+        self.issuer = Signer()
+        self.cosigner = Signer(COSIGNER + "#key-1")
+        self.keys = [self.issuer.key(status="active")]
+        self.second = {COSIGNER: [self.cosigner.key(status="active")]}
+
+    def verify(self, proof, keys=None, second=None, now=CLOCK):
+        return atp.verify_trust_proof(
+            proof,
+            self.keys if keys is None else keys,
+            AUTHORITY,
+            now=now,
+            second_authorities=self.second if second is None else second,
+        )
+
+    def assertRejected(self, result, category, reason):
+        self.assertFalse(result.valid, result)
+        self.assertEqual(result.category, category, result)
+        self.assertIn(reason, result.reason)
+
+    def test_a_proof_a_second_authority_co_signs_verifies_at_levels_3_and_4(self):
+        for level in (3, 4):
+            with self.subTest(level=level):
+                proof = signed_proof(self.issuer, self.cosigner, trustLevel=level)
+                self.assertEqual(self.verify(proof), atp.VerifyResult(True))
+
+    def test_a_proof_the_issuer_alone_signs_fails_step_7_at_levels_3_and_4_only(self):
+        for level in (0, 1, 2):
+            with self.subTest(level=level):
+                self.assertTrue(self.verify(signed_proof(self.issuer, trustLevel=level)).valid)
+        for level in (3, 4):
+            with self.subTest(level=level):
+                result = self.verify(signed_proof(self.issuer, trustLevel=level))
+                self.assertRejected(result, "SIGNATURE_INVALID", self.NONE_SIGNED)
+                self.assertIn(f"trustLevel {level} needs one", result.reason)
+
+    def test_without_second_authorities_step_7_is_not_checked(self):
+        self.assertTrue(atp.verify_trust_proof(signed_proof(self.issuer), self.keys, AUTHORITY, now=CLOCK).valid)
+        keys = self.keys + self.second[COSIGNER]
+        cosigned = signed_proof(self.issuer, self.cosigner)
+        self.assertTrue(atp.verify_trust_proof(cosigned, keys, AUTHORITY, now=CLOCK).valid)
+
+    def test_a_signer_outside_second_authorities_is_not_a_second_authority(self):
+        # Its key is among keys, as the issuer's discovery document could list
+        # it; step 7 counts only an authority the verifier names itself.
+        other = Signer("did:opena2a:authority:other.example#key-1")
+        result = self.verify(signed_proof(self.issuer, other), keys=self.keys + [other.key()])
+        self.assertRejected(result, "SIGNATURE_INVALID", self.NONE_SIGNED)
+        keys = self.keys + self.second[COSIGNER]
+        result = self.verify(signed_proof(self.issuer, self.cosigner), keys=keys, second={})
+        self.assertRejected(result, "SIGNATURE_INVALID", self.NONE_SIGNED)
+
+    def test_the_issuer_is_one_authority_however_many_entries_or_keys_it_signs_with(self):
+        second_key = Signer(AUTHORITY + "#key-2")
+        cases = {
+            "its entry twice": (signed_proof(self.issuer, self.issuer), self.keys, self.second),
+            "a second key of its own": (
+                signed_proof(self.issuer, second_key),
+                self.keys + [second_key.key()],
+                self.second,
+            ),
+            "named in second_authorities": (signed_proof(self.issuer, self.issuer), self.keys, {AUTHORITY: self.keys}),
+        }
+        for label, (proof, keys, second) in cases.items():
+            with self.subTest(label):
+                self.assertRejected(self.verify(proof, keys=keys, second=second), "SIGNATURE_INVALID", self.NONE_SIGNED)
+
+    def test_an_authority_that_shares_a_key_with_the_issuer_is_not_distinct(self):
+        proof = signed_proof(self.issuer, self.cosigner)
+        issuer_key, cosigner_key = self.issuer.key(), self.cosigner.key()
+        as_cosigner = {**issuer_key, "keyId": COSIGNER + "#key-2"}
+        cases = {
+            "the co-signer's key is also a key of the issuer": (
+                self.keys + [{**cosigner_key, "keyId": AUTHORITY + "#key-2"}],
+                self.second,
+            ),
+            "the issuer's key is also a key of the co-signer": (
+                self.keys,
+                {COSIGNER: self.second[COSIGNER] + [as_cosigner]},
+            ),
+            "the same key in upper-case hex": (
+                self.keys,
+                {COSIGNER: self.second[COSIGNER] + [{**as_cosigner, "publicKeyHex": as_cosigner["publicKeyHex"].upper()}]},
+            ),
+            "the same key revoked": (
+                self.keys,
+                {COSIGNER: self.second[COSIGNER] + [{**as_cosigner, "status": "revoked"}]},
+            ),
+        }
+        for label, (keys, second) in cases.items():
+            with self.subTest(label):
+                result = self.verify(proof, keys=keys, second=second)
+                self.assertRejected(result, "SIGNATURE_INVALID", f"no second authority distinct from {AUTHORITY} signed (step 7)")
+                self.assertIn(self.SHARES, result.reason)
+        # One key under two DIDs: the issuer's key signs as the co-signer too.
+        same = Signer(COSIGNER + "#key-1")
+        same.private = self.issuer.private
+        result = self.verify(signed_proof(self.issuer, same), second={COSIGNER: [same.key()]})
+        self.assertRejected(result, "SIGNATURE_INVALID", self.SHARES)
+
+    def test_a_second_authority_signature_resolves_among_its_own_keys_alone(self):
+        # The issuer lists, under the co-signer's keyId, a key it holds itself.
+        forged = Signer(COSIGNER + "#key-1")
+        result = self.verify(signed_proof(self.issuer, forged), keys=self.keys + [forged.key()])
+        self.assertRejected(result, "SIGNATURE_INVALID", f"signature of {COSIGNER}#key-1 did not verify")
+        unlisted = Signer(COSIGNER + "#key-2")
+        result = self.verify(signed_proof(self.issuer, unlisted), keys=self.keys + [unlisted.key()])
+        self.assertRejected(result, "SIGNATURE_INVALID", f"keyId {COSIGNER}#key-2 does not resolve")
+
+    def test_only_an_ed25519_signature_of_the_second_authority_counts(self):
+        issuer_pqc = Signer(AUTHORITY + "#key-1-pqc", "ML-DSA-65")
+        result = self.verify(signed_proof(self.issuer, issuer_pqc), keys=self.keys + [issuer_pqc.key()])
+        self.assertRejected(result, "SIGNATURE_INVALID", self.NONE_SIGNED)
+        cosigner_pqc = Signer(COSIGNER + "#key-1-pqc", "ML-DSA-65")
+        second = {COSIGNER: [self.cosigner.key(), cosigner_pqc.key()]}
+        result = self.verify(signed_proof(self.issuer, cosigner_pqc), second=second)
+        self.assertRejected(result, "SIGNATURE_INVALID", self.NONE_SIGNED)
+        self.assertTrue(self.verify(signed_proof(self.issuer, self.cosigner, cosigner_pqc), second=second).valid)
+
+    def test_a_second_authority_entry_is_held_to_steps_3_and_4(self):
+        proof = signed_proof(self.issuer, self.cosigner)
+        proof["signatures"][1]["value"] = flip_first_byte(proof["signatures"][1]["value"])
+        self.assertRejected(self.verify(proof), "SIGNATURE_INVALID", "did not verify")
+        revoked = {COSIGNER: [self.cosigner.key(status="revoked")]}
+        result = self.verify(signed_proof(self.issuer, self.cosigner), second=revoked)
+        self.assertRejected(result, "SIGNATURE_INVALID", "does not resolve")
+
+    def test_atp_client_verify_checks_against_one_authority(self):
+        key = self.issuer.key(status="active", validFrom="2026-01-01T00:00:00Z")
+        discovery = {"authorityDid": AUTHORITY, "version": "1.0", "endpoints": {"trustProof": "/t"}, "publicKeys": [key]}
+        client = atp.AtpClient("https://authority.example", discovery=discovery)
+        self.assertTrue(client.verify(signed_proof(self.issuer), now=CLOCK).valid)
+        result = client.verify(signed_proof(self.issuer, self.cosigner), now=CLOCK)
+        self.assertRejected(result, "SIGNATURE_INVALID", f"keyId {COSIGNER}#key-1 does not resolve")
+
+    def test_steps_1_to_5_come_before_step_7(self):
+        self.assertRejected(self.verify(signed_proof(self.issuer), now="2026-05-24T06:00:00Z"), "EXPIRED", "expired")
+        longer = signed_proof(self.issuer, issuedAt="2026-05-23T05:59:59Z")
+        self.assertRejected(self.verify(longer), "SEMANTIC_INVALID", "longer than 24 hours")
+
+    def test_the_section_4_4_1_proof_passes_step_7_under_the_keys_of_its_table(self):
+        proof, (issuer_key, cosigner_key) = two_authority_proof()
+        issuer = proof["issuerDid"]
+        second = {cosigner_key["keyId"].partition("#")[0]: [cosigner_key]}
+        result = atp.verify_trust_proof(proof, [issuer_key], issuer, now=CLOCK, second_authorities=second)
+        self.assertEqual(result, atp.VerifyResult(True))
+        # Without the co-signer's entry it is the baseline fixture's proof, which
+        # the suite pins ACCEPT for a verifier that does not apply step 7.
+        alone = {**proof, "signatures": proof["signatures"][:1]}
+        self.assertEqual(alone, fixture("trust-proof-baseline")["trustProof"])
+        self.assertTrue(atp.verify_trust_proof(alone, [issuer_key], issuer, now=CLOCK).valid)
+        result = atp.verify_trust_proof(alone, [issuer_key], issuer, now=CLOCK, second_authorities=second)
+        self.assertRejected(result, "SIGNATURE_INVALID", self.NONE_SIGNED)
 
 
 class Tree:

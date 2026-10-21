@@ -8,6 +8,22 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- `clients/python`: `verify_trust_proof` applies Section 4.4 step 7 (conformance Level 3)
+  when it is given `second_authorities`, which maps the DID of each authority the verifier
+  knows as a second authority to that authority's Section 7.1 `publicKeys` entries. A
+  signature whose `keyId` names one of those DIDs resolves only among that authority's
+  entries, so a key the issuer lists under the co-signer's `keyId` does not verify the
+  co-signer's entry. A proof at trust level 3 or 4 is then rejected with `SIGNATURE_INVALID`
+  unless an Ed25519 signature verified under a key of one of those authorities, and that
+  authority shares no public key with the issuer's entries in `keys`. Without
+  `second_authorities` step 7 is not checked, as before, and the 14 fixture copies keep their
+  pinned verdicts. The tests cover a proof two authorities sign at trust levels 3 and 4, the
+  issuer's entry twice, a second key of the issuer, a signer outside the mapping, a key shared
+  with the issuer (also in upper-case hex, and revoked), a forged and an unlisted co-signer
+  key, ML-DSA-65 entries, `AtpClient.verify` with one authority's discovery document, and the
+  Section 4.4.1 proof under the keys of its table, which fails step 7 without the co-signer's
+  entry. `clients/README.md` documents the parameter. A second authority deployed under its
+  own keys, and a proof it co-signs pinned in the atp-conformance suite, are not yet done.
 - `clients/python`: a Python client, installed with `pip install ./clients/python` (not
   published). `AtpClient` fetches the discovery document (falling back to
   `/.well-known/opena2a` on 404) and a trust proof (unwrapped from `proof`, refused when it is
@@ -212,6 +228,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 4.4 step 7 names its reject category: a proof that fails the step is rejected with
+  `SIGNATURE_INVALID`, the category of the step 4 rejections. Step 7 named no category.
+  Section 4.4.1 names the Python client's step 7 check beside `scripts/validate_examples.py`.
 - Section 4.4 step 7: the two-authority rule says when two signatures come from distinct
   authorities. They are two Ed25519 entries that verify in step 4, one under a key of
   `issuerDid` and one under a key of a second known trust authority, which the verifier knows

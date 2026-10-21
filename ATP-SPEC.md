@@ -461,7 +461,7 @@ A verifier MUST perform the following checks in order:
    - `issuedAt` MUST be before `expiresAt`
    - `expiresAt` MUST NOT be more than 24 hours after `issuedAt` (the Section 10.2 maximum); a proof declaring a longer window is rejected with category `SEMANTIC_INVALID`, with no skew tolerance.
 6. **Transparency log (Level 2+):** If `transparencyLogIndex` is present, the verifier SHOULD verify inclusion against the authority's transparency log.
-7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present: the Ed25519 entry step 4 requires, under a key of `issuerDid`, and an Ed25519 entry that verifies in step 4 under a key of a second trust authority. The second authority is a known trust authority, as step 2 requires of `issuerDid`: the verifier knows it from its own configuration, never because the proof or the issuer's discovery document names it. Two authorities are distinct only when their DIDs differ and no public key is a key of both, so a key published under two DIDs never counts as a second authority. An ML-DSA-65 entry, the second signature of hybrid mode, is not a second authority, and a Sigstore co-signature (Section 4.3.1) is not an authority signature. Section 4.4.1 is a proof that passes this step.
+7. **Multi-signature (Level 3):** For trust levels 3-4, at least two signatures from distinct authorities MUST be present: the Ed25519 entry step 4 requires, under a key of `issuerDid`, and an Ed25519 entry that verifies in step 4 under a key of a second trust authority. The second authority is a known trust authority, as step 2 requires of `issuerDid`: the verifier knows it from its own configuration, never because the proof or the issuer's discovery document names it. Two authorities are distinct only when their DIDs differ and no public key is a key of both, so a key published under two DIDs never counts as a second authority. An ML-DSA-65 entry, the second signature of hybrid mode, is not a second authority, and a Sigstore co-signature (Section 4.3.1) is not an authority signature. A proof that fails this step is rejected with category `SIGNATURE_INVALID`. Section 4.4.1 is a proof that passes this step.
 
 **Issuer key set count.** A proof meets an issuer key set when at least `threshold` distinct
 keys of the set signed it. Each entry of `keyIds` counts once when an Ed25519 entry of
@@ -523,7 +523,10 @@ Under the keys in the table both entries verify (step 4), and their DIDs and the
 differ, so the proof passes step 7. Without the co-signer's entry it is the Section 4.2
 proof, which carries one authority's signature and so fails step 7.
 `scripts/validate_examples.py` in this repository verifies both signatures, and checks that
-the proof passes step 7 and fails it without the co-signer's entry.
+the proof passes step 7 and fails it without the co-signer's entry. The Python client in
+[`clients/`](./clients/README.md) applies step 7 when `verify_trust_proof` is given
+`second_authorities`; its tests verify this proof with the co-signer's key there, and reject
+it at step 7 without the co-signer's entry.
 
 #### 4.4.2 Issuer key set proof
 
