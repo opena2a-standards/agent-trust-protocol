@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Regression tests for check_license.py, the README, reference implementation,
-specification claim, revocation schema, Sigstore co-signature, threat model,
-signed timestamp, ATX status, fixture coverage, A2A agent card path and
-Verifiable Credential form checks in validate_examples.py, check_guides.py, the
+specification claim, revocation schema, Sigstore co-signature, two-authority
+proof (with its Ed25519 verification), threat model, issuer key set, signed
+timestamp, ATX status, fixture coverage, A2A agent card path and Verifiable
+Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the error fixture_authority.py stops with when it cannot read an example
 it serves or listen on its port, the registry generation and --check mode of
 gen_registries.py, and the test-suite sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
+import base64
+import calendar
 import contextlib
 import copy
 import io
+import itertools
 import json
 import os
 import re
@@ -111,6 +115,17 @@ class ReadmeSigningTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("README.md:6:"), errors[0])
 
+    def test_unit_sentences_joins_the_unit_with_join_unit(self):
+        """The sentence checks and the example-claim check join a unit's lines
+        in one place, join_unit, so a sentence maps to the line it starts on."""
+        unit = [(3, "  First sentence wraps"), (4, "onto this line. Second"), (5, "one.")]
+        with mock.patch.object(
+            validate_examples, "join_unit", wraps=validate_examples.join_unit
+        ) as joined:
+            found = list(validate_examples.unit_sentences(unit))
+        joined.assert_called_once_with(unit)
+        self.assertEqual(found, [(3, "First sentence wraps onto this line."), (4, "Second one.")])
+
 
 class ReadmeSpecVersionTest(unittest.TestCase):
     SPEC = "# Agent Trust Protocol (ATP)\n\n**Version:** 1.1.0-draft\n"
@@ -133,6 +148,37 @@ class ReadmeSpecVersionTest(unittest.TestCase):
     def test_line_without_spec_link_is_not_checked(self):
         text = "| did, signatures | Shipped (v1.0.0-rc1) | Base trust proof. |\n"
         self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_section_numbers_are_not_versions(self):
+        for text in (
+            "[ATP-SPEC.md Section 4.3.1](ATP-SPEC.md) defines the co-signature.\n",
+            "ATP-SPEC.md Sections 4.3.1, 5.1.1 and 8.1.1 hold the registries.\n",
+            "See ATP-SPEC.md §4.3.1 and §§ 5.1.1, 8.1.1.\n",
+            "ATP-SPEC.md ends with Section 8.1.1.\n",
+            "See section 4.3.1 to 4.3.2 of ATP-SPEC.md.\n",
+        ):
+            with self.subTest(text):
+                self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_link_fragments_are_not_versions(self):
+        for text in (
+            "[the co-signature](ATP-SPEC.md#4.3.1-sigstore-co-signature) in ATP-SPEC.md.\n",
+            "[changes](CHANGELOG.md#changes-since-1.0.0-rc1) to ATP-SPEC.md.\n",
+            "ATP-SPEC.md at https://specs.opena2a.org/atp#v1.0.0-rc1 is the same text.\n",
+        ):
+            with self.subTest(text):
+                self.assertEqual(validate_examples.readme_spec_version_errors(text, self.SPEC), [])
+
+    def test_version_beside_a_section_number_or_fragment_still_fails(self):
+        for text in (
+            "[ATP-SPEC.md v1.0.0-rc1 Section 4.3.1](ATP-SPEC.md#431-sigstore) defines it.\n",
+            "ATP-SPEC.md Section 4.3.1, 1.0.0-rc1 edition.\n",
+            "[ATP-SPEC.md](ATP-SPEC.md#4-trust-proofs) (1.0.0-rc1).\n",
+        ):
+            with self.subTest(text):
+                errors = validate_examples.readme_spec_version_errors(text, self.SPEC)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("names the specification v1.0.0-rc1;", errors[0])
 
     def test_spec_without_version_header_fails(self):
         text = "[ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification (v1.1.0-draft).\n"
@@ -179,6 +225,376 @@ class FederationClaimTest(unittest.TestCase):
             "```\n# decentralized\n```\n"
         )
         self.assertEqual(validate_examples.federation_claim_errors(text), [])
+
+
+class TwoAuthorityProofTest(unittest.TestCase):
+    """The Section 4.4.1 proof and the Section 4.4 step 7 rule:
+    two_authority_errors() accepts the proof under the keys of its table and
+    refuses each edit that leaves one authority, an entry it cannot verify or
+    a key it does not know, and main() reports the check once."""
+
+    HEADING = validate_examples.TWO_AUTHORITY_HEADING
+    LEVEL3 = "ATP-SPEC.md Section 4.4.1 vs Section 4.4 steps 3, 4 and 7"
+    SINGLE = validate_examples.SINGLE_AUTHORITY
+
+    def setUp(self):
+        self.spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.proof = validate_examples.two_authority_example()
+        self.keys, errors = validate_examples.two_authority_keys(self.spec)
+        self.assertEqual(errors, [])
+        self.issuer, self.cosigner = self.proof["signatures"]
+        self.issuer_did = self.proof["issuerDid"]
+        self.cosigner_did = validate_examples.key_did(self.cosigner["keyId"])
+
+    def errors(self, signatures=None, keys=None, **members):
+        proof = {**self.proof, **members}
+        if signatures is not None:
+            proof["signatures"] = signatures
+        return validate_examples.two_authority_errors(proof, self.keys if keys is None else keys)
+
+    def section_4_2_proof(self):
+        return json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 4.2 Trust Proof Format")
+        )
+
+    def fails_step_4(self, position, key_id):
+        return f"signatures[{position}] does not verify under {key_id!r} (step 4)"
+
+    def test_repository_spec_passes(self):
+        self.assertEqual(validate_examples.two_authority_check(self.spec), [])
+        self.assertEqual(self.errors(), [])
+
+    def test_proof_is_the_section_4_2_proof_with_an_entry_of_a_second_did(self):
+        self.assertEqual({**self.proof, "signatures": [self.issuer]}, self.section_4_2_proof())
+        self.assertNotEqual(self.cosigner_did, self.issuer_did)
+        self.assertEqual(self.cosigner["algorithm"], "Ed25519")
+        self.assertIn(self.proof["trustLevel"], (3, 4))
+
+    def test_issuer_key_is_the_key_the_section_7_1_example_publishes(self):
+        discovery = json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 7.1 Well-Known Endpoint")
+        )
+        published = {key["keyId"]: bytes.fromhex(key["publicKeyHex"]) for key in discovery["publicKeys"]}
+        self.assertEqual(self.keys[self.issuer["keyId"]], published[self.issuer["keyId"]])
+        self.assertNotEqual(self.keys[self.cosigner["keyId"]], self.keys[self.issuer["keyId"]])
+
+    def test_section_4_2_proof_fails_step_7_alone(self):
+        errors = validate_examples.two_authority_errors(self.section_4_2_proof(), self.keys)
+        self.assertEqual(errors, [self.SINGLE])
+
+    def test_entry_of_the_issuer_twice_is_one_authority(self):
+        self.assertEqual(self.errors([self.issuer, self.issuer]), [self.SINGLE])
+
+    def test_one_key_under_two_dids_is_one_authority(self):
+        keys = {**self.keys, self.cosigner["keyId"]: self.keys[self.issuer["keyId"]]}
+        signatures = [self.issuer, {**self.cosigner, "value": self.issuer["value"]}]
+        self.assertEqual(self.errors(signatures, keys), [self.SINGLE])
+
+    def test_second_did_sharing_a_key_with_the_issuer_is_one_authority(self):
+        for did, key_id in (
+            (self.issuer_did, self.cosigner["keyId"]),
+            (self.cosigner_did, self.issuer["keyId"]),
+        ):
+            with self.subTest(did=did):
+                keys = {**self.keys, f"{did}#key-2": self.keys[key_id]}
+                self.assertEqual(self.errors(keys=keys), [self.SINGLE])
+
+    def test_second_key_of_the_issuer_is_one_authority(self):
+        key_id = f"{self.issuer_did}#key-2"
+        keys = {
+            self.issuer["keyId"]: self.keys[self.issuer["keyId"]],
+            key_id: self.keys[self.cosigner["keyId"]],
+        }
+        signatures = [self.issuer, {**self.cosigner, "keyId": key_id}]
+        self.assertEqual(self.errors(signatures, keys), [self.SINGLE])
+
+    def test_changed_co_signature_fails_step_4(self):
+        value = base64.b64decode(self.cosigner["value"])
+        for position in (0, 31, 32, 63):
+            with self.subTest(position=position):
+                changed = bytearray(value)
+                changed[position] ^= 1
+                entry = {**self.cosigner, "value": base64.b64encode(bytes(changed)).decode()}
+                self.assertEqual(
+                    self.errors([self.issuer, entry]),
+                    [self.fails_step_4(1, self.cosigner["keyId"]), self.SINGLE],
+                )
+
+    def test_value_that_is_not_base64_fails_step_4(self):
+        entry = {**self.cosigner, "value": "not base64!"}
+        self.assertEqual(
+            self.errors([self.issuer, entry]), [self.fails_step_4(1, self.cosigner["keyId"]), self.SINGLE]
+        )
+
+    def test_changed_signed_member_fails_both_signatures(self):
+        self.assertEqual(
+            self.errors(trustScore=0.826),
+            [
+                self.fails_step_4(0, self.issuer["keyId"]),
+                self.fails_step_4(1, self.cosigner["keyId"]),
+                f"no entry verifies under a key of issuerDid {self.issuer_did!r} (step 4)",
+            ],
+        )
+
+    def test_key_the_verifier_does_not_know_fails_step_3(self):
+        keys = {self.issuer["keyId"]: self.keys[self.issuer["keyId"]]}
+        self.assertEqual(
+            self.errors(keys=keys),
+            [
+                f"signatures[1]: keyId {self.cosigner['keyId']!r} names no key the verifier knows (step 3)",
+                self.SINGLE,
+            ],
+        )
+
+    def test_entry_of_another_algorithm_is_not_a_second_authority(self):
+        sigstore = validate_examples.sigstore_example()["signatures"][1]
+        for entry in (sigstore, validate_examples.ML_DSA_SIGNATURE):
+            with self.subTest(algorithm=entry["algorithm"]):
+                errors = self.errors([self.issuer, entry])
+                self.assertEqual(len(errors), 2, errors)
+                self.assertTrue(
+                    errors[0].startswith(f"signatures[1] is a {entry['algorithm']!r} entry"), errors[0]
+                )
+                self.assertEqual(errors[1], self.SINGLE)
+
+    def test_proof_without_an_entry_of_the_issuer_fails_step_4(self):
+        self.assertEqual(
+            self.errors([self.cosigner]),
+            [f"no entry verifies under a key of issuerDid {self.issuer_did!r} (step 4)"],
+        )
+
+    def test_step_7_applies_at_trust_levels_3_and_4(self):
+        # Another trustLevel changes the canonical string, so no signature is verified here.
+        with mock.patch.object(validate_examples, "ed25519_verifies", return_value=True):
+            for level, expected in ((0, []), (2, []), (3, [self.SINGLE]), (4, [self.SINGLE])):
+                with self.subTest(level=level):
+                    self.assertEqual(self.errors([self.issuer], trustLevel=level), expected)
+
+    def test_timestamp_that_is_not_rfc3339_is_one_error(self):
+        errors = self.errors(issuedAt="never")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("no Section 4.3 canonical string: "), errors[0])
+
+    def test_check_fails_an_example_below_trust_level_3(self):
+        with mock.patch.object(
+            validate_examples, "two_authority_example", return_value={**self.proof, "trustLevel": 2}
+        ), mock.patch.object(validate_examples, "ed25519_verifies", return_value=True):
+            errors = validate_examples.two_authority_check(self.spec)
+        self.assertEqual(errors, ["the example's trustLevel 2 is below 3, where step 7 does not apply"])
+
+    def test_check_fails_when_the_entries_of_the_issuer_alone_pass(self):
+        with mock.patch.object(validate_examples, "two_authority_errors", return_value=[]):
+            errors = validate_examples.two_authority_check(self.spec)
+        self.assertEqual(errors, ["the example with the entries of issuerDid alone does not fail step 7"])
+
+    def test_table_row_that_names_no_key_fails_at_its_line(self):
+        lines = self.spec.split("\n")
+        row = next(i for i, line in enumerate(lines) if line.startswith("| Co-signer |"))
+        key = self.keys[self.cosigner["keyId"]].hex()
+        not_hex = f"ATP-SPEC.md:{row + 1}: the key of {self.cosigner['keyId']!r} is not 64 lowercase hex digits"
+        for line, error in (
+            (lines[row].replace(key, key[:-1]), not_hex),
+            (lines[row].replace(key, key.upper()), not_hex),
+            (
+                lines[row].replace("#key-1", ""),
+                f"ATP-SPEC.md:{row + 1}: {self.cosigner_did!r} is not a DID URL with a fragment",
+            ),
+            (
+                lines[row].replace(self.cosigner["keyId"], self.issuer["keyId"]),
+                f"ATP-SPEC.md:{row + 1}: {self.issuer['keyId']!r} has a row above",
+            ),
+        ):
+            with self.subTest(line=line):
+                spec = "\n".join(lines[:row] + [line] + lines[row + 1:])
+                self.assertEqual(validate_examples.two_authority_keys(spec)[1], [error])
+                self.assertEqual(validate_examples.two_authority_check(spec), [error])
+
+    def test_section_without_a_table_is_one_error(self):
+        spec = "\n".join(
+            line for line in self.spec.split("\n") if not line.startswith(("| Issuer |", "| Co-signer |"))
+        )
+        self.assertEqual(
+            validate_examples.two_authority_check(spec),
+            [f"ATP-SPEC.md: no key rows in a table under {self.HEADING!r}"],
+        )
+
+    def main_with_two_authority_example(self, block, mapped=True):
+        """Run main() in a copy of the repository whose Section 4.4.1 example
+        block is `block`; see main_with_spec()."""
+        start = self.spec.index("```json\n", self.spec.index(self.HEADING)) + len("```json\n")
+        end = self.spec.index("\n```\n", start)
+        return self.main_with_spec(self.spec[:start] + block + self.spec[end:], mapped)
+
+    def main_with_spec(self, spec, mapped=True):
+        """Run main() in a copy of the repository whose ATP-SPEC.md is `spec`,
+        with or without the Section 4.4.1 examples map entry. Returns the exit
+        code, the output lines and those of them that report a failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(ROOT / "README.md", root / "README.md")
+            (root / "ATP-SPEC.md").write_text(spec, encoding="utf-8")
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            if not mapped:
+                map_path = root / "schemas" / "examples-map.json"
+                entries = json.loads(map_path.read_text(encoding="utf-8"))
+                kept = [entry for entry in entries if entry.get("heading") != self.HEADING]
+                self.assertEqual(len(kept), len(entries) - 1)
+                map_path.write_text(json.dumps(kept), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_the_check(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 0)
+        self.assertIn(f"level3 OK      {self.LEVEL3}\n", out.getvalue())
+        self.assertIn(f"example OK     ATP-SPEC.md @ {self.HEADING!r}\n", out.getvalue())
+
+    def test_main_fails_on_two_authority_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "two_authority_check", return_value=["one authority"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn(f"level3 FAIL    {self.LEVEL3}\n    one authority\n", out.getvalue())
+
+    def test_main_fails_on_a_proof_one_authority_signs(self):
+        block = json.dumps({**self.proof, "signatures": [self.issuer]}, indent=2)
+        code, lines, failed = self.main_with_two_authority_example(block)
+        self.assertEqual((code, failed), (1, [f"level3 FAIL    {self.LEVEL3}"]), lines)
+        self.assertIn(f"    {self.SINGLE}", lines)
+
+    def test_main_reports_an_example_it_cannot_read_once(self):
+        """The examples map validates the block and reports it; the check is
+        not compared, not failed a second time."""
+        label = f"ATP-SPEC.md @ {self.HEADING!r}"
+        schema_failure = f"example FAIL   {label} vs schemas/trust-proof-v1.schema.json"
+        for state, block, failure in (
+            ("is not JSON", json.dumps(self.proof, indent=2)[:-1], f"example INVALID JSON  {label}: "),
+            ("is not a trust proof the schema accepts", "[]", schema_failure),
+            ("is not a trust proof the schema accepts", json.dumps({**self.proof, "trustLevel": 5}),
+             schema_failure),
+        ):
+            with self.subTest(state=state, block=block[:20]):
+                code, lines, failed = self.main_with_two_authority_example(block)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertTrue(failed[0].startswith(failure), failed)
+                self.assertIn(
+                    f"level3 SKIP    {self.LEVEL3}: not compared, the {self.HEADING!r} example {state}", lines
+                )
+                self.assertEqual([line for line in lines if line.startswith("level3 OK")], [])
+                self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_fails_the_check_on_an_unmapped_example_it_cannot_read(self):
+        code, lines, failed = self.main_with_two_authority_example("[]", mapped=False)
+        self.assertEqual(code, 1)
+        self.assertEqual(failed, [f"level3 FAIL    {self.LEVEL3}"])
+        self.assertIn(f"    the {self.HEADING!r} example is not a trust proof the schema accepts", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_main_reports_a_heading_that_is_not_in_the_spec_once(self):
+        not_found = f"ATP-SPEC.md: heading {self.HEADING!r} not found"
+        self.assertEqual(self.spec.count(f"\n{self.HEADING}\n"), 1)
+        renamed = self.spec.replace(f"\n{self.HEADING}\n", f"\n{self.HEADING} entry\n")
+        code, lines, failed = self.main_with_spec(renamed)
+        self.assertEqual((code, failed), (1, [f"example FAIL   {not_found}"]), lines)
+        self.assertIn(f"level3 SKIP    {self.LEVEL3}: not compared, {not_found}", lines)
+        code, lines, failed = self.main_with_spec(renamed, mapped=False)
+        self.assertEqual((code, failed), (1, [f"level3 FAIL    {self.LEVEL3}"]), lines)
+        self.assertIn(f"    {not_found}", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+
+class Ed25519Test(unittest.TestCase):
+    """validate_examples.ed25519_verifies (RFC 8032 Section 5.1.7) on the
+    signatures of the Section 4.4.1 proof, and the Section 4.3 canonical string
+    they are over."""
+
+    def setUp(self):
+        proof = validate_examples.two_authority_example()
+        keys, _ = validate_examples.two_authority_keys((ROOT / "ATP-SPEC.md").read_text(encoding="utf-8"))
+        self.message = validate_examples.canonical_string(proof).encode("utf-8")
+        self.signed = [(keys[entry["keyId"]], base64.b64decode(entry["value"])) for entry in proof["signatures"]]
+
+    def test_canonical_string(self):
+        self.assertEqual(
+            self.message.decode("utf-8"),
+            "did:opena2a:mcp_server:agent_conformance_test_001|3|0.825000|passed|"
+            "2026-05-23T12:00:00Z|2026-05-24T06:00:00Z|did:opena2a:authority:opena2a.org",
+        )
+        proof = {
+            "did": "did:opena2a:agent:a", "trustLevel": 4.0, "trustScore": 0.5, "verdict": "verified",
+            "issuedAt": "2026-10-11T20:57:21.5-06:00", "expiresAt": "2026-10-12T02:57:21.999Z",
+            "issuerDid": "did:opena2a:authority:b",
+        }
+        self.assertEqual(
+            validate_examples.canonical_string(proof),
+            "did:opena2a:agent:a|4|0.500000|verified|2026-10-12T02:57:21Z|2026-10-12T02:57:21Z|"
+            "did:opena2a:authority:b",
+        )
+
+    def test_signatures_of_the_proof_verify(self):
+        for key, signature in self.signed:
+            self.assertTrue(validate_examples.ed25519_verifies(key, self.message, signature))
+
+    def test_signature_under_the_other_key_does_not_verify(self):
+        (first_key, first), (second_key, second) = self.signed
+        self.assertFalse(validate_examples.ed25519_verifies(first_key, self.message, second))
+        self.assertFalse(validate_examples.ed25519_verifies(second_key, self.message, first))
+
+    def test_changed_message_does_not_verify(self):
+        key, signature = self.signed[0]
+        for message in (self.message + b" ", self.message[:-1], self.message.replace(b"|3|", b"|4|")):
+            with self.subTest(message=message[-12:]):
+                self.assertFalse(validate_examples.ed25519_verifies(key, message, signature))
+
+    def test_s_not_below_the_group_order_does_not_verify(self):
+        # [S + L]B is [S]B, so only the range check refuses this signature.
+        key, signature = self.signed[0]
+        s = int.from_bytes(signature[32:], "little") + validate_examples.ED25519_L
+        self.assertFalse(
+            validate_examples.ed25519_verifies(key, self.message, signature[:32] + s.to_bytes(32, "little"))
+        )
+
+    def test_encoding_of_no_point_does_not_verify(self):
+        key, signature = self.signed[0]
+        no_x = next(
+            y for y in itertools.count(2) if validate_examples.ed25519_point(y.to_bytes(32, "little")) is None
+        )
+        for name, encoded in (
+            ("a y with no x", no_x.to_bytes(32, "little")),
+            ("y not below the field prime", validate_examples.ED25519_P.to_bytes(32, "little")),
+            ("x = 0 with the sign bit set", (1 | 1 << 255).to_bytes(32, "little")),
+        ):
+            with self.subTest(name):
+                self.assertIsNone(validate_examples.ed25519_point(encoded))
+                self.assertFalse(validate_examples.ed25519_verifies(encoded, self.message, signature))
+                self.assertFalse(validate_examples.ed25519_verifies(key, self.message, encoded + signature[32:]))
+
+    def test_wrong_lengths_do_not_verify(self):
+        key, signature = self.signed[0]
+        for public, value in (
+            (key[:31], signature), (key + b"\0", signature), (key, signature[:63]), (key, signature + b"\0"),
+        ):
+            with self.subTest(key=len(public), signature=len(value)):
+                self.assertFalse(validate_examples.ed25519_verifies(public, self.message, value))
+
+    def test_base_point_is_the_rfc_8032_generator(self):
+        p, base = validate_examples.ED25519_P, validate_examples.ED25519_B
+        self.assertEqual(base[1], 4 * pow(5, -1, p) % p)
+        self.assertEqual(base[0] % 2, 0)
+        identity = validate_examples.ED25519_IDENTITY
+        self.assertFalse(validate_examples.ed25519_same(base, identity))
+        self.assertTrue(
+            validate_examples.ed25519_same(
+                validate_examples.ed25519_multiply(validate_examples.ED25519_L, base), identity
+            )
+        )
 
 
 class ReadmeDiscoveryTest(unittest.TestCase):
@@ -804,6 +1220,155 @@ class ThreatModelTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("threats FAIL", out.getvalue())
         self.assertIn("row cites no section", out.getvalue())
+
+
+KEY_SET_HEADING = "#### 7.1.1 Issuer key set"
+
+
+class IssuerKeySetTest(unittest.TestCase):
+    """Section 7.1.1: the discovery schema admits the example's issuer key set
+    and refuses one of another shape, issuer_key_set_errors() reports each
+    rule the schema cannot express, main() reports a mapped discovery example
+    that breaks one, and Sections 2.1, 4.4 and 10.1 name the set."""
+
+    def setUp(self):
+        self.spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        self.validator = Draft202012Validator(
+            json.loads((ROOT / "schemas" / "discovery-v1.schema.json").read_text(encoding="utf-8"))
+        )
+        self.example = json.loads(validate_examples.extract_block(ROOT / "ATP-SPEC.md", KEY_SET_HEADING))
+        self.key_ids = self.example["issuerKeySet"]["keyIds"]
+
+    def edited(self, edit):
+        document = copy.deepcopy(self.example)
+        edit(document)
+        return document
+
+    def test_example_is_a_2_of_3_set_the_schema_and_the_rules_accept(self):
+        self.assertEqual(self.example["issuerKeySet"]["threshold"], 2)
+        self.assertEqual(len(self.key_ids), 3)
+        self.assertTrue(self.validator.is_valid(self.example))
+        self.assertEqual(validate_examples.issuer_key_set_errors(self.example), [])
+
+    def test_discovery_without_a_set_passes(self):
+        discovery = json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 7.1 Well-Known Endpoint")
+        )
+        self.assertNotIn("issuerKeySet", discovery)
+        self.assertEqual(validate_examples.issuer_key_set_errors(discovery), [])
+
+    def test_threshold_equal_to_the_number_of_keys_passes(self):
+        document = self.edited(lambda d: d["issuerKeySet"].update(threshold=3))
+        self.assertEqual(validate_examples.issuer_key_set_errors(document), [])
+
+    def test_schema_refuses_a_set_of_another_shape(self):
+        def without(name):
+            return lambda d: d["issuerKeySet"].pop(name)
+
+        def setting(name, value):
+            return lambda d: d["issuerKeySet"].update({name: value})
+
+        cases = {
+            "threshold 0": setting("threshold", 0),
+            "threshold -1": setting("threshold", -1),
+            "threshold 1.5": setting("threshold", 1.5),
+            "threshold as a string": setting("threshold", "2"),
+            "no threshold": without("threshold"),
+            "no keyIds": without("keyIds"),
+            "no keys": setting("keyIds", []),
+            "keyIds as a string": setting("keyIds", self.key_ids[0]),
+            "a keyId without a fragment": setting("keyIds", ["did:opena2a:authority:example.org"]),
+            "a member beside threshold and keyIds": setting("m", 2),
+            "a set that is a list": lambda d: d.update(issuerKeySet=[2, self.key_ids]),
+        }
+        for label, edit in cases.items():
+            with self.subTest(label):
+                self.assertFalse(self.validator.is_valid(self.edited(edit)))
+
+    def test_rules_the_schema_cannot_express_fail(self):
+        """Each document is valid against the discovery schema and breaks one
+        Section 7.1.1 rule, which issuer_key_set_errors() names."""
+        ml_dsa = {
+            "keyId": "did:opena2a:authority:example.org#pqc-1",
+            "algorithm": "ML-DSA-65",
+            "publicKeyHex": "00ff",
+            "status": "active",
+            "validFrom": "2026-10-01T00:00:00Z",
+        }
+
+        def with_ml_dsa(d):
+            d["publicKeys"].append(ml_dsa)
+            d["issuerKeySet"]["keyIds"] = [self.key_ids[0], ml_dsa["keyId"]]
+
+        def same_public_key(d):
+            d["publicKeys"][1]["publicKeyHex"] = d["publicKeys"][0]["publicKeyHex"]
+
+        absent = "did:opena2a:authority:example.org#key-4"
+        cases = {
+            "threshold above the keys": (
+                lambda d: d["issuerKeySet"].update(threshold=4),
+                "issuerKeySet threshold 4 is more than the 3 keys it lists",
+            ),
+            "threshold above one key": (
+                lambda d: d["issuerKeySet"].update(keyIds=self.key_ids[:1]),
+                "issuerKeySet threshold 2 is more than the 1 key it lists",
+            ),
+            "one key listed twice": (
+                lambda d: d["issuerKeySet"].update(keyIds=[self.key_ids[0], self.key_ids[0]]),
+                f"issuerKeySet lists {self.key_ids[0]} twice",
+            ),
+            "a key that is not in publicKeys": (
+                lambda d: d["issuerKeySet"]["keyIds"].append(absent),
+                f"issuerKeySet lists {absent}, which is not the keyId of a publicKeys entry",
+            ),
+            "an ML-DSA-65 key": (
+                with_ml_dsa,
+                f"issuerKeySet lists {ml_dsa['keyId']}, an ML-DSA-65 key; Section 7.1.1 lists Ed25519 keys",
+            ),
+            "two keys with the same publicKeyHex": (
+                same_public_key,
+                f"issuerKeySet lists {self.key_ids[1]} and {self.key_ids[0]}, which have the same publicKeyHex",
+            ),
+        }
+        for label, (edit, error) in cases.items():
+            with self.subTest(label):
+                document = self.edited(edit)
+                self.assertTrue(self.validator.is_valid(document))
+                self.assertEqual(validate_examples.issuer_key_set_errors(document), [error])
+
+    def test_main_reports_a_mapped_example_that_breaks_a_rule(self):
+        self.assertEqual(self.spec.count('"threshold": 2,'), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(ROOT / "README.md", root / "README.md")
+            (root / "ATP-SPEC.md").write_text(
+                self.spec.replace('"threshold": 2,', '"threshold": 4,'), encoding="utf-8"
+            )
+            for directory in ("schemas", "registries", "examples"):
+                shutil.copytree(ROOT / directory, root / directory)
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        self.assertEqual(code, 1)
+        failure = f"example FAIL   ATP-SPEC.md @ {KEY_SET_HEADING!r} vs schemas/discovery-v1.schema.json"
+        self.assertEqual([line for line in lines if "FAIL" in line or "INVALID" in line], [failure], lines)
+        self.assertEqual(
+            lines[lines.index(failure) + 1], "    $: issuerKeySet threshold 4 is more than the 3 keys it lists"
+        )
+        self.assertIn("example OK     ATP-SPEC.md @ '### 7.1 Well-Known Endpoint'", lines)
+        self.assertEqual(lines[-1], "1 failure(s)")
+
+    def test_sections_2_1_4_4_and_10_1_name_the_set(self):
+        lines = self.spec.splitlines()
+        step_4 = next(line for line in lines if line.startswith("4. **Signature:**"))
+        self.assertIn("issuer key set (Section 7.1.1)", step_4)
+        count = next(line for line in lines if line.startswith("**Issuer key set count.**"))
+        self.assertIn("at least `threshold` distinct", count)
+        row = next(line for line in lines if line.startswith("| Signing key compromise |"))
+        self.assertIn("m-of-n issuer key set (Section 7.1.1)", row)
+        coverage = next(line for line in lines if line.startswith(validate_examples.COVERAGE_LIST))
+        self.assertIn("issuer key set count (Section 7.1.1)", coverage)
 
 
 # A Section 4.3 with a table of served timestamps; {row} is on line 6.
@@ -1603,6 +2168,22 @@ class ConformanceScriptTest(unittest.TestCase):
         self.assertIn("(endpoints.trustProof does not start with /)", run.stdout)
         self.assertEqual(other.requests, [])
 
+    def test_trust_proof_endpoint_without_a_leading_slash_fails_without_a_request(self):
+        """Appended to an authority URL without a port or path, such as
+        https://api.oa2a.org, a value that starts with "." extends the host
+        name (https://api.oa2a.org.attacker.example/...), and one that starts
+        with a letter runs into it. T1.7 sends neither request, and says why."""
+        for label, value in (
+            ("host suffix", ".attacker.example/api/v1/trust/proof"),
+            ("no leading slash", "api/v1/trust/proof"),
+        ):
+            with self.subTest(label):
+                run = self.probe(LEVEL1[6:], discovery=inside("endpoints", put(trustProof=value)))
+                self.assertIn(
+                    f"FAIL: {T1[7]} (endpoints.trustProof does not start with /)", run.stdout
+                )
+                self.assertEqual(self.received("/trust/pro"), [])
+
     def test_trust_proof_endpoint_reading(self):
         """T1.7 requests /api/v1/trust/proof when endpoints.trustProof is not a
         string, and reads a string with its NUL characters and trailing
@@ -1790,6 +2371,8 @@ class ConformanceScriptTest(unittest.TestCase):
              {"proof": put(issuedAt="2026-01-01T00:00:00+24:00")}),
             ("issuedAt followed by a newline", [T1[8]],
              {"proof": put(issuedAt="2026-01-01T00:00:00Z\n")}),
+            ("issuedAt at hour 24", [T1[8]], {"proof": put(issuedAt="2026-01-01T24:00:00Z")}),
+            ("issuedAt before 1900", [], {"proof": put(issuedAt="1899-12-31T00:00:00Z")}),
             ("no trustLevel", [T1[8], T1[11]], {"proof": pop("trustLevel")}),
             ("trustLevel 4.0", [], {"proof": put(trustLevel=4.0)}),
             ("fractional trustLevel", [T1[8], T1[11]], {"proof": put(trustLevel=2.5)}),
@@ -1834,6 +2417,8 @@ class ConformanceScriptTest(unittest.TestCase):
             ("no entries", [T2[2]], {"log": '{"entries": []}'}),
             ("string entry", [T2[2]], {"log": '{"entries": ["FAKE"]}'}),
             ("entry without timestamp", [T2[2]], {"log": first("entries", pop("timestamp"))}),
+            ("timestamp at epoch second -1", [],
+             {"log": first("entries", put(timestamp="1969-12-31T23:59:59Z"))}),
             ("entry without entryType", [T2[2]], {"log": first("entries", pop("entryType"))}),
             ("negative logIndex", [T2[2]], {"log": first("entries", put(logIndex=-1))}),
         ])
@@ -1862,8 +2447,9 @@ class ConformanceScriptTest(unittest.TestCase):
 @unittest.skipUnless(all(shutil.which(tool) for tool in ("bash", "curl", "dirname")),
                      "the conformance scripts need bash, curl and dirname")
 class SetupErrorTest(unittest.TestCase):
-    """A missing tool or schema stops both scripts with exit code 69, which no
-    count of failed tests reaches, before any test runs, with one error line."""
+    """A missing tool or schema stops both scripts with exit code 69, and a run
+    without an authority URL with exit code 64, codes no count of failed tests
+    reaches, before any test runs, with one error line."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1921,6 +2507,25 @@ class SetupErrorTest(unittest.TestCase):
                                         env={name: value})
 
     @unittest.skipUnless(HAS_JQ, "needs jq")
+    def test_missing_authority_url_exits_64(self):
+        """64 is EX_USAGE in sysexits.h; bash's own ${1:?} error exits 1, which
+        reads as one failed test."""
+        for script in ("level1.sh", "level2.sh"):
+            for args in ((), ("",)):
+                with self.subTest(script=script, args=args):
+                    path = str(CONFORMANCE / script)
+                    run = subprocess.run(
+                        [shutil.which("bash"), path, *args],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        env={"PATH": os.environ.get("PATH", "")},
+                    )
+                    self.assertEqual(run.returncode, 64, run.stderr)
+                    self.assertEqual(run.stderr, f"Usage: {path} <authority-url>\n")
+                    self.assertEqual(run.stdout, "")
+
+    @unittest.skipUnless(HAS_JQ, "needs jq")
     def test_time_limit_of_a_millisecond_or_more_runs_the_tests(self):
         for value in ("0.001", "0.05", "007", "1.0"):
             with self.subTest(value):
@@ -1934,6 +2539,76 @@ class SetupErrorTest(unittest.TestCase):
                 )
                 self.assertEqual(run.stderr, "")
                 self.assertIn("=== Results: 0 passed, 14 failed ===", run.stdout)
+
+
+class ReferenceAuthorityRunTest(unittest.TestCase):
+    """The README says which conformance tests the reference authority passes
+    and fails, as the run docs/reference-implementation.md records them,
+    instead of naming a conformance level."""
+
+    IDS = [f"T1.{n}" for n in range(1, 15)] + [f"T2.{n}" for n in range(1, 4)]
+
+    @staticmethod
+    def ranges(ids):
+        """Test IDs in suite order written as ranges: 'T1.7 to T1.14 and T2.1 to T2.3'."""
+        groups = []
+        for test_id in ids:
+            level, number = (int(part) for part in test_id[1:].split("."))
+            if groups and groups[-1][0] == level and groups[-1][2] == number - 1:
+                groups[-1][2] = number
+            else:
+                groups.append([level, number, number])
+        names = [f"T{lv}.{a}" if a == b else f"T{lv}.{a} to T{lv}.{b}" for lv, a, b in groups]
+        return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+    def test_ranges(self):
+        self.assertEqual(self.ranges(["T1.1", "T1.2", "T1.3"]), "T1.1 to T1.3")
+        self.assertEqual(self.ranges(["T1.4", "T1.14", "T2.1", "T2.2"]),
+                         "T1.4, T1.14 and T2.1 to T2.2")
+
+    def test_readme_names_the_tests_the_recorded_run_passes_and_fails(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        section = readme.split("\n## Reference Implementation\n", 1)[1].split("\n## ", 1)[0]
+        record = (ROOT / "docs" / "reference-implementation.md").read_text(encoding="utf-8")
+        run = record.split("\n## Conformance run\n", 1)[1].split("\n## ", 1)[0]
+        results = {}
+        for test_id, name in zip(self.IDS, LEVEL1 + LEVEL2):
+            if f"\nPASS: {name}\n" in run:
+                results[test_id] = True
+            elif f"\nFAIL: {name}" in run:
+                results[test_id] = False
+        self.assertEqual(list(results), self.IDS)
+        self.assertIn(f"=== Results: {sum(results[i] for i in self.IDS[:14])} passed", run)
+        passed = self.ranges([i for i in self.IDS if results[i]])
+        failed = self.ranges([i for i in self.IDS if not results[i]])
+        self.assertIn(f"({passed})", section)
+        self.assertIn(f"({failed})", section)
+        self.assertNotRegex(section, r"(?i)\bimplements ATP at\b|\blevel [1-3] conformance\b")
+        self.assertIn("(docs/reference-implementation.md#conformance-run)", section)
+
+
+class DiscoveryEndpointPathTest(unittest.TestCase):
+    """Section 7.1 and the discovery schema define an endpoints value as a
+    path, the form T1.7 appends to the authority URL, and the values of the
+    Section 7.1 example are paths."""
+
+    def test_section_7_1_and_the_schema_define_endpoint_values_as_paths(self):
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        section = spec.split("\n### 7.1 Well-Known Endpoint\n", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("Each `endpoints` value is a path", section)
+        schema = json.loads((ROOT / "schemas" / "discovery-v1.schema.json").read_text(encoding="utf-8"))
+        description = schema["properties"]["endpoints"]["description"]
+        self.assertNotIn("URL map", description)
+        self.assertIn("a path that starts with /", description)
+
+    def test_section_7_1_example_endpoint_values_are_paths(self):
+        example = json.loads(
+            validate_examples.extract_block(ROOT / "ATP-SPEC.md", "### 7.1 Well-Known Endpoint")
+        )
+        self.assertTrue(example["endpoints"])
+        for name, value in example["endpoints"].items():
+            with self.subTest(name):
+                self.assertRegex(value, r"\A/[^#\s\x00-\x1f\x7f]*\Z")
 
 
 class FixtureAuthorityTest(unittest.TestCase):
@@ -2068,29 +2743,39 @@ class FixtureAuthorityTest(unittest.TestCase):
             self.assertEqual([sock.fileno() for sock in opened], [authority.fileno()])
 
 
-# Written apart from the rfc3339 pattern in checks.jq (a full match, and the UTC
-# offset bounded by number), so the agreement tests can catch a mistake in either.
+# Written apart from the rfc3339 pattern in checks.jq (a full match, the fields
+# bounded by number and the day by calendar), so the agreement tests can catch a
+# mistake in either.
 RFC3339 = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))"
+    r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?"
+    r"(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))"
 )
 DATE_TIME = FormatChecker(formats=())
 
 
 @DATE_TIME.checks("date-time")
 def is_date_time(value):
+    """RFC 3339 Section 5.6: a year from 0000 to 9999, a day of the month, an
+    hour from 00 to 23, a minute and a second from 00 to 59 (no leap second, as
+    in checks.jq) and a UTC offset from 00:00 to 23:59. datetime is not used for
+    the date: it has no year 0000, and on Python 3.14 fromisoformat reads hour
+    24 as midnight of the next day."""
     if not isinstance(value, str):
         return True
     match = RFC3339.fullmatch(value)
     if not match:
         return False
-    offset_hours, offset_minutes = match.group(2, 3)
+    year, month, day, hour, minute, second = (int(part) for part in match.group(1, 2, 3, 4, 5, 6))
+    offset_hours, offset_minutes = match.group(7, 8)
     if offset_hours is not None and (int(offset_hours) > 23 or int(offset_minutes) > 59):
         return False
-    try:
-        datetime.fromisoformat(value[:10] + "T" + value[11:19])
-    except ValueError:
-        return False
-    return True
+    return (
+        1 <= month <= 12
+        and 1 <= day <= calendar.monthrange(year, month)[1]
+        and hour <= 23
+        and minute <= 59
+        and second <= 59
+    )
 
 
 @unittest.skipUnless(HAS_JQ, "checks.jq needs jq")
@@ -2102,13 +2787,16 @@ class SchemaCheckTest(unittest.TestCase):
 
     EXAMPLES = {
         "### 7.1 Well-Known Endpoint": "discovery-v1",
+        KEY_SET_HEADING: "discovery-v1",
         "### 4.2 Trust Proof Format": "trust-proof-v1",
         "#### 4.3.1 Sigstore co-signature": "trust-proof-v1",
+        "#### 4.4.1 Two-authority proof (Level 3)": "trust-proof-v1",
         "### 8.1 Trust Proof Revocation": "revocation-list-v1",
     }
     REPLACEMENTS = (
         None, True, -1, 1.5, "x", [], {},
         "2026-01-01T00:00:00+24:00", "2026-01-01T00:00:00Z\n", "2099-02-30T00:00:00Z",
+        "2026-01-01T24:00:00Z", "1899-12-31T00:00:00Z",
     )
     TIMESTAMPS = {
         "2026-01-01T00:00:00Z": True,
@@ -2121,6 +2809,34 @@ class SchemaCheckTest(unittest.TestCase):
         "2026-01-01T00:00:00Z\n": False,
         "\n2026-01-01T00:00:00Z": False,
         "2099-02-30T00:00:00Z": False,
+        # Hour 24, a minute or second of 60 and a day the month lacks are not RFC
+        # 3339; a year before 1900, 1969-12-31T23:59:59Z (epoch second -1) and
+        # year 0000 are, whatever the platform's mktime accepts.
+        "2026-01-01T24:00:00Z": False,
+        "2026-01-01T23:60:00Z": False,
+        "2026-12-31T23:59:60Z": False,
+        "1900-02-29T00:00:00Z": False,
+        "2000-02-29T00:00:00Z": True,
+        "1899-12-31T00:00:00Z": True,
+        "1000-01-01T00:00:00+05:30": True,
+        "1969-12-31T23:59:59Z": True,
+        "0000-02-29T00:00:00Z": True,
+        "9999-12-31T23:59:59Z": True,
+    }
+    # Epoch seconds that rfc3339 gives, worked out apart from it: by datetime
+    # where it has the year, and from 0001-01-01 (-62135596800) for year 0000,
+    # a leap year of 366 days.
+    EPOCH_SECONDS = {
+        "1970-01-01T00:00:00Z": 0,
+        "1969-12-31T23:59:59Z": -1,
+        "2026-10-12T02:57:21.999Z": 1791773841,
+        "2026-10-11T20:57:21.5-06:00": 1791773841,
+        "2026-01-01T00:30:00+01:00": 1767223800,
+        "1899-12-31T23:00:00-01:00": -2208988800,
+        "1600-02-29T12:00:00Z": None,
+        "0001-01-01T00:00:00Z": -62135596800,
+        "0000-01-01T00:00:00Z": -62135596800 - 366 * 86400,
+        "9999-12-31T23:59:59Z": None,
     }
     SUPPORTED = {
         "type", "const", "enum", "anyOf", "pattern", "minLength", "format", "minimum",
@@ -2181,6 +2897,24 @@ class SchemaCheckTest(unittest.TestCase):
         expected = list(self.TIMESTAMPS.values())
         self.assertEqual(dict(zip(timestamps, json.loads(run.stdout))), self.TIMESTAMPS)
         self.assertEqual([is_date_time(value) for value in timestamps], expected)
+
+    def test_rfc3339_counts_epoch_seconds_without_mktime(self):
+        """T1.10 compares the seconds rfc3339 gives with now. They are counted
+        in checks.jq, so a year mktime refuses on a platform still gets them."""
+        expected = {
+            value: int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+            if seconds is None else seconds
+            for value, seconds in self.EPOCH_SECONDS.items()
+        }
+        run = subprocess.run(
+            ["jq", "-c", "-L", str(CONFORMANCE), 'include "checks"; map(rfc3339)'],
+            input=json.dumps(list(expected)),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(dict(zip(expected, json.loads(run.stdout))), expected)
 
     def test_schemas_use_only_keywords_checks_jq_implements(self):
         for name in self.EXAMPLES.values():
@@ -2410,6 +3144,16 @@ class GuideBlocksTest(unittest.TestCase):
             self.failing_cases(texts, check_guides.GATE), ["gate: revoked agent refuses"]
         )
 
+    def test_gate_refusing_only_level_0_as_blocked_fails(self):
+        texts = self.edited(
+            "ci",
+            'if [ "$LEVEL" -eq 0 ] || [ "$VERDICT" = blocked ]; then refuse',
+            'if [ "$LEVEL" -eq 0 ]; then refuse',
+        )
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.GATE), ["gate: level 3 blocked proof refuses"]
+        )
+
     def test_batch_loop_in_a_pipeline_subshell_fails(self):
         texts = self.edited(
             "ci", "while read -r DID; do", "jq -r '.[]' \"$AGENTS_FILE\" | while read -r DID; do"
@@ -2438,6 +3182,31 @@ class GuideBlocksTest(unittest.TestCase):
         failing = self.failing_cases(texts, check_guides.A2A_PY)
         self.assertEqual(failing, ["a2a python: the card's verifyAt is not followed"])
 
+    def test_a2a_without_the_did_check_fails(self):
+        for block, old, never, sample in (
+            (check_guides.A2A_PY,
+             '    if not atp.get("did") or proof.get("did") != atp["did"]:\n',
+             "    if False:\n", "a2a python"),
+            (check_guides.A2A_TS,
+             "  if (!card.atp.did || proof.did !== card.atp.did) {\n",
+             "  if (false) {\n", "a2a typescript"),
+        ):
+            with self.subTest(sample):
+                texts = self.edited("a2a", old, never)
+                self.assertEqual(self.failing_cases(texts, block), [
+                    f"{sample}: a proof about another DID is not trusted",
+                    f"{sample}: a card without atp.did is not trusted",
+                ])
+
+    def test_a2a_typescript_without_expiry_check_fails(self):
+        texts = self.edited(
+            "a2a", "  if (!(Date.parse(proof.expiresAt) > Date.now())) {", "  if (false) {"
+        )
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.A2A_TS),
+            ["a2a typescript: expired proof is not trusted"],
+        )
+
     def test_refresh_storing_the_envelope_fails(self):
         texts = self.edited(
             "a2a",
@@ -2464,6 +3233,64 @@ class GuideBlocksTest(unittest.TestCase):
         texts = self.edited("spec", "(await resp.json()).proof ?? {}", "await resp.json()")
         failing = self.failing_cases(texts, check_guides.SPEC_MCP)
         self.assertIn("spec b.2: listed server connects", failing)
+
+    def test_spec_b2_without_the_did_check_fails(self):
+        texts = self.edited("spec", "if (proof.did !== did || !(", "if (!(")
+        self.assertEqual(
+            self.failing_cases(texts, check_guides.SPEC_MCP),
+            ["spec b.2: proof about another DID is refused"],
+        )
+
+    def test_batch_guides_state_the_recorded_refusal(self):
+        self.assertEqual(check_guides.batch_note_errors(self.texts), [])
+        self.assertIn("batchRejection", check_guides.RECORDED)
+        for guide, heading, _ in check_guides.BATCH_SECTIONS:
+            with self.subTest(guide):
+                self.assertIn(check_guides.BATCH_REFUSAL,
+                              check_guides.section_prose(self.texts[guide], heading))
+
+    def test_batch_guide_without_the_note_fails(self):
+        for guide, heading, _ in check_guides.BATCH_SECTIONS:
+            with self.subTest(guide):
+                prose = check_guides.section_prose(self.texts[guide], heading)
+                note = next(p for p in prose.split("\n\n") if check_guides.BATCH_REFUSAL in p)
+                texts = self.edited(guide, note + "\n", "")
+                errors = check_guides.batch_note_errors(texts)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith(check_guides.GUIDES[guide].name + ":"),
+                                errors[0])
+
+    def test_note_without_a_recorded_refusal_fails(self):
+        recorded = {k: v for k, v in check_guides.RECORDED.items() if k != "batchRejection"}
+        errors = check_guides.batch_note_errors(self.texts, recorded)
+        self.assertEqual(len(errors), len(check_guides.BATCH_SECTIONS), errors)
+        for error in errors:
+            self.assertIn("no recorded response", error)
+
+    def test_section_prose_leaves_out_code_blocks_and_later_sections(self):
+        text = (
+            "## Batch\n\nFirst paragraph.\n\n```bash\necho HTTP 400\n```\n\n"
+            "Last paragraph.\n\n### Detail\n\nStill here.\n\n## Next\n\nNot here.\n"
+        )
+        prose = check_guides.section_prose(text, "## Batch")
+        self.assertIn("First paragraph.", prose)
+        self.assertIn("Still here.", prose)
+        self.assertNotIn("HTTP 400", prose)
+        self.assertNotIn("Not here.", prose)
+        self.assertEqual(check_guides.section_prose(text, "## Missing"), "")
+
+    def test_docstring_says_whether_a_workflow_runs_the_check(self):
+        """No workflow names check_guides.py yet, so its docstring says so
+        instead of saying a drifting example fails the build."""
+        workflows = "".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        )
+        in_ci = "check_guides.py" in workflows
+        self.assertEqual("fails the build" in check_guides.__doc__, in_ci)
+        self.assertEqual(
+            "No workflow in .github/workflows runs it" in check_guides.__doc__, not in_ci
+        )
 
     def test_spec_examples_are_appendix_b1_and_b2(self):
         examples = self.texts["spec"]

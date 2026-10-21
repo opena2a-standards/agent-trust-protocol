@@ -2,10 +2,11 @@
 # ATP Level 1 Conformance Test
 # Usage: ./level1.sh https://api.oa2a.org
 
-BASE_URL="${1:?Usage: $0 <authority-url>}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
+require_authority_url "${1:-}"
+BASE_URL="$1"
 
 DID_DOC=""
 PROOF=""

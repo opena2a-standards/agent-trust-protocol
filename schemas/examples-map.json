@@ -11,6 +11,11 @@
   },
   {
     "file": "ATP-SPEC.md",
+    "heading": "#### 4.4.1 Two-authority proof (Level 3)",
+    "schema": "schemas/trust-proof-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
     "heading": "### 5.4 Inclusion Proof",
     "schema": "schemas/inclusion-proof-v1.schema.json"
   },
@@ -32,6 +37,11 @@
   {
     "file": "ATP-SPEC.md",
     "heading": "### 7.1 Well-Known Endpoint",
+    "schema": "schemas/discovery-v1.schema.json"
+  },
+  {
+    "file": "ATP-SPEC.md",
+    "heading": "#### 7.1.1 Issuer key set",
     "schema": "schemas/discovery-v1.schema.json"
   },
   {

@@ -4,8 +4,10 @@ CONFORMANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCHEMAS_DIR="$CONFORMANCE_DIR/../schemas"
 
 # A missing tool or schema exits SETUP_ERROR, outside the range of failed-test
-# counts the scripts exit with (69 is EX_UNAVAILABLE in sysexits.h).
+# counts the scripts exit with (69 is EX_UNAVAILABLE in sysexits.h), and a run
+# without an authority URL exits USAGE_ERROR, also outside it (64 is EX_USAGE).
 SETUP_ERROR=69
+USAGE_ERROR=64
 for tool in curl jq; do
   command -v "$tool" > /dev/null || { echo "error: $tool is required" >&2; exit "$SETUP_ERROR"; }
 done
@@ -35,6 +37,13 @@ REVOCATION_SCHEMA=$(cat "$SCHEMAS_DIR/revocation-list-v1.schema.json")
 PASS=0
 FAIL=0
 DETAIL=""
+
+# require_authority_url URL: exit USAGE_ERROR with the usage line when URL, the
+# one argument of the script, is missing or empty. bash's own ${1:?} would exit
+# 1, which reads as one failed test.
+require_authority_url() {
+  [ -n "$1" ] || { echo "Usage: $0 <authority-url>" >&2; exit "$USAGE_ERROR"; }
+}
 
 test_case() {
   local name="$1" result="$2"

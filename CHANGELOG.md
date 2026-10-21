@@ -8,7 +8,40 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- `clients/python`: a Python client, installed with `pip install ./clients/python` (not
+  published). `AtpClient` fetches the discovery document (falling back to
+  `/.well-known/opena2a` on 404) and a trust proof (unwrapped from `proof`, refused when it is
+  about another DID), and verifies the proof offline with the discovery document's keys. The
+  verify functions check a trust proof (Section 4.4 steps 1 to 5, Ed25519 and ML-DSA-65,
+  without the issuer key set count of step 4), a discovery document, a signed tree head,
+  inclusion and consistency proofs (RFC 9162) and a revocation response, and return a reject
+  category and reason. The client does not count a Section 7.1.1 issuer key set, so
+  `verify_discovery` refuses a discovery document that carries `issuerKeySet` with
+  `SIGNATURE_INVALID` and `AtpClient.verify` verifies no proof of an authority that declares
+  one; `verify_trust_proof` receives keys without the set and is for an authority that
+  declares none. `clients/fixtures` holds byte copies of the 14 atp-conformance fixtures with
+  their SHA-256 manifest; the tests check the copies against it and that the client gives each
+  fixture its pinned verdict and category. `clients/README.md` documents the client and the
+  fixture copies. A TypeScript client is not yet written.
 - Version header 1.1.0-draft: the 1.1 revision series is open on main.
+- Section 4.4.1: a two-authority proof for Level 3. It is the Section 4.2 proof with an
+  Ed25519 entry of `did:opena2a:authority:cosigner.example` added over the same Section 4.3
+  canonical string, and a table gives the public key each `keyId` names. Both keys are
+  fixture keys: the issuer's is the Section 7.1 example's `#key-1`, the RFC 8032 Section 7.1
+  TEST 1 key, and the co-signer's is the TEST 2 key, and RFC 8032 publishes the secret key of
+  each. The proof shows the wire form and the step 7 rule, not a federation in operation, and
+  it is not a conformance-suite fixture. `scripts/validate_examples.py` verifies both Ed25519
+  signatures with RFC 8032 verification written in Python integers, so CI still installs no
+  package beyond `jsonschema`, and checks that the proof passes Section 4.4 steps 3, 4 and 7
+  under the table's keys and fails step 7 with the entries of `issuerDid` alone; the examples
+  map validates the block against the trust-proof schema. `scripts/test_checks.py` covers the
+  rule's refusals (the issuer's entry twice, one key under two DIDs, a second DID sharing a
+  key with the issuer, a second key of the issuer, a changed signature, a key the verifier
+  does not know, an entry of another algorithm) and the verification's (a changed message,
+  an S not below the group order, an encoding of no point, a wrong length), and its
+  `checks.jq` agreement test now runs on the proof and its edits as well. The abstract, the
+  README headline and the Section 2.1 coverage list point to the proof; federation stays
+  specified and not yet demonstrated, since no second authority co-signs proofs.
 - Section 4.3.1: the Sigstore co-signature the abstract and README listed, which the
   trust-proof schema refused. It is a `signatures[]` entry with `algorithm: "Sigstore"`,
   `keyId` set to the certificate identity, and a Sigstore v0.3 `bundle` (message signature
@@ -29,6 +62,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   certificate chain, or without a Rekor entry carrying an inclusion proof, and a proof whose
   only signatures are Sigstore entries. Section 2.1 lists co-signature verification as not
   yet covered by byte-stable fixtures.
+- Section 7.1.1: the issuer key set, the multi-key threshold signing the Section 10.1 threat
+  model once listed without defining it. A discovery document MAY carry `issuerKeySet`, an
+  m-of-n set of the authority's Ed25519 keys: `threshold` is m, and `keyIds` lists the n keys,
+  each the `keyId` of an Ed25519 entry of `publicKeys`, none twice and no two with the same
+  `publicKeyHex`, with m at most n. Section 4.4 step 4 requires a proof of an authority that
+  declares a set to be signed by at least `threshold` distinct keys of it: a key counts once
+  however many entries carry its `keyId`, an entry outside the set, an ML-DSA-65 entry and a
+  Sigstore entry count toward no key, and a proof short of the threshold is rejected with
+  `SIGNATURE_INVALID`, as is every proof of an authority whose set breaks the rules. Keys of
+  one set never count as the distinct authorities of step 7. An authority publishes a set,
+  raises its threshold or removes a key only when every proof it served in the previous 24
+  hours meets the new set; a key it revokes leaves the set at once. The Section 10.1 row for
+  signing key compromise names the set beside key revocation and the 24-hour validity.
+  `schemas/discovery-v1.schema.json` gains the member; `scripts/validate_examples.py` checks
+  each mapped discovery example the schema accepts against the rules the schema cannot
+  express, and the Section 7.1.1 example, a 2-of-3 set, is validated in CI. Section 2.1 lists
+  the count as not yet covered by fixtures.
 - Section 5.1.1: the entry type registry, the one home of the transparency-log entry types
   for the family. Twelve registered names with bytes 0x01 to 0x0C (the seven rc1 types,
   `atx_issued`, `atx_revoked`, `work_attestation`, `work_attestation_superseded`,
@@ -128,6 +178,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 4.4 step 7: the two-authority rule says when two signatures come from distinct
+  authorities. They are two Ed25519 entries that verify in step 4, one under a key of
+  `issuerDid` and one under a key of a second known trust authority, which the verifier knows
+  from its own configuration and never because the proof or the issuer's discovery document
+  names it. Two authorities are distinct only when their DIDs differ and no public key is a
+  key of both, so a key published under two DIDs never counts as a second authority, and an
+  ML-DSA-65 entry is not a second authority. Step 7 required "at least two signatures from
+  distinct authorities" without saying when two authorities are distinct.
 - Abstract and README headline: the trust response is cryptographically verifiable and
   auditable; a decentralized response (Section 6 federation, conformance Level 3) is stated
   as specified and not yet demonstrated, since no second authority co-signs proofs and no
@@ -203,6 +261,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   section and the Why ATX subsection moved, as written, into `docs/use-cases.md`, which now
   holds each use case in full; the `declaredPurpose` row's authorization caveat is a sentence
   under the ATX table.
+- Section 7.1: each `endpoints` value is a path on the authority, not a URL. It starts with
+  `/` and holds no `#`, whitespace or control character; a client appends it to the
+  authority URL and MUST NOT request a value that does not start with `/`, which would name
+  another host (`.attacker.example/x` or `@attacker.example/x` after
+  `https://api.oa2a.org`). `schemas/discovery-v1.schema.json` described `endpoints` as a
+  path/URL map and now describes a path map; the schema does not yet refuse a value that is
+  not a path. T1.7 already failed, without a request, on an `endpoints.trustProof` that does
+  not start with `/`.
+- README: the Reference Implementation section said the OpenA2A Registry implements ATP at
+  Level 2 conformance. It now names the conformance tests the reference authority passes (T1.1
+  to T1.6) and fails (T1.7 to T1.14 and T2.1 to T2.3), and says that its discovery document
+  declares conformance level 1. `docs/reference-implementation.md` records the run of
+  2026-10-21 and the answers behind each failure: the proof endpoint refuses the
+  authority's own `did:atp:` DID with HTTP 400, the log is not served at the path `level2.sh`
+  requests, and the revocation response has no `nextSince`. `scripts/test_checks.py` fails
+  when the README's ranges differ from the recorded run or the section names a conformance
+  level.
 
 ### Fixed
 
@@ -349,11 +424,12 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   lines of a JSON code block as sentences, so the sample's algorithm name is not reported as
   ML-DSA-65 without hybrid mode; lines of other code blocks are still checked.
 - Section 10.1: the threat model listed "multi-key threshold signing" as the Level 1 defense
-  against signing key compromise, and the specification defines no threshold signing. The
-  row now names the defenses it does define: key revocation (Section 8.2, enforced at
-  Section 4.4 step 3) and the 24-hour proof validity maximum (Section 10.2). Every other
-  defense in the table now cites its section too. `scripts/validate_examples.py` fails when a
-  defense cites no section or cites one that is not a heading of the specification.
+  against signing key compromise, and the specification defined no threshold signing. The
+  row now names the defenses the specification defines: key revocation (Section 8.2, enforced
+  at Section 4.4 step 3), the 24-hour proof validity maximum (Section 10.2) and the Section
+  7.1.1 issuer key set (see Added). Every other defense in the table now cites its section
+  too. `scripts/validate_examples.py` fails when a defense cites no section or cites one that
+  is not a heading of the specification.
 - Conformance scripts, follow-up: T1.5 requires `@context` to be a non-empty string or array
   (`false` passed). An RFC 3339 timestamp needs a UTC offset from 00:00 to 23:59 and nothing
   after it, so `+99:99` and a trailing newline no longer pass T1.8, T1.10, T2.2 and T2.3.
@@ -565,6 +641,46 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   when `schemas/` holds a link whose target is not there: `listed_files()` lists the link,
   and the registry holds the same schemas as it does without the link, so a
   `local_registry()` that reads the link fails a test.
+- Conformance scripts: run without an authority URL, or with an empty one,
+  `conformance/level1.sh` and `conformance/level2.sh` exited 1 (bash's own `${1:?}` error),
+  the code of one failed test; they now print the usage line and exit 64 (EX_USAGE in
+  sysexits.h), outside the failed-test range, before any test. `rfc3339` in
+  `conformance/checks.jq` read a timestamp through `jq`'s `mktime`, which with jq 1.8.1 and
+  1.7.1 on macOS refuses a year before 1900 and 1969-12-31T23:59:59Z (epoch second -1), so an
+  `issuedAt` of 1899-12-31T00:00:00Z failed T1.8 and a log entry timestamped
+  1969-12-31T23:59:59Z failed T2.2. It now checks the date and time fields by number and
+  counts the epoch seconds itself, for years 0000 to 9999. The date-time check in
+  `scripts/test_checks.py`, written apart from `checks.jq`, accepted hour 24 on Python 3.14,
+  whose `datetime.fromisoformat` reads it as midnight of the next day; it now bounds each
+  field by number and the day by `calendar`, and agrees with `rfc3339` on hour 24, a minute
+  or second of 60, a day the month lacks, years before 1900, year 0000 and
+  1969-12-31T23:59:59Z. `scripts/test_checks.py` checks the epoch seconds `rfc3339` gives
+  against values worked out apart from it, probes T1.8 and T2.2 with those timestamps, and
+  adds T1.7 probes for an `endpoints.trustProof` that extends the host name
+  (`.attacker.example/...`) or lacks its leading slash, each asserting the reason and that
+  no request is sent.
+- `scripts/validate_examples.py` read a section number or a link fragment on a README line
+  that links ATP-SPEC.md as a version of the specification:
+  `[ATP-SPEC.md Section 4.3.1](ATP-SPEC.md)` failed as `v4.3.1`, and so did `§4.3.1` and a
+  link to `#changes-since-1.0.0-rc1`. The number after `Section` or `Sections` (capital or
+  small s) or `§`, each number of a list that follows it, and a link fragment are no longer
+  read as versions; a version on the same line still is. `unit_sentences` repeated the
+  joining of a paragraph's lines that `join_unit` does; it now calls `join_unit`, so the
+  sentence checks and the example-claim check join lines in one place.
+  `scripts/test_checks.py` covers each case.
+- Integration guides: the A2A Python and TypeScript samples trusted a card whose embedded
+  proof was about another DID (`Agent trusted (level 3, score 0.82)`). Both now refuse a card
+  without `atp.did`, or whose `trustProof.did` is not `atp.did`, before the expiry check. The
+  batch sections of the CI/CD and MCP guides now say that the reference authority answers the
+  Section 7.2 body with HTTP 400 (`packages array is required`), as it did on 2026-10-21, and
+  to check each agent on its own until it accepts the body. `scripts/check_guides.py` fails
+  when a batch section does not say so while `scripts/guide_responses.json` records the
+  refusal, or still says so once it does not. Its docstring said that a drifting example
+  fails the build, though no workflow in `.github/workflows` runs it; it now says so, and
+  when to run it. New cases cover an expired proof in the A2A TypeScript sample, a level 3
+  proof with verdict `blocked` in the gate script, a B.2 proof about another DID, and the
+  two A2A cards above, and `scripts/test_checks.py` checks that each case fails when its
+  guide check is taken out.
 
 ## [1.0.0-rc1] - 2026-04-28
 

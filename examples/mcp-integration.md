@@ -184,7 +184,9 @@ if (result.allowed) {
 
 ## Batch Check: Multiple MCP Servers
 
-When an MCP client config references multiple servers, use the batch endpoint (ATP-SPEC Section 7.2) to verify them all in one request:
+When an MCP client config references multiple servers, use the batch endpoint (ATP-SPEC Section 7.2) to verify them all in one request.
+
+The reference authority (`https://api.oa2a.org`) does not accept this request yet: it answers the Section 7.2 body, `{"agents": [{"did": ...}]}`, with HTTP 400 and `{"error":"packages array is required"}`, so against it `check_mcp_servers_batch` raises `requests.HTTPError`. Until it accepts the body, call `check_mcp_trust` for each server.
 
 ```python
 import requests
