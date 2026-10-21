@@ -72,11 +72,31 @@ unmet() {
 
 # Section 7.1 transport rule: a request goes only under an https URL, or under
 # an http URL whose host is a loopback address literal, an IPv4 address in
-# 127.0.0.0/8 written as four decimal numbers or [::1]. The name localhost is
-# not one: a name is resolved, and can resolve to another machine.
+# 127.0.0.0/8 written as four decimal numbers or the IPv6 address ::1 in
+# brackets. The name localhost is not one: a name is resolved, and can resolve
+# to another machine.
+#
+# ::1 is eight groups of 16 bits, seven of them zero and the last 1. RFC 4291
+# Section 2.2 writes a group as one to four hexadecimal digits, may write "::"
+# in place of one run of one or more zero groups, and may write the last two
+# groups as the IPv4 address 0.0.0.1, so [0:0:0:0:0:0:0:1], [0::1], [::0001]
+# and [::0.0.0.1] are ::1 too; Python's ipaddress module, which the Python
+# client uses, reads each of them as ::1. IPV6_LOOPBACK matches ::1 in those
+# forms: six zero groups and the last two groups, without "::"; "::" just
+# before the last group, after up to six zero groups; or "::" before the last
+# two groups, with up to five zero groups before and after it in all, a branch
+# for each number of them before it.
 OCTET='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+ZERO_GROUP='0{1,4}'
+LAST_GROUP='0{0,3}1'
+LAST_TWO_GROUPS='('"$ZERO_GROUP"':'"$LAST_GROUP"'|0\.0\.0\.1)'
+IPV6_LOOPBACK='('"$ZERO_GROUP"':){6}'"$LAST_TWO_GROUPS"'|(:|('"$ZERO_GROUP"':){1,6}):'"$LAST_GROUP"
+IPV6_LOOPBACK+='|::('"$ZERO_GROUP"':){0,5}'"$LAST_TWO_GROUPS"
+for before in 1 2 3 4 5; do
+  IPV6_LOOPBACK+='|('"$ZERO_GROUP"':){'"$before"'}:('"$ZERO_GROUP"':){0,'"$((5 - before))"'}'"$LAST_TWO_GROUPS"
+done
 HTTPS_URL='^[Hh][Tt][Tt][Pp][Ss]://'
-LOOPBACK_HTTP_URL='^[Hh][Tt][Tt][Pp]://(127\.'"$OCTET"'\.'"$OCTET"'\.'"$OCTET"'|\[::1\])(:[0-9]*)?([/?#]|$)'
+LOOPBACK_HTTP_URL='^[Hh][Tt][Tt][Pp]://(127\.'"$OCTET"'\.'"$OCTET"'\.'"$OCTET"'|\[('"$IPV6_LOOPBACK"')\])(:[0-9]*)?([/?#]|$)'
 
 # transport_allowed URL: succeed when the Section 7.1 transport rule allows a
 # request under URL.

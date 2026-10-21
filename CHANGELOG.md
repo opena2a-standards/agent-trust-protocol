@@ -395,6 +395,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `conformance/lib.sh`: the Section 7.1 transport rule allowed the IPv6 loopback address only
+  as `[::1]`. Under `http://[0:0:0:0:0:0:0:1]`, `http://[0::1]` and `http://[::0001]` with the
+  port of an authority listening on `::1`, no request was sent, every test failed, and T1.1,
+  T2.1 and T2.3 said `the authority URL is neither https nor http to a loopback address literal
+  (Section 7.1)`, though Section 7.1 allows that address and the Python client accepts those
+  forms. `transport_allowed` now allows `::1` in brackets in the forms RFC 4291 Section 2.2
+  allows: groups of one to four digits, `::` in place of one run of zero groups, and the last
+  two groups as `0.0.0.1`. `scripts/fixture_authority.py` takes a host to listen on
+  (127.0.0.1 unless given), and `scripts/test_checks.py` checks that `transport_allowed`
+  agrees with Python's `ipaddress` module, which the Python client uses, on 4257 strings in
+  brackets, 913 of them forms of `::1`, and that an authority listening on `::1` passes every
+  test under those three forms, `[::0.0.0.1]` and `[::1]`.
 - Appendix B.1 and B.2 and the A2A and MCP integration guides: their `requests` and `fetch`
   calls followed redirects, the default of both libraries, so a 301 to an `http` URL sent
   the next request there, which Section 7.1 forbids. Given a 301 to `http` on both of its
