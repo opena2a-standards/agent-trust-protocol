@@ -480,6 +480,16 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   the path is accepted. The tests cover `?`, `#`, `/?`, `/#`, `?#`, `/?a=1` and `#top` after
   an `https` URL and after the local authority's URL, to which no request is sent.
   `clients/README.md` states the rule for both clients.
+- `clients/python`: `AtpClient` raised `RecursionError`, not `AtpError`, for an answer whose
+  arrays or objects are nested more deeply than `json.loads` can follow. Given a 200 answer of
+  200,000 `[` characters, within `MAX_RESPONSE_BYTES`, `get_discovery`, `get_trust_proof` and
+  `verify` raised `RecursionError` on Python 3.14 and 3.13: `json.loads` raises it for such a
+  body, and it is not a `ValueError`, which is what the client turned into `AtpError("GET
+  <path> did not answer with JSON")`. Such an answer now raises `AtpError` with the message
+  `GET <path> did not answer with JSON that the client can read: its arrays or objects are
+  nested too deeply`, also when the body is JSON. The tests cover 200,000 and 1,048,576 `[`
+  characters, a JSON array nested 524,288 deep and a JSON object nested 200,000 deep, under
+  `get_discovery`, `get_trust_proof` and `verify`.
 - Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
   (the PyPI package of that name is unrelated), so neither ran. They now call the Section
   4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,

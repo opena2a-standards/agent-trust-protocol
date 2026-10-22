@@ -1038,3 +1038,10 @@ class AtpClient:
             return json.loads(raw, parse_constant=_no_constant), headers
         except ValueError:
             raise AtpError(f"GET {path} did not answer with JSON") from None
+        except RecursionError:
+            # json.loads raises RecursionError, not ValueError, for a body whose arrays or objects are
+            # nested more deeply than it can follow, whether or not the body is JSON.
+            raise AtpError(
+                f"GET {path} did not answer with JSON that the client can read: "
+                "its arrays or objects are nested too deeply"
+            ) from None
