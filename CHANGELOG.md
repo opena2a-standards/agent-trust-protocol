@@ -447,6 +447,27 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `clients/README.md` documents the behavior, and that the TypeScript client fetches the
   discovery document once, accepts an `http` base URL whose host is not a loopback address
   and does not bound an answer body.
+- `clients/typescript`: `AtpClient` follows Section 7.1 for its base URL and its copy of the
+  discovery document, and bounds an answer body, as `clients/python` does. It accepted
+  `http://authority.example`; a base URL is now an `https` URL, or an `http` URL whose host is
+  a loopback address literal (an IPv4 address in `127.0.0.0/8` written as four decimal
+  numbers, or the IPv6 address `::1`), and otherwise the constructor throws a `TypeError`
+  naming Section 7.1, also for `http://localhost` and for `http://127.1`, which the URL parser
+  reads as `127.0.0.1`. The client kept the first discovery document it fetched, or a stored
+  one, with no age, so a key the authority removed (Section 8.2) kept verifying; it now
+  requests the document again once its copy is more than `refreshAfterMs` milliseconds old
+  (300000 by default, the Section 8.1 polling interval; at most 3600000,
+  `MAX_DISCOVERY_AGE_MS`), counts the answer's `Age` header in the age of a copy, and `verify`
+  rejects with `AtpError`, instead of returning a result, when a new copy cannot be had: the
+  request failed, or the copy arrived more than 3600 seconds old or with an `Age` that is not
+  a number of seconds. A stored copy passed as `discovery` takes its age as `discoveryAgeMs`.
+  The client read the whole answer body, 20 MB in the reproduction; a body longer than
+  `MAX_RESPONSE_BYTES` (1,048,576 bytes) now rejects with `AtpError`. The tests cover the
+  accepted and refused base URLs, a key removed between two `verify` calls, `Age` values of
+  290, 301, 3600 and 3601 and malformed ones, a failed request for a new copy, stored copies
+  290 and 3601 seconds old, out-of-range `refreshAfterMs` and `discoveryAgeMs`, and answers of
+  exactly the bound, one byte past it and 20 MB. `clients/README.md` and the class's doc
+  comment state the rules.
 - `clients/python` and `clients/typescript`: `AtpClient` accepted a base URL that ends in an
   empty query or fragment, such as `https://authority.example?` or `http://127.0.0.1:8080#`,
   although the constructor's error says a base URL has no query or fragment: `urlsplit`, and

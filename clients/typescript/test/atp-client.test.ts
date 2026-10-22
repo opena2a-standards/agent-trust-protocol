@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import * as atp from "../src/index.js";
 
@@ -662,11 +663,14 @@ describe("verifyDiscovery", () => {
   });
 });
 
-/** An answer of the local authority: a status, a JSON value or raw bytes, and headers. */
+/**
+ * An answer of the local authority: a status, a JSON value or raw bytes, and
+ * headers; a header given an array of values is sent once for each.
+ */
 interface Route {
   readonly status: number;
   readonly body?: unknown;
-  readonly headers?: Record<string, string>;
+  readonly headers?: Record<string, string | string[]>;
 }
 
 /** An HTTP server on 127.0.0.1 that answers each path from its routes and records the requests. */
@@ -724,6 +728,10 @@ describe("AtpClient", () => {
   afterEach(() => authority.stop());
 
   const count = (path: string): number => authority.requests.filter((sent) => sent === path).length;
+  /** The local authority answers /.well-known/atp with route, and every other path with 404. */
+  const answerDiscovery = (route: Route): void => {
+    authority.routes = new Map<string, Route>([["/.well-known/atp", route]]);
+  };
 
   it("getTrustProof unwraps the proof, and verify checks it offline", async () => {
     const proof = signedProof([signer], { did: "did:opena2a:mcp_server:@scope/server name" });
@@ -850,5 +858,161 @@ describe("AtpClient", () => {
       assert.throws(() => new atp.AtpClient(`https://authority.example${suffix}`), refused, suffix);
     }
     assert.deepEqual(authority.requests, []);
+  });
+
+  it("throws for an http base URL whose host is not a loopback address literal", () => {
+    // Section 7.1: an https authority URL, or an http one whose host is in 127.0.0.0/8 or is
+    // ::1; the name localhost is not an address literal. The URL parser reads 127.1,
+    // 0x7f.0.0.1, 2130706433, 127.0.0.01, 127.0.0.1. and %31%32%37.0.0.1 as 127.0.0.1.
+    const accepted = [
+      "http://127.0.0.1:8080",
+      "http://127.255.0.9/",
+      "http://[::1]:8080",
+      "http://[0:0:0:0:0:0:0:1]",
+      "http://[::0.0.0.1]",
+      "HTTP://127.0.0.1:80",
+      "https://authority.example",
+    ];
+    for (const url of accepted) assert.equal(new atp.AtpClient(url).baseUrl, url.replace(/\/+$/, ""), url);
+    const refused = [
+      "http://authority.example",
+      "http://localhost",
+      "http://localhost:8080",
+      "http://0.0.0.0",
+      "http://128.0.0.1",
+      "http://127.1",
+      "http://0x7f.0.0.1",
+      "http://2130706433",
+      "http://127.0.0.01",
+      "http://127.0.0.1.",
+      "http://%31%32%37.0.0.1",
+      "http://127.0.0.1@authority.example",
+      "http://[::2]",
+      "http://[::ffff:127.0.0.1]",
+    ];
+    for (const url of refused) {
+      assert.throws(() => new atp.AtpClient(url), { name: "TypeError", message: /Section 7\.1/ }, url);
+    }
+  });
+
+  it("throws for an answer body longer than MAX_RESPONSE_BYTES", async () => {
+    assert.equal(atp.MAX_RESPONSE_BYTES, 1_048_576);
+    const document = Buffer.from(JSON.stringify(discovery));
+    const padded = Buffer.concat([document, Buffer.alloc(atp.MAX_RESPONSE_BYTES - document.length, " ")]);
+    answerDiscovery({ status: 200, body: padded });
+    assert.deepEqual(await client.getDiscovery(), discovery);
+    const cases: [string, number][] = [
+      ["/.well-known/atp", 20 * 1024 * 1024],
+      ["/.well-known/atp", atp.MAX_RESPONSE_BYTES + 1],
+      ["/api/v1/trust/proof", atp.MAX_RESPONSE_BYTES + 1],
+    ];
+    for (const [path, size] of cases) {
+      const body = Buffer.concat([Buffer.alloc(size - 2, " "), Buffer.from("{}")]);
+      authority.routes = new Map<string, Route>([[path, { status: 200, body }]]);
+      const local = new atp.AtpClient(client.baseUrl);
+      await assert.rejects(
+        path === "/.well-known/atp" ? local.getDiscovery() : local.getTrustProof(AGENT),
+        { name: "AtpError", message: /^GET \S+ answered with a body longer than 1048576 bytes$/ },
+        `${path} ${size}`,
+      );
+    }
+  });
+
+  it("a removed key stops verifying once the copy is more than refreshAfterMs old", async () => {
+    // Section 8.2 step 2: the authority removes a revoked key from its discovery
+    // document, and the client requests the document again.
+    const local = new atp.AtpClient(client.baseUrl, { refreshAfterMs: 50 });
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery });
+    assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED);
+    const other = new Signer(`${AUTHORITY}#key-2`).key({ status: "active", validFrom: "2026-01-01T00:00:00Z" });
+    answerDiscovery({ status: 200, body: { ...discovery, publicKeys: [other] } });
+    await sleep(100);
+    assertRejected(await local.verify(proof, { now: CLOCK }), "SIGNATURE_INVALID", "does not resolve");
+    assert.equal(count("/.well-known/atp"), 2);
+  });
+
+  it("counts the Age header in the age of a copy", async () => {
+    const proof = signedProof([signer]);
+    for (const [age, requests] of [["290", 1], ["301", 2]] as const) {
+      answerDiscovery({ status: 200, body: discovery, headers: { Age: age } });
+      authority.requests.length = 0;
+      const local = new atp.AtpClient(client.baseUrl);
+      assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED, age);
+      assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED, age);
+      assert.equal(count("/.well-known/atp"), requests, age);
+    }
+  });
+
+  it("verify throws for a copy more than 3600 seconds old when it arrives", async () => {
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery, headers: { Age: "3600" } });
+    assert.deepEqual(await new atp.AtpClient(client.baseUrl).verify(proof, { now: CLOCK }), ACCEPTED);
+    for (const age of ["3601", "0003601", "9".repeat(5000)]) {
+      answerDiscovery({ status: 200, body: discovery, headers: { Age: age } });
+      await assert.rejects(
+        new atp.AtpClient(client.baseUrl).verify(proof, { now: CLOCK }),
+        { name: "AtpError", message: /more than the Section 7\.1 maximum age of 3600 seconds/ },
+        age.slice(0, 8),
+      );
+    }
+  });
+
+  it("verify throws for an Age header that is not one number of seconds", async () => {
+    const proof = signedProof([signer]);
+    for (const age of ["soon", "-1", "1.5", "", ["1", "2"]]) {
+      answerDiscovery({ status: 200, body: discovery, headers: { Age: age } });
+      await assert.rejects(
+        new atp.AtpClient(client.baseUrl).verify(proof, { now: CLOCK }),
+        { name: "AtpError", message: /Age header is not one number of seconds/ },
+        JSON.stringify(age),
+      );
+    }
+  });
+
+  it("verify throws when it needs a new copy and the request fails", async () => {
+    const local = new atp.AtpClient(client.baseUrl, { refreshAfterMs: 50 });
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery });
+    assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED);
+    answerDiscovery({ status: 503, body: { error: "unavailable" } });
+    await sleep(100);
+    await assert.rejects(
+      local.verify(proof, { now: CLOCK }),
+      (error: unknown) => error instanceof atp.AtpError && error.status === 503,
+    );
+    answerDiscovery({ status: 200, body: discovery });
+    assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED);
+  });
+
+  it("uses a stored copy until its age is more than refreshAfterMs", async () => {
+    const proof = signedProof([signer]);
+    const stored = new atp.AtpClient(client.baseUrl, { discovery, discoveryAgeMs: 290_000 });
+    assert.deepEqual(await stored.verify(proof, { now: CLOCK }), ACCEPTED);
+    assert.deepEqual(authority.requests, []);
+    answerDiscovery({ status: 503, body: { error: "unavailable" } });
+    const stale = new atp.AtpClient(client.baseUrl, { discovery, discoveryAgeMs: 3_601_000 });
+    await assert.rejects(stale.verify(proof, { now: CLOCK }), atp.AtpError);
+    assert.deepEqual(authority.requests, ["/.well-known/atp"]);
+  });
+
+  it("checks refreshAfterMs and discoveryAgeMs", () => {
+    const cases: [string, unknown[]][] = [
+      ["refreshAfterMs", [-1, atp.MAX_DISCOVERY_AGE_MS + 1, Number.NaN, "300000"]],
+      ["discoveryAgeMs", [-1, Number.POSITIVE_INFINITY, Number.NaN, "0"]],
+    ];
+    for (const [name, values] of cases) {
+      for (const value of values) {
+        assert.throws(
+          () => new atp.AtpClient("https://authority.example", { [name]: value } as atp.AtpClientOptions),
+          { name: "TypeError", message: new RegExp(`^${name} must be`) },
+          `${name} ${String(value)}`,
+        );
+      }
+    }
+    assert.equal(atp.MAX_DISCOVERY_AGE_MS, 3_600_000);
+    assert.equal(new atp.AtpClient("https://authority.example").refreshAfterMs, 300_000);
+    const longest = new atp.AtpClient("https://authority.example", { refreshAfterMs: atp.MAX_DISCOVERY_AGE_MS });
+    assert.equal(longest.refreshAfterMs, 3_600_000);
   });
 });
