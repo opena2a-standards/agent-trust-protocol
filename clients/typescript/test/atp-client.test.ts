@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import * as atp from "../src/index.js";
 
@@ -662,11 +663,139 @@ describe("verifyDiscovery", () => {
   });
 });
 
-/** An answer of the local authority: a status, a JSON value or raw bytes, and headers. */
+/**
+ * A reason shows text it takes from the input unchanged when that text is
+ * printable ASCII without a space, a quote or a backslash, and in JSON string
+ * form otherwise, with each character outside printable ASCII escaped, as the
+ * Python client's json.dumps writes it. Each test checks one reason and that
+ * it is printable ASCII.
+ */
+describe("reason text", () => {
+  /** A backslash, u and the four lower-case hex digits of a UTF-16 code unit: its JSON escape. */
+  const unicodeEscape = (unit: number): string => `\\u${unit.toString(16).padStart(4, "0")}`;
+  // A line feed, a carriage return, an escape, DEL, NEL (a C1 control) and the
+  // Unicode line separator, and the JSON string form of the six.
+  const CONTROLS = "\n\r\x1b\x7f\x85\u{2028}";
+  const ESCAPED = String.raw`\n\r` + [0x1b, 0x7f, 0x85, 0x2028].map(unicodeEscape).join("");
+  const ISSUER = `did:opena2a:authority:a${CONTROLS}b`;
+  const SHOWN_ISSUER = `"did:opena2a:authority:a${ESCAPED}b"`;
+  const KEY_ID = `${AUTHORITY}#key-${CONTROLS}`;
+  const SHOWN_KEY_ID = `"${AUTHORITY}#key-${ESCAPED}"`;
+  const NOT_A_VERDICT = "is not one of passed, warning, blocked, listed, verified, unknown";
+
+  const verify = (proof: unknown, keys: unknown[], trusted: string): atp.VerifyResult =>
+    atp.verifyTrustProof(proof, keys, trusted, { now: CLOCK });
+
+  const assertReason = (result: atp.VerifyResult, category: atp.RejectCategory, reason: string): void => {
+    assert.equal(result.valid, false, JSON.stringify(result));
+    assert.equal(result.category, category, JSON.stringify(result));
+    assert.equal(result.reason, reason);
+    assert.match(result.reason, /^[\x20-\x7e]+$/, JSON.stringify(result.reason));
+  };
+
+  it("an issuerDid outside the trusted set (step 2)", () => {
+    // A line feed in issuerDid reached this reason as it was, so the reason took two lines.
+    const proof = signedProof([new Signer()], { issuerDid: "did:example:a\nb" });
+    const reason = String.raw`issuerDid "did:example:a\nb" is not a trusted issuer`;
+    assertReason(verify(proof, [], AUTHORITY), "UNTRUSTED_ISSUER", reason);
+    const controls = signedProof([new Signer()], { issuerDid: ISSUER });
+    assertReason(verify(controls, [], AUTHORITY), "UNTRUSTED_ISSUER", `issuerDid ${SHOWN_ISSUER} is not a trusted issuer`);
+  });
+
+  it("a signature's algorithm (step 3)", () => {
+    const proof = signedProof([new Signer()]);
+    (signatures(proof)[0] as Members)["algorithm"] = `Ed25519${CONTROLS}`;
+    const reason = `signatures[0] has algorithm "Ed25519${ESCAPED}", not Ed25519 or ML-DSA-65`;
+    assertReason(verify(proof, [new Signer().key()], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+
+  it("a keyId that resolves to no key (step 3)", () => {
+    const proof = signedProof([new Signer(KEY_ID)]);
+    const reason = `signatures[0] keyId ${SHOWN_KEY_ID} does not resolve to a non-revoked Ed25519 key`;
+    assertReason(verify(proof, [new Signer().key()], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+
+  it("the keyId of a signature that does not verify (step 4)", () => {
+    const signer = new Signer(KEY_ID);
+    const proof = signedProof([signer]);
+    const entry = signatures(proof)[0] as Members;
+    entry["value"] = flipFirstByte(entry["value"] as string);
+    const reason = `the Ed25519 signature of ${SHOWN_KEY_ID} did not verify`;
+    assertReason(verify(proof, [signer.key()], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+
+  it("an issuerDid no key of which signed (step 4)", () => {
+    const other = new Signer("did:opena2a:authority:other.example#key-1");
+    const proof = signedProof([other], { issuerDid: ISSUER });
+    const reason = `no Ed25519 signature by a key of ${SHOWN_ISSUER} verified`;
+    assertReason(verify(proof, [other.key()], ISSUER), "SIGNATURE_INVALID", reason);
+  });
+
+  it("a verdict outside the list (step 5)", () => {
+    const signer = new Signer();
+    const cases: [string, string][] = [
+      ["approved", `verdict approved ${NOT_A_VERDICT}`],
+      [`passed${CONTROLS}`, `verdict "passed${ESCAPED}" ${NOT_A_VERDICT}`],
+      ["not passed", `verdict "not passed" ${NOT_A_VERDICT}`],
+      ['say "passed"', String.raw`verdict "say \"passed\"" ` + NOT_A_VERDICT],
+      // A line feed, and a backslash followed by n, give two reasons.
+      ["a\nb", String.raw`verdict "a\nb" ` + NOT_A_VERDICT],
+      ["a\\nb", String.raw`verdict "a\\nb" ` + NOT_A_VERDICT],
+      // A character above U+007E is escaped, one above U+FFFF as its two surrogates.
+      ["pass\xe9", `verdict "pass${unicodeEscape(0xe9)}" ${NOT_A_VERDICT}`],
+      ["passed\u{1F600}", `verdict "passed${unicodeEscape(0xd83d)}${unicodeEscape(0xde00)}" ${NOT_A_VERDICT}`],
+    ];
+    for (const [verdict, reason] of cases) {
+      const proof = signedProof([signer], { verdict });
+      assertReason(verify(proof, [signer.key()], AUTHORITY), "SEMANTIC_INVALID", reason);
+    }
+  });
+
+  it("an authorityDid outside the trusted set", () => {
+    const document = fixture("discovery-valid")["discoveryResponse"] as Members;
+    const result = atp.verifyDiscovery({ ...document, authorityDid: ISSUER }, AUTHORITY);
+    assertReason(result, "UNTRUSTED_ISSUER", `authorityDid ${SHOWN_ISSUER} is not a trusted issuer`);
+  });
+
+  it("a tree head's signedBy that resolves to no key", () => {
+    const head = (signedBy: string): Members => ({
+      treeSize: 1,
+      timestamp: "2026-05-23T00:00:00Z",
+      rootHash: wire(Buffer.alloc(32)),
+      signedBy,
+      signature: new Signer().sign(Buffer.alloc(32)),
+    });
+    const cases: [string, string][] = [
+      [KEY_ID, SHOWN_KEY_ID],
+      // A lone surrogate, which signedBy may hold, is escaped as one.
+      [`${AUTHORITY}#key-\u{D800}`, `"${AUTHORITY}#key-${unicodeEscape(0xd800)}"`],
+    ];
+    for (const [signedBy, written] of cases) {
+      const reason = `signedTreeHead.signedBy ${written} does not resolve to a non-revoked Ed25519 key`;
+      assertReason(atp.verifySignedTreeHead(head(signedBy), [new Signer().key()]), "SIGNATURE_INVALID", reason);
+    }
+  });
+
+  it("leaves printable ASCII without a space, a quote or a backslash unchanged", () => {
+    const signer = new Signer();
+    const proof = signedProof([signer]);
+    const expired = atp.verifyTrustProof(proof, [signer.key()], AUTHORITY, { now: "2026-05-24T06:00:00Z" });
+    assertReason(expired, "EXPIRED", "the trust proof expired at 2026-05-24T06:00:00Z");
+    const other = "did:opena2a:authority:other.example";
+    assertReason(verify(proof, [], other), "UNTRUSTED_ISSUER", `issuerDid ${AUTHORITY} is not a trusted issuer`);
+    const reason = `signatures[0] keyId ${AUTHORITY}#key-1 does not resolve to a non-revoked Ed25519 key`;
+    assertReason(verify(proof, [], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+});
+
+/**
+ * An answer of the local authority: a status, a JSON value or raw bytes, and
+ * headers; a header given an array of values is sent once for each.
+ */
 interface Route {
   readonly status: number;
   readonly body?: unknown;
-  readonly headers?: Record<string, string>;
+  readonly headers?: Record<string, string | string[]>;
 }
 
 /** An HTTP server on 127.0.0.1 that answers each path from its routes and records the requests. */
@@ -724,6 +853,10 @@ describe("AtpClient", () => {
   afterEach(() => authority.stop());
 
   const count = (path: string): number => authority.requests.filter((sent) => sent === path).length;
+  /** The local authority answers /.well-known/atp with route, and every other path with 404. */
+  const answerDiscovery = (route: Route): void => {
+    authority.routes = new Map<string, Route>([["/.well-known/atp", route]]);
+  };
 
   it("getTrustProof unwraps the proof, and verify checks it offline", async () => {
     const proof = signedProof([signer], { did: "did:opena2a:mcp_server:@scope/server name" });
@@ -850,5 +983,161 @@ describe("AtpClient", () => {
       assert.throws(() => new atp.AtpClient(`https://authority.example${suffix}`), refused, suffix);
     }
     assert.deepEqual(authority.requests, []);
+  });
+
+  it("throws for an http base URL whose host is not a loopback address literal", () => {
+    // Section 7.1: an https authority URL, or an http one whose host is in 127.0.0.0/8 or is
+    // ::1; the name localhost is not an address literal. The URL parser reads 127.1,
+    // 0x7f.0.0.1, 2130706433, 127.0.0.01, 127.0.0.1. and %31%32%37.0.0.1 as 127.0.0.1.
+    const accepted = [
+      "http://127.0.0.1:8080",
+      "http://127.255.0.9/",
+      "http://[::1]:8080",
+      "http://[0:0:0:0:0:0:0:1]",
+      "http://[::0.0.0.1]",
+      "HTTP://127.0.0.1:80",
+      "https://authority.example",
+    ];
+    for (const url of accepted) assert.equal(new atp.AtpClient(url).baseUrl, url.replace(/\/+$/, ""), url);
+    const refused = [
+      "http://authority.example",
+      "http://localhost",
+      "http://localhost:8080",
+      "http://0.0.0.0",
+      "http://128.0.0.1",
+      "http://127.1",
+      "http://0x7f.0.0.1",
+      "http://2130706433",
+      "http://127.0.0.01",
+      "http://127.0.0.1.",
+      "http://%31%32%37.0.0.1",
+      "http://127.0.0.1@authority.example",
+      "http://[::2]",
+      "http://[::ffff:127.0.0.1]",
+    ];
+    for (const url of refused) {
+      assert.throws(() => new atp.AtpClient(url), { name: "TypeError", message: /Section 7\.1/ }, url);
+    }
+  });
+
+  it("throws for an answer body longer than MAX_RESPONSE_BYTES", async () => {
+    assert.equal(atp.MAX_RESPONSE_BYTES, 1_048_576);
+    const document = Buffer.from(JSON.stringify(discovery));
+    const padded = Buffer.concat([document, Buffer.alloc(atp.MAX_RESPONSE_BYTES - document.length, " ")]);
+    answerDiscovery({ status: 200, body: padded });
+    assert.deepEqual(await client.getDiscovery(), discovery);
+    const cases: [string, number][] = [
+      ["/.well-known/atp", 20 * 1024 * 1024],
+      ["/.well-known/atp", atp.MAX_RESPONSE_BYTES + 1],
+      ["/api/v1/trust/proof", atp.MAX_RESPONSE_BYTES + 1],
+    ];
+    for (const [path, size] of cases) {
+      const body = Buffer.concat([Buffer.alloc(size - 2, " "), Buffer.from("{}")]);
+      authority.routes = new Map<string, Route>([[path, { status: 200, body }]]);
+      const local = new atp.AtpClient(client.baseUrl);
+      await assert.rejects(
+        path === "/.well-known/atp" ? local.getDiscovery() : local.getTrustProof(AGENT),
+        { name: "AtpError", message: /^GET \S+ answered with a body longer than 1048576 bytes$/ },
+        `${path} ${size}`,
+      );
+    }
+  });
+
+  it("a removed key stops verifying once the copy is more than refreshAfterMs old", async () => {
+    // Section 8.2 step 2: the authority removes a revoked key from its discovery
+    // document, and the client requests the document again.
+    const local = new atp.AtpClient(client.baseUrl, { refreshAfterMs: 50 });
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery });
+    assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED);
+    const other = new Signer(`${AUTHORITY}#key-2`).key({ status: "active", validFrom: "2026-01-01T00:00:00Z" });
+    answerDiscovery({ status: 200, body: { ...discovery, publicKeys: [other] } });
+    await sleep(100);
+    assertRejected(await local.verify(proof, { now: CLOCK }), "SIGNATURE_INVALID", "does not resolve");
+    assert.equal(count("/.well-known/atp"), 2);
+  });
+
+  it("counts the Age header in the age of a copy", async () => {
+    const proof = signedProof([signer]);
+    for (const [age, requests] of [["290", 1], ["301", 2]] as const) {
+      answerDiscovery({ status: 200, body: discovery, headers: { Age: age } });
+      authority.requests.length = 0;
+      const local = new atp.AtpClient(client.baseUrl);
+      assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED, age);
+      assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED, age);
+      assert.equal(count("/.well-known/atp"), requests, age);
+    }
+  });
+
+  it("verify throws for a copy more than 3600 seconds old when it arrives", async () => {
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery, headers: { Age: "3600" } });
+    assert.deepEqual(await new atp.AtpClient(client.baseUrl).verify(proof, { now: CLOCK }), ACCEPTED);
+    for (const age of ["3601", "0003601", "9".repeat(5000)]) {
+      answerDiscovery({ status: 200, body: discovery, headers: { Age: age } });
+      await assert.rejects(
+        new atp.AtpClient(client.baseUrl).verify(proof, { now: CLOCK }),
+        { name: "AtpError", message: /more than the Section 7\.1 maximum age of 3600 seconds/ },
+        age.slice(0, 8),
+      );
+    }
+  });
+
+  it("verify throws for an Age header that is not one number of seconds", async () => {
+    const proof = signedProof([signer]);
+    for (const age of ["soon", "-1", "1.5", "", ["1", "2"]]) {
+      answerDiscovery({ status: 200, body: discovery, headers: { Age: age } });
+      await assert.rejects(
+        new atp.AtpClient(client.baseUrl).verify(proof, { now: CLOCK }),
+        { name: "AtpError", message: /Age header is not one number of seconds/ },
+        JSON.stringify(age),
+      );
+    }
+  });
+
+  it("verify throws when it needs a new copy and the request fails", async () => {
+    const local = new atp.AtpClient(client.baseUrl, { refreshAfterMs: 50 });
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery });
+    assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED);
+    answerDiscovery({ status: 503, body: { error: "unavailable" } });
+    await sleep(100);
+    await assert.rejects(
+      local.verify(proof, { now: CLOCK }),
+      (error: unknown) => error instanceof atp.AtpError && error.status === 503,
+    );
+    answerDiscovery({ status: 200, body: discovery });
+    assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED);
+  });
+
+  it("uses a stored copy until its age is more than refreshAfterMs", async () => {
+    const proof = signedProof([signer]);
+    const stored = new atp.AtpClient(client.baseUrl, { discovery, discoveryAgeMs: 290_000 });
+    assert.deepEqual(await stored.verify(proof, { now: CLOCK }), ACCEPTED);
+    assert.deepEqual(authority.requests, []);
+    answerDiscovery({ status: 503, body: { error: "unavailable" } });
+    const stale = new atp.AtpClient(client.baseUrl, { discovery, discoveryAgeMs: 3_601_000 });
+    await assert.rejects(stale.verify(proof, { now: CLOCK }), atp.AtpError);
+    assert.deepEqual(authority.requests, ["/.well-known/atp"]);
+  });
+
+  it("checks refreshAfterMs and discoveryAgeMs", () => {
+    const cases: [string, unknown[]][] = [
+      ["refreshAfterMs", [-1, atp.MAX_DISCOVERY_AGE_MS + 1, Number.NaN, "300000"]],
+      ["discoveryAgeMs", [-1, Number.POSITIVE_INFINITY, Number.NaN, "0"]],
+    ];
+    for (const [name, values] of cases) {
+      for (const value of values) {
+        assert.throws(
+          () => new atp.AtpClient("https://authority.example", { [name]: value } as atp.AtpClientOptions),
+          { name: "TypeError", message: new RegExp(`^${name} must be`) },
+          `${name} ${String(value)}`,
+        );
+      }
+    }
+    assert.equal(atp.MAX_DISCOVERY_AGE_MS, 3_600_000);
+    assert.equal(new atp.AtpClient("https://authority.example").refreshAfterMs, 300_000);
+    const longest = new atp.AtpClient("https://authority.example", { refreshAfterMs: atp.MAX_DISCOVERY_AGE_MS });
+    assert.equal(longest.refreshAfterMs, 3_600_000);
   });
 });

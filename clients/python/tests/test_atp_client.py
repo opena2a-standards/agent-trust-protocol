@@ -1151,6 +1151,34 @@ class ClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(atp.AtpError, rf"GET {path}\S* answered with a body longer than 1048576 bytes"):
                     fetch()
 
+    def test_an_answer_nested_too_deeply_to_read_raises(self):
+        # json.loads raises RecursionError, which is not a ValueError, for a body whose arrays or
+        # objects are nested more deeply than it can follow, JSON or not. Each body is within
+        # MAX_RESPONSE_BYTES, and get_discovery, get_trust_proof and verify raised RecursionError for it.
+        half = atp.MAX_RESPONSE_BYTES // 2
+        bodies = {
+            "200,000 [ characters": b"[" * 200_000,
+            "MAX_RESPONSE_BYTES [ characters": b"[" * atp.MAX_RESPONSE_BYTES,
+            "a JSON array nested MAX_RESPONSE_BYTES / 2 deep": b"[" * half + b"]" * half,
+            "a JSON object nested 200,000 deep": b'{"":' * 200_000 + b"0" + b"}" * 200_000,
+        }
+        reason = "did not answer with JSON that the client can read: its arrays or objects are nested too deeply"
+        discovery = f"GET /.well-known/atp {reason}"
+        proof = f"GET /api/v1/trust/proof?did={urllib.parse.quote(AGENT, safe='')} {reason}"
+        for label, body in bodies.items():
+            self.server.routes = {"/.well-known/atp": (200, body), "/api/v1/trust/proof": (200, body)}
+            client = atp.AtpClient(self.url)
+            for call, fetch, message in (
+                ("get_discovery", client.get_discovery, discovery),
+                ("get_trust_proof", lambda: client.get_trust_proof(AGENT), proof),
+                ("verify", lambda: client.verify(signed_proof(self.signer), now=CLOCK), discovery),
+            ):
+                with self.subTest(label, call=call):
+                    with self.assertRaises(atp.AtpError) as raised:
+                        fetch()
+                    self.assertEqual(str(raised.exception), message)
+                    self.assertIsNone(raised.exception.status)
+
     def tls(self, handler: type) -> tuple[http.server.ThreadingHTTPServer, dict[str, str]]:
         """A server that answers with handler over TLS, and the environment
         under which a client created trusts its certificate."""

@@ -447,6 +447,27 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   `clients/README.md` documents the behavior, and that the TypeScript client fetches the
   discovery document once, accepts an `http` base URL whose host is not a loopback address
   and does not bound an answer body.
+- `clients/typescript`: `AtpClient` follows Section 7.1 for its base URL and its copy of the
+  discovery document, and bounds an answer body, as `clients/python` does. It accepted
+  `http://authority.example`; a base URL is now an `https` URL, or an `http` URL whose host is
+  a loopback address literal (an IPv4 address in `127.0.0.0/8` written as four decimal
+  numbers, or the IPv6 address `::1`), and otherwise the constructor throws a `TypeError`
+  naming Section 7.1, also for `http://localhost` and for `http://127.1`, which the URL parser
+  reads as `127.0.0.1`. The client kept the first discovery document it fetched, or a stored
+  one, with no age, so a key the authority removed (Section 8.2) kept verifying; it now
+  requests the document again once its copy is more than `refreshAfterMs` milliseconds old
+  (300000 by default, the Section 8.1 polling interval; at most 3600000,
+  `MAX_DISCOVERY_AGE_MS`), counts the answer's `Age` header in the age of a copy, and `verify`
+  rejects with `AtpError`, instead of returning a result, when a new copy cannot be had: the
+  request failed, or the copy arrived more than 3600 seconds old or with an `Age` that is not
+  a number of seconds. A stored copy passed as `discovery` takes its age as `discoveryAgeMs`.
+  The client read the whole answer body, 20 MB in the reproduction; a body longer than
+  `MAX_RESPONSE_BYTES` (1,048,576 bytes) now rejects with `AtpError`. The tests cover the
+  accepted and refused base URLs, a key removed between two `verify` calls, `Age` values of
+  290, 301, 3600 and 3601 and malformed ones, a failed request for a new copy, stored copies
+  290 and 3601 seconds old, out-of-range `refreshAfterMs` and `discoveryAgeMs`, and answers of
+  exactly the bound, one byte past it and 20 MB. `clients/README.md` and the class's doc
+  comment state the rules.
 - `clients/python` and `clients/typescript`: `AtpClient` accepted a base URL that ends in an
   empty query or fragment, such as `https://authority.example?` or `http://127.0.0.1:8080#`,
   although the constructor's error says a base URL has no query or fragment: `urlsplit`, and
@@ -459,6 +480,30 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   the path is accepted. The tests cover `?`, `#`, `/?`, `/#`, `?#`, `/?a=1` and `#top` after
   an `https` URL and after the local authority's URL, to which no request is sent.
   `clients/README.md` states the rule for both clients.
+- `clients/python`: `AtpClient` raised `RecursionError`, not `AtpError`, for an answer whose
+  arrays or objects are nested more deeply than `json.loads` can follow. Given a 200 answer of
+  200,000 `[` characters, within `MAX_RESPONSE_BYTES`, `get_discovery`, `get_trust_proof` and
+  `verify` raised `RecursionError` on Python 3.14 and 3.13: `json.loads` raises it for such a
+  body, and it is not a `ValueError`, which is what the client turned into `AtpError("GET
+  <path> did not answer with JSON")`. Such an answer now raises `AtpError` with the message
+  `GET <path> did not answer with JSON that the client can read: its arrays or objects are
+  nested too deeply`, also when the body is JSON. The tests cover 200,000 and 1,048,576 `[`
+  characters, a JSON array nested 524,288 deep and a JSON object nested 200,000 deep, under
+  `get_discovery`, `get_trust_proof` and `verify`.
+- `clients/typescript`: the verify functions wrote text from the input into a reason as it
+  was: `issuerDid`, a signature's `algorithm` and `keyId`, `verdict`, `authorityDid` and a
+  tree head's `signedBy`. A line feed or another control character in that text reached the
+  reason, which a caller that logs or prints it writes out: for a proof whose `issuerDid` is
+  `did:example:a`, a line feed and `b`, from an issuer that is not trusted, the reason held
+  the line feed. The client now applies the Python client's rule: such text is unchanged when
+  it is printable ASCII without a space, a quote or a backslash, and in JSON string form
+  otherwise, with each character outside printable ASCII escaped as `json.dumps` escapes it,
+  so that reason is `issuerDid "did:example:a\nb" is not a trusted issuer` in both clients.
+  For each code point, alone and between two letters, the TypeScript client writes the text
+  the Python client writes. The tests pass control characters through the 8 reasons that
+  take that text, and also a verdict with a space, a quote, a backslash or a character above
+  U+007E and a `signedBy` that holds a lone surrogate, and check each reason and that it is
+  printable ASCII. `clients/README.md` states that the rule holds for both clients.
 - Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
   (the PyPI package of that name is unrelated), so neither ran. They now call the Section
   4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,

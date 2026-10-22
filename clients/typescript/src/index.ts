@@ -28,6 +28,10 @@ export const CATEGORIES = [
   "PROOF_INVALID",
 ] as const;
 export const VERDICTS = ["passed", "warning", "blocked", "listed", "verified", "unknown"] as const;
+/** The maximum age of a copy of the discovery document (Section 7.1), 3600 seconds, in milliseconds. */
+export const MAX_DISCOVERY_AGE_MS = 3_600_000;
+/** The longest answer body AtpClient accepts, in bytes; a longer one rejects with AtpError. */
+export const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 /** One of CATEGORIES. */
 export type RejectCategory = (typeof CATEGORIES)[number];
@@ -37,7 +41,10 @@ export type JsonObject = { [member: string]: unknown };
 
 /**
  * valid is true when every check passed. Otherwise category is one of
- * CATEGORIES and reason says which member or step failed.
+ * CATEGORIES and reason says which member or step failed. Text that reason
+ * takes from the input, such as a DID, a keyId or a verdict, is unchanged
+ * when it is printable ASCII without a space, a quote or a backslash, and in
+ * JSON string form otherwise, so a control character in it is escaped.
  */
 export interface VerifyResult {
   readonly valid: boolean;
@@ -51,8 +58,16 @@ export interface VerifyOptions {
 }
 
 export interface AtpClientOptions {
-  /** A stored discovery document to verify against, so verify sends no request. */
+  /** A stored copy of the discovery document to start from, used while it is at most refreshAfterMs old. */
   readonly discovery?: JsonObject | undefined;
+  /** The age of that stored copy, in milliseconds (default 0). */
+  readonly discoveryAgeMs?: number | undefined;
+  /**
+   * The age, in milliseconds, past which the client requests the discovery
+   * document again (default 300000, the Section 8.1 polling interval; at most
+   * MAX_DISCOVERY_AGE_MS).
+   */
+  readonly refreshAfterMs?: number | undefined;
   /** How long a request may take, in milliseconds (default 10000). */
   readonly timeoutMs?: number | undefined;
 }
@@ -100,6 +115,16 @@ const RFC3339 =
 const HEX = /^(?:[0-9a-fA-F]{2})+$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const WIRE_HASH = /^SHA256:([0-9a-f]{64})$/;
+// An IPv4 address in 127.0.0.0/8 written as four decimal numbers without leading zeros.
+const LOOPBACK_IPV4 = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/;
+// The host of an http URL as written: after "//" and a userinfo, which ends at its last "@",
+// up to a port or the path. The URL parser ends the authority at "\" as well as at "/".
+const WRITTEN_HOST = /^http:\/\/(?:[^/\\]*@)?([^:/\\]*)/i;
+const DELTA_SECONDS = /^[0-9]+$/; // the value of an Age header (RFC 9111 Sections 1.2.2 and 5.1)
+// Text a reason shows unchanged: printable ASCII other than a space, a quote and
+// a backslash, so it cannot be taken for text in JSON string form, which starts
+// with a quote.
+const PLAIN = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
 
 function isAlgorithm(value: unknown): value is Algorithm {
   return value === "Ed25519" || value === "ML-DSA-65";
@@ -130,6 +155,23 @@ function outcome(check: () => void): VerifyResult {
     throw error;
   }
   return result(true, null, "");
+}
+
+/**
+ * text, taken from the input under verification, as a reason shows it:
+ * unchanged when PLAIN matches it, otherwise in JSON string form with every
+ * character outside printable ASCII escaped, as the Python client's
+ * json.dumps writes it. Either way the result is printable ASCII.
+ */
+function shown(text: string): string {
+  if (PLAIN.test(text)) return text;
+  // JSON.stringify escapes U+0000 to U+001F, a quote, a backslash and a lone
+  // surrogate. DEL and each UTF-16 code unit above it are escaped here, as
+  // json.dumps escapes them, so a character above U+FFFF becomes two escapes.
+  return JSON.stringify(text).replace(
+    /[^\x20-\x7e]/g,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 // Wire values
@@ -456,11 +498,11 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
   if (logIndex !== undefined && logIndex !== null) integer(logIndex, "transparencyLogIndex", 0);
 
   if (parsed.expires <= now) {
-    throw new Reject("EXPIRED", `the trust proof expired at ${String(member(object, "expiresAt"))}`);
+    throw new Reject("EXPIRED", `the trust proof expired at ${shown(String(member(object, "expiresAt")))}`);
   }
 
   if (!trusted.has(parsed.issuer)) {
-    throw new Reject("UNTRUSTED_ISSUER", `issuerDid ${parsed.issuer} is not a trusted issuer`);
+    throw new Reject("UNTRUSTED_ISSUER", `issuerDid ${shown(parsed.issuer)} is not a trusted issuer`);
   }
 
   const resolved: { index: number; entry: SignatureEntry; algorithm: Algorithm; raw: Buffer }[] = [];
@@ -473,13 +515,16 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
       );
     }
     if (!isAlgorithm(algorithm)) {
-      throw new Reject("SIGNATURE_INVALID", `signatures[${index}] has algorithm ${algorithm}, not Ed25519 or ML-DSA-65`);
+      throw new Reject(
+        "SIGNATURE_INVALID",
+        `signatures[${index}] has algorithm ${shown(algorithm)}, not Ed25519 or ML-DSA-65`,
+      );
     }
     const raw = keyBytes(keys, entry.keyId, algorithm);
     if (raw === null) {
       throw new Reject(
         "SIGNATURE_INVALID",
-        `signatures[${index}] keyId ${entry.keyId} does not resolve to a non-revoked ${algorithm} key`,
+        `signatures[${index}] keyId ${shown(entry.keyId)} does not resolve to a non-revoked ${algorithm} key`,
       );
     }
     resolved.push({ index, entry, algorithm, raw });
@@ -490,14 +535,14 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
   for (const { index, entry, algorithm, raw } of resolved) {
     const signature = base64(entry.value, `signatures[${index}].value`, "SIGNATURE_INVALID");
     if (!signatureValid(algorithm, raw, signature, message)) {
-      throw new Reject("SIGNATURE_INVALID", `the ${algorithm} signature of ${entry.keyId} did not verify`);
+      throw new Reject("SIGNATURE_INVALID", `the ${algorithm} signature of ${shown(entry.keyId)} did not verify`);
     }
     const hash = entry.keyId.indexOf("#");
     const fragment = hash >= 0 && hash < entry.keyId.length - 1;
     if (algorithm === "Ed25519" && fragment && entry.keyId.slice(0, hash) === parsed.issuer) issuerSigned = true;
   }
   if (!issuerSigned) {
-    throw new Reject("SIGNATURE_INVALID", `no Ed25519 signature by a key of ${parsed.issuer} verified`);
+    throw new Reject("SIGNATURE_INVALID", `no Ed25519 signature by a key of ${shown(parsed.issuer)} verified`);
   }
 
   if (parsed.level < 0 || parsed.level > 4) {
@@ -507,7 +552,7 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
     throw new Reject("SEMANTIC_INVALID", `trustScore ${parsed.score} is outside 0.0 to 1.0`);
   }
   if (!(VERDICTS as readonly string[]).includes(parsed.verdict)) {
-    throw new Reject("SEMANTIC_INVALID", `verdict ${parsed.verdict} is not one of ${VERDICTS.join(", ")}`);
+    throw new Reject("SEMANTIC_INVALID", `verdict ${shown(parsed.verdict)} is not one of ${VERDICTS.join(", ")}`);
   }
   if (parsed.issued >= parsed.expires) {
     throw new Reject("SEMANTIC_INVALID", "issuedAt is not before expiresAt");
@@ -571,7 +616,7 @@ function checkDiscovery(discovery: unknown, trusted: ReadonlySet<string> | null)
     instant(member(key, "validFrom"), `${name}.validFrom`);
   }
   if (trusted !== null && !trusted.has(authority)) {
-    throw new Reject("UNTRUSTED_ISSUER", `authorityDid ${authority} is not a trusted issuer`);
+    throw new Reject("UNTRUSTED_ISSUER", `authorityDid ${shown(authority)} is not a trusted issuer`);
   }
   // Section 4.4 step 4 requires a proof to meet a declared set, and no proof
   // meets a set that breaks Section 7.1.1; not counting sets, the client
@@ -686,7 +731,10 @@ function treeHead(sth: unknown, name: string): TreeHead {
 function checkTreeHead(name: string, head: TreeHead, keys: readonly unknown[]): void {
   const raw = keyBytes(keys, head.signedBy, "Ed25519");
   if (raw === null) {
-    throw new Reject("SIGNATURE_INVALID", `${name}.signedBy ${head.signedBy} does not resolve to a non-revoked Ed25519 key`);
+    throw new Reject(
+      "SIGNATURE_INVALID",
+      `${name}.signedBy ${shown(head.signedBy)} does not resolve to a non-revoked Ed25519 key`,
+    );
   }
   const signature = base64(head.signature, `${name}.signature`, "SIGNATURE_INVALID");
   if (!signatureValid("Ed25519", raw, signature, head.root)) {
@@ -804,16 +852,96 @@ function failure(error: unknown): string {
 }
 
 /**
- * A client of one trust authority, named by its base URL.
+ * Section 7.1: the host of the http URL baseUrl, which parsed as url, is a
+ * loopback address literal, an IPv4 address in 127.0.0.0/8 or the IPv6
+ * address ::1. A name, localhost among them, is not one. The URL parser also
+ * reads 127.1, 0x7f.0.0.1 and 2130706433 as 127.0.0.1, so an IPv4 address is
+ * accepted only as written in four decimal numbers, as the URL serializes it.
+ */
+function loopbackLiteral(baseUrl: string, url: URL): boolean {
+  if (url.hostname === "[::1]") return true;
+  const written = WRITTEN_HOST.exec(baseUrl)?.[1];
+  return written !== undefined && LOOPBACK_IPV4.test(written) && written === url.hostname;
+}
+
+/**
+ * The Age header of an answer (RFC 9111 Section 5.1) in seconds, 0 when the
+ * answer has none. Headers joins the values of two Age headers with ", ",
+ * which is not one number.
+ */
+function ageSeconds(headers: Headers): number {
+  const value = headers.get("age");
+  if (value === null) return 0;
+  if (!DELTA_SECONDS.test(value)) {
+    throw new AtpError("the discovery document's Age header is not one number of seconds (RFC 9111 Section 5.1)");
+  }
+  const digits = value.replace(/^0+/, "");
+  // RFC 9111 Section 1.2.2: a value too large to represent counts as 2^31.
+  return digits.length > 10 ? 2 ** 31 : Math.min(Number(digits), 2 ** 31);
+}
+
+/**
+ * The body of response, read until it ends or its length passes
+ * MAX_RESPONSE_BYTES. A longer body throws AtpError, and the client cancels
+ * the rest of it.
+ */
+async function boundedBody(response: Response, path: string): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  const reader = response.body?.getReader();
+  if (reader !== undefined) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new AtpError(`GET ${path} answered with a body longer than ${MAX_RESPONSE_BYTES} bytes`);
+      }
+      chunks.push(value);
+    }
+  }
+  return Buffer.concat(chunks, length);
+}
+
+/** An answer of the authority: its JSON body and its headers. */
+interface Answer {
+  readonly body: unknown;
+  readonly headers: Headers;
+}
+
+/**
+ * A copy of the discovery document, and the time on the performance.now()
+ * clock at which its age was 0: when the client received it, less its Age
+ * header or the age given for a stored copy.
+ */
+interface Copy {
+  readonly document: JsonObject;
+  readonly received: number;
+}
+
+/**
+ * A client of one trust authority, named by its base URL: an https URL, or
+ * an http URL whose host is a loopback address literal (Section 7.1).
  *
  * getTrustProof and getDiscovery send requests; verify checks a proof
- * offline against the authority's discovery document, which is fetched once
- * and kept. Pass options.discovery to verify against a stored copy instead.
+ * offline against the authority's discovery document. An answer body longer
+ * than MAX_RESPONSE_BYTES throws AtpError.
+ *
+ * The client keeps the copy of the discovery document it receives and
+ * requests the document again once that copy is more than
+ * options.refreshAfterMs old (300000 milliseconds when absent, the Section
+ * 8.1 polling interval; at most MAX_DISCOVERY_AGE_MS). The age of a copy is
+ * the time since the client received it plus the Age header of the answer
+ * that carried it. Pass options.discovery to start from a stored copy, and
+ * options.discoveryAgeMs for its age (0 when absent).
  */
 export class AtpClient {
   readonly baseUrl: string;
   readonly timeoutMs: number;
-  #discovery: Promise<JsonObject> | undefined;
+  readonly refreshAfterMs: number;
+  #copy: Copy | undefined;
+  #pending: Promise<JsonObject> | undefined;
 
   constructor(baseUrl: string, options: AtpClientOptions = {}) {
     let url: URL | null;
@@ -833,38 +961,76 @@ export class AtpClient {
     ) {
       throw new TypeError("baseUrl must be an http or https URL without a query or fragment (no ? or #)");
     }
+    if (url.protocol === "http:" && !loopbackLiteral(baseUrl, url)) {
+      throw new TypeError(
+        "baseUrl must be an https URL (Section 7.1); an http URL is accepted only when its host is a " +
+          "loopback address literal, an IPv4 address in 127.0.0.0/8 or the IPv6 address ::1, and localhost " +
+          "is not one",
+      );
+    }
+    const refreshAfterMs = options.refreshAfterMs ?? 300_000;
+    if (typeof refreshAfterMs !== "number" || !(refreshAfterMs >= 0 && refreshAfterMs <= MAX_DISCOVERY_AGE_MS)) {
+      throw new TypeError(
+        `refreshAfterMs must be from 0 to ${MAX_DISCOVERY_AGE_MS} milliseconds, the Section 7.1 maximum age`,
+      );
+    }
+    const discoveryAgeMs = options.discoveryAgeMs ?? 0;
+    if (typeof discoveryAgeMs !== "number" || !Number.isFinite(discoveryAgeMs) || discoveryAgeMs < 0) {
+      throw new TypeError("discoveryAgeMs must be a finite number of milliseconds, at least 0");
+    }
     let end = baseUrl.length;
     while (end > 0 && baseUrl[end - 1] === "/") end -= 1;
     this.baseUrl = baseUrl.slice(0, end);
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    this.#discovery = options.discovery === undefined ? undefined : Promise.resolve(options.discovery);
+    this.refreshAfterMs = refreshAfterMs;
+    if (options.discovery !== undefined) {
+      this.#copy = { document: options.discovery, received: performance.now() - discoveryAgeMs };
+    }
   }
 
   /**
    * The Section 7.1 discovery document from /.well-known/atp, or from the
-   * legacy /.well-known/opena2a when the first answers 404. A request that
-   * fails is not kept, so the next call sends it again.
+   * legacy /.well-known/opena2a when the first answers 404: the copy the
+   * client holds while it is at most refreshAfterMs old, and otherwise a copy
+   * requested again, one request for concurrent calls. Rejects with AtpError
+   * when that request fails, when the copy that arrives is more than
+   * MAX_DISCOVERY_AGE_MS old by its Age header, or when its Age header is not
+   * a number of seconds; the client's earlier copy is then not returned, and
+   * the next call sends the request again.
    */
   getDiscovery(): Promise<JsonObject> {
-    if (this.#discovery === undefined) {
-      const pending = this.#fetchDiscovery();
-      this.#discovery = pending;
-      pending.catch(() => {
-        if (this.#discovery === pending) this.#discovery = undefined;
-      });
+    const copy = this.#copy;
+    if (copy !== undefined && performance.now() - copy.received <= this.refreshAfterMs) {
+      return Promise.resolve(copy.document);
     }
-    return this.#discovery;
+    if (this.#pending === undefined) {
+      const pending: Promise<JsonObject> = this.#fetchDiscovery().finally(() => {
+        if (this.#pending === pending) this.#pending = undefined;
+      });
+      this.#pending = pending;
+    }
+    return this.#pending;
   }
 
   async #fetchDiscovery(): Promise<JsonObject> {
-    let document: unknown;
+    let answer: Answer;
     try {
-      document = await this.#get("/.well-known/atp");
+      answer = await this.#get("/.well-known/atp");
     } catch (error) {
       if (!(error instanceof AtpError) || error.status !== 404) throw error;
-      document = await this.#get("/.well-known/opena2a");
+      answer = await this.#get("/.well-known/opena2a");
     }
+    const received = performance.now();
+    const document = answer.body;
     if (!isObject(document)) throw new AtpError("the discovery document is not a JSON object");
+    const age = ageSeconds(answer.headers);
+    if (age * 1000 > MAX_DISCOVERY_AGE_MS) {
+      throw new AtpError(
+        `the discovery document was ${age} seconds old when it arrived (its Age header), ` +
+          `more than the Section 7.1 maximum age of ${MAX_DISCOVERY_AGE_MS / 1000} seconds`,
+      );
+    }
+    this.#copy = { document, received: received - age * 1000 };
     return document;
   }
 
@@ -877,7 +1043,7 @@ export class AtpClient {
   async getTrustProof(did: string): Promise<JsonObject> {
     // encodeURIComponent would throw a URIError for a lone surrogate.
     if (!did.isWellFormed()) throw new TypeError("did holds a lone surrogate, which UTF-8 cannot encode");
-    const body = await this.#get(`/api/v1/trust/proof?did=${encodeURIComponent(did)}`);
+    const { body } = await this.#get(`/api/v1/trust/proof?did=${encodeURIComponent(did)}`);
     const proof = isObject(body) ? (Object.hasOwn(body, "proof") ? body["proof"] : body) : null;
     if (!isObject(proof) || member(proof, "did") !== did) {
       throw new AtpError(`the authority did not answer with a trust proof for ${did}`);
@@ -890,6 +1056,10 @@ export class AtpClient {
    * publicKeys, and its authorityDid as the one trusted issuer. A discovery
    * document that verifyDiscovery refuses, one that declares an issuer key
    * set among them, rejects the proof with that category.
+   *
+   * When getDiscovery rejects with AtpError, so does verify, instead of
+   * returning a result: the proof is then unverified, which is not a Section
+   * 4.4 rejection of it.
    */
   async verify(proof: unknown, options: VerifyOptions = {}): Promise<VerifyResult> {
     const discovery = await this.getDiscovery();
@@ -900,8 +1070,10 @@ export class AtpClient {
     return verifyTrustProof(proof, keys, member(discovery, "authorityDid") as string, options);
   }
 
-  async #get(path: string): Promise<unknown> {
-    let raw: ArrayBuffer;
+  /** The JSON body of the answer to GET path, and the answer's headers. */
+  async #get(path: string): Promise<Answer> {
+    let raw: Buffer;
+    let headers: Headers;
     try {
       const response = await fetch(this.baseUrl + path, {
         headers: { Accept: "application/json" },
@@ -913,13 +1085,14 @@ export class AtpClient {
         const note = response.status >= 300 && response.status < 400 ? "; redirects are not followed" : "";
         throw new AtpError(`GET ${path} answered HTTP ${response.status}${note}`, response.status);
       }
-      raw = await response.arrayBuffer();
+      headers = response.headers;
+      raw = await boundedBody(response, path);
     } catch (error) {
       if (error instanceof AtpError) throw error;
       throw new AtpError(`GET ${path} failed: ${failure(error)}`);
     }
     try {
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
+      return { body: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)), headers };
     } catch {
       throw new AtpError(`GET ${path} did not answer with JSON`);
     }

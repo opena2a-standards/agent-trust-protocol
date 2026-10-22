@@ -139,7 +139,7 @@ import { AtpClient } from "@opena2a/atp-client";
 
 const client = new AtpClient("https://authority.example"); // the authority this verifier trusts
 const proof = await client.getTrustProof("did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem");
-const result = await client.verify(proof); // no request beyond the discovery document, fetched once
+const result = await client.verify(proof); // no request beyond the discovery document, requested again after 300 seconds
 if (!result.valid) throw new Error(`${result.category}: ${result.reason}`);
 ```
 
@@ -150,15 +150,34 @@ trustedIssuers)`, `verifySignedTreeHead(sth, keys)`, `verifyInclusionProof(proof
 `verifyConsistencyProof(proof, keys)` and `verifyRevocationList(body)` make the checks of the
 table above except the two named below, leave unchecked what the Python client leaves
 unchecked and return a `VerifyResult` whose `category` is `null` for a valid input. `now` is
-a `Date` or an RFC 3339 string, and
-`new AtpClient(url, { discovery, timeoutMs })` takes a stored discovery document and a
-request timeout in milliseconds (10000 when absent). Unlike the Python client, it fetches the
-discovery document once and keeps it, accepts an `http` base URL whose host is not a loopback
-address, and does not bound the length of an answer body. Where the Python client raises
-`ValueError`, this one throws a `TypeError`: the constructor throws one for a base URL that
-holds a `?` or `#`, even with nothing after it, and `getTrustProof` throws one for a `did`
-that holds a lone surrogate, before it sends a request. An `AtpError` carries `status`,
-`null` when the authority gave no HTTP status.
+a `Date` or an RFC 3339 string. Where the Python client raises `ValueError`, this one throws
+a `TypeError`: the constructor throws one for a base URL that holds a `?` or `#`, even with
+nothing after it, and `getTrustProof` throws one for a `did` that holds a lone surrogate,
+before it sends a request. An `AtpError` carries `status`, `null` when the authority gave no
+HTTP status.
+
+The base URL is an `https` URL, or an `http` URL whose host is a loopback address literal,
+an IPv4 address in `127.0.0.0/8` written as four decimal numbers or the IPv6 address `::1`;
+otherwise the constructor throws a `TypeError`, for `http://localhost` and `http://127.1`
+too. An answer body longer than `MAX_RESPONSE_BYTES`, 1,048,576 bytes, rejects with
+`AtpError`. The client keeps the discovery document it receives and requests it again once
+its copy is more than `refreshAfterMs` milliseconds old: 300000 when absent, the Section 8.1
+polling interval, and at most 3600000 (`MAX_DISCOVERY_AGE_MS`). The age of a copy is the
+time since the client received it plus the answer's `Age` header. When the client needs a new
+copy and cannot get one, `verify` rejects with `AtpError` instead of returning a result: the
+request failed, or the copy arrived more than 3600 seconds old or with an `Age` that is not
+a number of seconds. `new AtpClient(url, { discovery, discoveryAgeMs, refreshAfterMs,
+timeoutMs })` takes a stored copy, its age (0 when absent), the age past which the client
+requests the document again, and a request timeout (10000 when absent), each in
+milliseconds, where the Python client counts seconds.
+
+Text a reason takes from the input follows the Python client's rule in both clients: it is
+unchanged when it is printable ASCII without a space, a quote or a backslash, and otherwise
+in JSON string form, with each character outside printable ASCII escaped as `json.dumps`
+escapes it. For a proof whose `issuerDid`, `did:example:a`, a line feed and `b`, is not a
+trusted issuer, both clients give the reason
+`issuerDid "did:example:a\nb" is not a trusted issuer`. `verifyDiscovery` puts no
+`endpoints` member name in a reason, so the `endpoints["name"]` form has no counterpart here.
 
 Not checked by this client, though the Python client checks them: Section 4.4 step 7, since
 `verifyTrustProof` has no counterpart of `second_authorities` and so never applies it; and
