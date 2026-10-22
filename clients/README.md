@@ -41,13 +41,16 @@ so does an answer body longer than `MAX_RESPONSE_BYTES`, 1,048,576 bytes.
 The client keeps the discovery document it receives and requests it again once its copy is
 more than `refresh_after` seconds old: 300 when absent, the Section 8.1 polling interval, and
 at most 3600. The age of a copy is the time since the client received it plus the answer's
-`Age` header. A key the authority removes (Section 8.2) stops verifying once a copy without
-it arrives. When the client needs a new copy and cannot get one, `verify` raises `AtpError`
-instead of returning a result: the request failed, or the copy arrived more than 3600
-seconds old (`MAX_DISCOVERY_AGE`, the Section 7.1 maximum age) or with an `Age` that is not a
-number of seconds. To start from a stored copy, pass it with its age in seconds:
-`AtpClient(url, discovery=document, discovery_age=age)` requests no discovery document until
-that copy is more than `refresh_after` seconds old.
+`Age` header. The client takes the time since it received a copy as the larger of the times
+elapsed on `time.monotonic()` and on `time.time()`: on macOS `time.monotonic()` reads
+`mach_absolute_time()`, which does not advance while the host is asleep, and `time.time()`
+goes back when the system clock is set back. A key the authority removes (Section 8.2) stops
+verifying once a copy without it arrives. When the client needs a new copy and cannot get
+one, `verify` raises `AtpError` instead of returning a result: the request failed, or the
+copy arrived more than 3600 seconds old (`MAX_DISCOVERY_AGE`, the Section 7.1 maximum age) or
+with an `Age` that is not a number of seconds. To start from a stored copy, pass it with its
+age in seconds: `AtpClient(url, discovery=document, discovery_age=age)` requests no discovery
+document until that copy is more than `refresh_after` seconds old.
 
 The verify functions make no request:
 
@@ -163,13 +166,16 @@ too. An answer body longer than `MAX_RESPONSE_BYTES`, 1,048,576 bytes, rejects w
 `AtpError`. The client keeps the discovery document it receives and requests it again once
 its copy is more than `refreshAfterMs` milliseconds old: 300000 when absent, the Section 8.1
 polling interval, and at most 3600000 (`MAX_DISCOVERY_AGE_MS`). The age of a copy is the
-time since the client received it plus the answer's `Age` header. When the client needs a new
-copy and cannot get one, `verify` rejects with `AtpError` instead of returning a result: the
-request failed, or the copy arrived more than 3600 seconds old or with an `Age` that is not
-a number of seconds. `new AtpClient(url, { discovery, discoveryAgeMs, refreshAfterMs,
-timeoutMs })` takes a stored copy, its age (0 when absent), the age past which the client
-requests the document again, and a request timeout (10000 when absent), each in
-milliseconds, where the Python client counts seconds.
+time since the client received it plus the answer's `Age` header. The client takes the time
+since it received a copy as the larger of the times elapsed on `performance.now()` and on
+`Date.now()`, as the Python client does with its two clocks: on macOS `performance.now()`
+follows `mach_absolute_time`, which does not advance while the host is asleep. When the
+client needs a new copy and cannot get one, `verify` rejects with `AtpError` instead of
+returning a result: the request failed, or the copy arrived more than 3600 seconds old or
+with an `Age` that is not a number of seconds. `new AtpClient(url, { discovery,
+discoveryAgeMs, refreshAfterMs, timeoutMs })` takes a stored copy, its age (0 when absent),
+the age past which the client requests the document again, and a request timeout (10000
+when absent), each in milliseconds, where the Python client counts seconds.
 
 Text a reason takes from the input follows the Python client's rule in both clients: it is
 unchanged when it is printable ASCII without a space, a quote or a backslash, and otherwise

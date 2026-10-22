@@ -911,13 +911,25 @@ interface Answer {
 }
 
 /**
- * A copy of the discovery document, and the time on the performance.now()
- * clock at which its age was 0: when the client received it, less its Age
- * header or the age given for a stored copy.
+ * A copy of the discovery document, and the readings of performance.now()
+ * and Date.now() at which its age was 0: when the client received it, less
+ * its Age header or the age given for a stored copy.
  */
 interface Copy {
   readonly document: JsonObject;
-  readonly received: number;
+  readonly monotonic: number;
+  readonly wall: number;
+}
+
+/**
+ * The age of copy in milliseconds: the larger of the times elapsed since its
+ * age was 0 on performance.now() and on Date.now(). On macOS performance.now()
+ * follows mach_absolute_time, which does not advance while the host is asleep,
+ * and Date.now() goes back when the system clock is set back, so either one
+ * alone can give a copy an age smaller than the time since it was received.
+ */
+function copyAge(copy: Copy): number {
+  return Math.max(performance.now() - copy.monotonic, Date.now() - copy.wall);
 }
 
 /**
@@ -933,7 +945,9 @@ interface Copy {
  * options.refreshAfterMs old (300000 milliseconds when absent, the Section
  * 8.1 polling interval; at most MAX_DISCOVERY_AGE_MS). The age of a copy is
  * the time since the client received it plus the Age header of the answer
- * that carried it. Pass options.discovery to start from a stored copy, and
+ * that carried it; the time since receipt is the larger of the times elapsed
+ * on performance.now() and on Date.now(), so time the host spends asleep
+ * counts. Pass options.discovery to start from a stored copy, and
  * options.discoveryAgeMs for its age (0 when absent).
  */
 export class AtpClient {
@@ -984,7 +998,11 @@ export class AtpClient {
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.refreshAfterMs = refreshAfterMs;
     if (options.discovery !== undefined) {
-      this.#copy = { document: options.discovery, received: performance.now() - discoveryAgeMs };
+      this.#copy = {
+        document: options.discovery,
+        monotonic: performance.now() - discoveryAgeMs,
+        wall: Date.now() - discoveryAgeMs,
+      };
     }
   }
 
@@ -1000,7 +1018,7 @@ export class AtpClient {
    */
   getDiscovery(): Promise<JsonObject> {
     const copy = this.#copy;
-    if (copy !== undefined && performance.now() - copy.received <= this.refreshAfterMs) {
+    if (copy !== undefined && copyAge(copy) <= this.refreshAfterMs) {
       return Promise.resolve(copy.document);
     }
     if (this.#pending === undefined) {
@@ -1020,7 +1038,8 @@ export class AtpClient {
       if (!(error instanceof AtpError) || error.status !== 404) throw error;
       answer = await this.#get("/.well-known/opena2a");
     }
-    const received = performance.now();
+    const monotonic = performance.now();
+    const wall = Date.now();
     const document = answer.body;
     if (!isObject(document)) throw new AtpError("the discovery document is not a JSON object");
     const age = ageSeconds(answer.headers);
@@ -1030,7 +1049,7 @@ export class AtpClient {
           `more than the Section 7.1 maximum age of ${MAX_DISCOVERY_AGE_MS / 1000} seconds`,
       );
     }
-    this.#copy = { document, received: received - age * 1000 };
+    this.#copy = { document, monotonic: monotonic - age * 1000, wall: wall - age * 1000 };
     return document;
   }
 

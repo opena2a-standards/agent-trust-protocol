@@ -1278,6 +1278,56 @@ class ClientTests(unittest.TestCase):
             stale.verify(proof, now=CLOCK)
         self.assertEqual(self.server.requests, ["/.well-known/atp"])
 
+    def test_the_age_of_a_copy_counts_time_the_host_spent_asleep(self):
+        # On macOS time.monotonic() reads mach_absolute_time(), which does not advance while
+        # the host is asleep, and time.time() goes back when the system clock is set back.
+        # The time since a copy's age was 0 is the larger of the times elapsed on the two.
+        proof = signed_proof(self.signer)
+        clock = mock.Mock(spec=["monotonic", "time"])
+        cases = (
+            # (discovery_age, seconds on time.monotonic(), seconds on time.time(), requested again)
+            (0, 0, 300, False),
+            (0, 0, 301, True),
+            (0, 0, 3601, True),
+            (290, 0, 11, True),
+            (0, 301, 0, True),
+            (0, 301, -86400, True),
+            (0, 290, -86400, False),
+        )
+        for age, monotonic, wall, requested in cases:
+            with self.subTest(discovery_age=age, monotonic=monotonic, wall=wall), mock.patch.object(atp, "time", clock):
+                clock.monotonic.return_value, clock.time.return_value = 1000.0, 1_800_000_000.0
+                self.server.routes, self.server.requests = {"/.well-known/atp": (503, {"error": "unavailable"})}, []
+                client = atp.AtpClient(self.url, discovery=self.discovery, discovery_age=age)
+                clock.monotonic.return_value += monotonic
+                clock.time.return_value += wall
+                if requested:
+                    with self.assertRaises(atp.AtpError):
+                        client.verify(proof, now=CLOCK)
+                else:
+                    self.assertTrue(client.verify(proof, now=CLOCK).valid)
+                self.assertEqual(self.server.requests, ["/.well-known/atp"] if requested else [])
+
+    def test_a_removed_key_stops_verifying_once_the_host_slept_past_refresh_after(self):
+        # As in the test above, for a copy the client fetched: its Age header of 200 seconds and
+        # 101 seconds on time.time() make it 301 seconds old, while time.monotonic() stands still.
+        proof = signed_proof(self.signer)
+        clock = mock.Mock(spec=["monotonic", "time"])
+        clock.monotonic.return_value, clock.time.return_value = 1000.0, 1_800_000_000.0
+        self.server.routes = {"/.well-known/atp": (200, self.discovery, {"Age": "200"})}
+        with mock.patch.object(atp, "time", clock):
+            client = atp.AtpClient(self.url)
+            self.assertTrue(client.verify(proof, now=CLOCK).valid)
+            other = Signer(AUTHORITY + "#key-2").key(status="active", validFrom="2026-01-01T00:00:00Z")
+            self.server.routes = {"/.well-known/atp": (200, {**self.discovery, "publicKeys": [other]})}
+            clock.time.return_value += 100
+            self.assertTrue(client.verify(proof, now=CLOCK).valid)
+            clock.time.return_value += 1
+            result = client.verify(proof, now=CLOCK)
+        self.assertEqual(result.category, "SIGNATURE_INVALID")
+        self.assertIn("does not resolve", result.reason)
+        self.assertEqual(self.server.requests.count("/.well-known/atp"), 2)
+
     def test_timeout_refresh_after_and_discovery_age_are_checked(self):
         cases = {
             "timeout": (0, -1, math.inf, math.nan, "10", None, True),
