@@ -41,7 +41,10 @@ export type JsonObject = { [member: string]: unknown };
 
 /**
  * valid is true when every check passed. Otherwise category is one of
- * CATEGORIES and reason says which member or step failed.
+ * CATEGORIES and reason says which member or step failed. Text that reason
+ * takes from the input, such as a DID, a keyId or a verdict, is unchanged
+ * when it is printable ASCII without a space, a quote or a backslash, and in
+ * JSON string form otherwise, so a control character in it is escaped.
  */
 export interface VerifyResult {
   readonly valid: boolean;
@@ -118,6 +121,10 @@ const LOOPBACK_IPV4 = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))
 // up to a port or the path. The URL parser ends the authority at "\" as well as at "/".
 const WRITTEN_HOST = /^http:\/\/(?:[^/\\]*@)?([^:/\\]*)/i;
 const DELTA_SECONDS = /^[0-9]+$/; // the value of an Age header (RFC 9111 Sections 1.2.2 and 5.1)
+// Text a reason shows unchanged: printable ASCII other than a space, a quote and
+// a backslash, so it cannot be taken for text in JSON string form, which starts
+// with a quote.
+const PLAIN = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
 
 function isAlgorithm(value: unknown): value is Algorithm {
   return value === "Ed25519" || value === "ML-DSA-65";
@@ -148,6 +155,23 @@ function outcome(check: () => void): VerifyResult {
     throw error;
   }
   return result(true, null, "");
+}
+
+/**
+ * text, taken from the input under verification, as a reason shows it:
+ * unchanged when PLAIN matches it, otherwise in JSON string form with every
+ * character outside printable ASCII escaped, as the Python client's
+ * json.dumps writes it. Either way the result is printable ASCII.
+ */
+function shown(text: string): string {
+  if (PLAIN.test(text)) return text;
+  // JSON.stringify escapes U+0000 to U+001F, a quote, a backslash and a lone
+  // surrogate. DEL and each UTF-16 code unit above it are escaped here, as
+  // json.dumps escapes them, so a character above U+FFFF becomes two escapes.
+  return JSON.stringify(text).replace(
+    /[^\x20-\x7e]/g,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 // Wire values
@@ -474,11 +498,11 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
   if (logIndex !== undefined && logIndex !== null) integer(logIndex, "transparencyLogIndex", 0);
 
   if (parsed.expires <= now) {
-    throw new Reject("EXPIRED", `the trust proof expired at ${String(member(object, "expiresAt"))}`);
+    throw new Reject("EXPIRED", `the trust proof expired at ${shown(String(member(object, "expiresAt")))}`);
   }
 
   if (!trusted.has(parsed.issuer)) {
-    throw new Reject("UNTRUSTED_ISSUER", `issuerDid ${parsed.issuer} is not a trusted issuer`);
+    throw new Reject("UNTRUSTED_ISSUER", `issuerDid ${shown(parsed.issuer)} is not a trusted issuer`);
   }
 
   const resolved: { index: number; entry: SignatureEntry; algorithm: Algorithm; raw: Buffer }[] = [];
@@ -491,13 +515,16 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
       );
     }
     if (!isAlgorithm(algorithm)) {
-      throw new Reject("SIGNATURE_INVALID", `signatures[${index}] has algorithm ${algorithm}, not Ed25519 or ML-DSA-65`);
+      throw new Reject(
+        "SIGNATURE_INVALID",
+        `signatures[${index}] has algorithm ${shown(algorithm)}, not Ed25519 or ML-DSA-65`,
+      );
     }
     const raw = keyBytes(keys, entry.keyId, algorithm);
     if (raw === null) {
       throw new Reject(
         "SIGNATURE_INVALID",
-        `signatures[${index}] keyId ${entry.keyId} does not resolve to a non-revoked ${algorithm} key`,
+        `signatures[${index}] keyId ${shown(entry.keyId)} does not resolve to a non-revoked ${algorithm} key`,
       );
     }
     resolved.push({ index, entry, algorithm, raw });
@@ -508,14 +535,14 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
   for (const { index, entry, algorithm, raw } of resolved) {
     const signature = base64(entry.value, `signatures[${index}].value`, "SIGNATURE_INVALID");
     if (!signatureValid(algorithm, raw, signature, message)) {
-      throw new Reject("SIGNATURE_INVALID", `the ${algorithm} signature of ${entry.keyId} did not verify`);
+      throw new Reject("SIGNATURE_INVALID", `the ${algorithm} signature of ${shown(entry.keyId)} did not verify`);
     }
     const hash = entry.keyId.indexOf("#");
     const fragment = hash >= 0 && hash < entry.keyId.length - 1;
     if (algorithm === "Ed25519" && fragment && entry.keyId.slice(0, hash) === parsed.issuer) issuerSigned = true;
   }
   if (!issuerSigned) {
-    throw new Reject("SIGNATURE_INVALID", `no Ed25519 signature by a key of ${parsed.issuer} verified`);
+    throw new Reject("SIGNATURE_INVALID", `no Ed25519 signature by a key of ${shown(parsed.issuer)} verified`);
   }
 
   if (parsed.level < 0 || parsed.level > 4) {
@@ -525,7 +552,7 @@ function checkTrustProof(proof: unknown, keys: readonly unknown[], trusted: Read
     throw new Reject("SEMANTIC_INVALID", `trustScore ${parsed.score} is outside 0.0 to 1.0`);
   }
   if (!(VERDICTS as readonly string[]).includes(parsed.verdict)) {
-    throw new Reject("SEMANTIC_INVALID", `verdict ${parsed.verdict} is not one of ${VERDICTS.join(", ")}`);
+    throw new Reject("SEMANTIC_INVALID", `verdict ${shown(parsed.verdict)} is not one of ${VERDICTS.join(", ")}`);
   }
   if (parsed.issued >= parsed.expires) {
     throw new Reject("SEMANTIC_INVALID", "issuedAt is not before expiresAt");
@@ -589,7 +616,7 @@ function checkDiscovery(discovery: unknown, trusted: ReadonlySet<string> | null)
     instant(member(key, "validFrom"), `${name}.validFrom`);
   }
   if (trusted !== null && !trusted.has(authority)) {
-    throw new Reject("UNTRUSTED_ISSUER", `authorityDid ${authority} is not a trusted issuer`);
+    throw new Reject("UNTRUSTED_ISSUER", `authorityDid ${shown(authority)} is not a trusted issuer`);
   }
   // Section 4.4 step 4 requires a proof to meet a declared set, and no proof
   // meets a set that breaks Section 7.1.1; not counting sets, the client
@@ -704,7 +731,10 @@ function treeHead(sth: unknown, name: string): TreeHead {
 function checkTreeHead(name: string, head: TreeHead, keys: readonly unknown[]): void {
   const raw = keyBytes(keys, head.signedBy, "Ed25519");
   if (raw === null) {
-    throw new Reject("SIGNATURE_INVALID", `${name}.signedBy ${head.signedBy} does not resolve to a non-revoked Ed25519 key`);
+    throw new Reject(
+      "SIGNATURE_INVALID",
+      `${name}.signedBy ${shown(head.signedBy)} does not resolve to a non-revoked Ed25519 key`,
+    );
   }
   const signature = base64(head.signature, `${name}.signature`, "SIGNATURE_INVALID");
   if (!signatureValid("Ed25519", raw, signature, head.root)) {

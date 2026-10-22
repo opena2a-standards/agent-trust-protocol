@@ -664,6 +664,131 @@ describe("verifyDiscovery", () => {
 });
 
 /**
+ * A reason shows text it takes from the input unchanged when that text is
+ * printable ASCII without a space, a quote or a backslash, and in JSON string
+ * form otherwise, with each character outside printable ASCII escaped, as the
+ * Python client's json.dumps writes it. Each test checks one reason and that
+ * it is printable ASCII.
+ */
+describe("reason text", () => {
+  /** A backslash, u and the four lower-case hex digits of a UTF-16 code unit: its JSON escape. */
+  const unicodeEscape = (unit: number): string => `\\u${unit.toString(16).padStart(4, "0")}`;
+  // A line feed, a carriage return, an escape, DEL, NEL (a C1 control) and the
+  // Unicode line separator, and the JSON string form of the six.
+  const CONTROLS = "\n\r\x1b\x7f\x85\u{2028}";
+  const ESCAPED = String.raw`\n\r` + [0x1b, 0x7f, 0x85, 0x2028].map(unicodeEscape).join("");
+  const ISSUER = `did:opena2a:authority:a${CONTROLS}b`;
+  const SHOWN_ISSUER = `"did:opena2a:authority:a${ESCAPED}b"`;
+  const KEY_ID = `${AUTHORITY}#key-${CONTROLS}`;
+  const SHOWN_KEY_ID = `"${AUTHORITY}#key-${ESCAPED}"`;
+  const NOT_A_VERDICT = "is not one of passed, warning, blocked, listed, verified, unknown";
+
+  const verify = (proof: unknown, keys: unknown[], trusted: string): atp.VerifyResult =>
+    atp.verifyTrustProof(proof, keys, trusted, { now: CLOCK });
+
+  const assertReason = (result: atp.VerifyResult, category: atp.RejectCategory, reason: string): void => {
+    assert.equal(result.valid, false, JSON.stringify(result));
+    assert.equal(result.category, category, JSON.stringify(result));
+    assert.equal(result.reason, reason);
+    assert.match(result.reason, /^[\x20-\x7e]+$/, JSON.stringify(result.reason));
+  };
+
+  it("an issuerDid outside the trusted set (step 2)", () => {
+    // A line feed in issuerDid reached this reason as it was, so the reason took two lines.
+    const proof = signedProof([new Signer()], { issuerDid: "did:example:a\nb" });
+    const reason = String.raw`issuerDid "did:example:a\nb" is not a trusted issuer`;
+    assertReason(verify(proof, [], AUTHORITY), "UNTRUSTED_ISSUER", reason);
+    const controls = signedProof([new Signer()], { issuerDid: ISSUER });
+    assertReason(verify(controls, [], AUTHORITY), "UNTRUSTED_ISSUER", `issuerDid ${SHOWN_ISSUER} is not a trusted issuer`);
+  });
+
+  it("a signature's algorithm (step 3)", () => {
+    const proof = signedProof([new Signer()]);
+    (signatures(proof)[0] as Members)["algorithm"] = `Ed25519${CONTROLS}`;
+    const reason = `signatures[0] has algorithm "Ed25519${ESCAPED}", not Ed25519 or ML-DSA-65`;
+    assertReason(verify(proof, [new Signer().key()], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+
+  it("a keyId that resolves to no key (step 3)", () => {
+    const proof = signedProof([new Signer(KEY_ID)]);
+    const reason = `signatures[0] keyId ${SHOWN_KEY_ID} does not resolve to a non-revoked Ed25519 key`;
+    assertReason(verify(proof, [new Signer().key()], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+
+  it("the keyId of a signature that does not verify (step 4)", () => {
+    const signer = new Signer(KEY_ID);
+    const proof = signedProof([signer]);
+    const entry = signatures(proof)[0] as Members;
+    entry["value"] = flipFirstByte(entry["value"] as string);
+    const reason = `the Ed25519 signature of ${SHOWN_KEY_ID} did not verify`;
+    assertReason(verify(proof, [signer.key()], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+
+  it("an issuerDid no key of which signed (step 4)", () => {
+    const other = new Signer("did:opena2a:authority:other.example#key-1");
+    const proof = signedProof([other], { issuerDid: ISSUER });
+    const reason = `no Ed25519 signature by a key of ${SHOWN_ISSUER} verified`;
+    assertReason(verify(proof, [other.key()], ISSUER), "SIGNATURE_INVALID", reason);
+  });
+
+  it("a verdict outside the list (step 5)", () => {
+    const signer = new Signer();
+    const cases: [string, string][] = [
+      ["approved", `verdict approved ${NOT_A_VERDICT}`],
+      [`passed${CONTROLS}`, `verdict "passed${ESCAPED}" ${NOT_A_VERDICT}`],
+      ["not passed", `verdict "not passed" ${NOT_A_VERDICT}`],
+      ['say "passed"', String.raw`verdict "say \"passed\"" ` + NOT_A_VERDICT],
+      // A line feed, and a backslash followed by n, give two reasons.
+      ["a\nb", String.raw`verdict "a\nb" ` + NOT_A_VERDICT],
+      ["a\\nb", String.raw`verdict "a\\nb" ` + NOT_A_VERDICT],
+      // A character above U+007E is escaped, one above U+FFFF as its two surrogates.
+      ["pass\xe9", `verdict "pass${unicodeEscape(0xe9)}" ${NOT_A_VERDICT}`],
+      ["passed\u{1F600}", `verdict "passed${unicodeEscape(0xd83d)}${unicodeEscape(0xde00)}" ${NOT_A_VERDICT}`],
+    ];
+    for (const [verdict, reason] of cases) {
+      const proof = signedProof([signer], { verdict });
+      assertReason(verify(proof, [signer.key()], AUTHORITY), "SEMANTIC_INVALID", reason);
+    }
+  });
+
+  it("an authorityDid outside the trusted set", () => {
+    const document = fixture("discovery-valid")["discoveryResponse"] as Members;
+    const result = atp.verifyDiscovery({ ...document, authorityDid: ISSUER }, AUTHORITY);
+    assertReason(result, "UNTRUSTED_ISSUER", `authorityDid ${SHOWN_ISSUER} is not a trusted issuer`);
+  });
+
+  it("a tree head's signedBy that resolves to no key", () => {
+    const head = (signedBy: string): Members => ({
+      treeSize: 1,
+      timestamp: "2026-05-23T00:00:00Z",
+      rootHash: wire(Buffer.alloc(32)),
+      signedBy,
+      signature: new Signer().sign(Buffer.alloc(32)),
+    });
+    const cases: [string, string][] = [
+      [KEY_ID, SHOWN_KEY_ID],
+      // A lone surrogate, which signedBy may hold, is escaped as one.
+      [`${AUTHORITY}#key-\u{D800}`, `"${AUTHORITY}#key-${unicodeEscape(0xd800)}"`],
+    ];
+    for (const [signedBy, written] of cases) {
+      const reason = `signedTreeHead.signedBy ${written} does not resolve to a non-revoked Ed25519 key`;
+      assertReason(atp.verifySignedTreeHead(head(signedBy), [new Signer().key()]), "SIGNATURE_INVALID", reason);
+    }
+  });
+
+  it("leaves printable ASCII without a space, a quote or a backslash unchanged", () => {
+    const signer = new Signer();
+    const proof = signedProof([signer]);
+    const expired = atp.verifyTrustProof(proof, [signer.key()], AUTHORITY, { now: "2026-05-24T06:00:00Z" });
+    assertReason(expired, "EXPIRED", "the trust proof expired at 2026-05-24T06:00:00Z");
+    const other = "did:opena2a:authority:other.example";
+    assertReason(verify(proof, [], other), "UNTRUSTED_ISSUER", `issuerDid ${AUTHORITY} is not a trusted issuer`);
+    const reason = `signatures[0] keyId ${AUTHORITY}#key-1 does not resolve to a non-revoked Ed25519 key`;
+    assertReason(verify(proof, [], AUTHORITY), "SIGNATURE_INVALID", reason);
+  });
+});
+
+/**
  * An answer of the local authority: a status, a JSON value or raw bytes, and
  * headers; a header given an array of values is sent once for each.
  */

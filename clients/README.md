@@ -171,6 +171,14 @@ timeoutMs })` takes a stored copy, its age (0 when absent), the age past which t
 requests the document again, and a request timeout (10000 when absent), each in
 milliseconds, where the Python client counts seconds.
 
+Text a reason takes from the input follows the Python client's rule in both clients: it is
+unchanged when it is printable ASCII without a space, a quote or a backslash, and otherwise
+in JSON string form, with each character outside printable ASCII escaped as `json.dumps`
+escapes it. For a proof whose `issuerDid`, `did:example:a`, a line feed and `b`, is not a
+trusted issuer, both clients give the reason
+`issuerDid "did:example:a\nb" is not a trusted issuer`. `verifyDiscovery` puts no
+`endpoints` member name in a reason, so the `endpoints["name"]` form has no counterpart here.
+
 Not checked by this client, though the Python client checks them: Section 4.4 step 7, since
 `verifyTrustProof` has no counterpart of `second_authorities` and so never applies it; and
 the Section 7.1 form of an `endpoints` value, since `verifyDiscovery` accepts any non-empty

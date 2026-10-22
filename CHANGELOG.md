@@ -490,6 +490,20 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   nested too deeply`, also when the body is JSON. The tests cover 200,000 and 1,048,576 `[`
   characters, a JSON array nested 524,288 deep and a JSON object nested 200,000 deep, under
   `get_discovery`, `get_trust_proof` and `verify`.
+- `clients/typescript`: the verify functions wrote text from the input into a reason as it
+  was: `issuerDid`, a signature's `algorithm` and `keyId`, `verdict`, `authorityDid` and a
+  tree head's `signedBy`. A line feed or another control character in that text reached the
+  reason, which a caller that logs or prints it writes out: for a proof whose `issuerDid` is
+  `did:example:a`, a line feed and `b`, from an issuer that is not trusted, the reason held
+  the line feed. The client now applies the Python client's rule: such text is unchanged when
+  it is printable ASCII without a space, a quote or a backslash, and in JSON string form
+  otherwise, with each character outside printable ASCII escaped as `json.dumps` escapes it,
+  so that reason is `issuerDid "did:example:a\nb" is not a trusted issuer` in both clients.
+  For each code point, alone and between two letters, the TypeScript client writes the text
+  the Python client writes. The tests pass control characters through the 8 reasons that
+  take that text, and also a verdict with a space, a quote, a backslash or a character above
+  U+007E and a `signedBy` that holds a lone surrogate, and check each reason and that it is
+  printable ASCII. `clients/README.md` states that the rule holds for both clients.
 - Appendix B.1 and B.2: the examples imported an `atp` client library that does not exist
   (the PyPI package of that name is unrelated), so neither ran. They now call the Section
   4.5 endpoints of a configured authority with `requests` and `fetch`: fetch the proof,
