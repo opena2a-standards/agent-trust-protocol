@@ -395,6 +395,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `clients/python` and `clients/typescript`: `AtpClient` took the age of its copy of the
+  discovery document from `time.monotonic()` and `performance.now()` alone. On macOS
+  `time.monotonic()` reads `mach_absolute_time()`, and `performance.now()` follows the same
+  clock, which does not advance while the host is asleep, so after a sleep the client kept
+  using a copy it received before it for up to `refresh_after` (`refreshAfterMs`) of awake
+  time, and a key the authority removed (Section 8.2) could keep verifying past the Section
+  7.1 maximum age of 3600 seconds. The client now takes the time since it received a copy as
+  the larger of the times elapsed on that clock and on the system clock, `time.time()` and
+  `Date.now()`, so a copy is requested again once it is more than `refresh_after` old by
+  either clock, and a system clock set back does not make a copy younger than the monotonic
+  clock says. Started from a stored copy of age 0, with 3601 seconds on the system clock and
+  none on the monotonic clock, both clients returned the stored copy without a request; they
+  now request the document again. The tests cover stored copies of age 0 and 290 seconds
+  with the two clocks moved apart, the system clock set back a day among them, and a key
+  removed from a copy the client fetched with an `Age` of 200 seconds, which still verifies
+  after 100 seconds on the system clock alone and stops verifying after 101.
+  `clients/README.md` and the class doc comments state the rule.
 - `conformance/lib.sh`: the Section 7.1 transport rule allowed the IPv6 loopback address only
   as `[::1]`. Under `http://[0:0:0:0:0:0:0:1]`, `http://[0::1]` and `http://[::0001]` with the
   port of an authority listening on `::1`, no request was sent, every test failed, and T1.1,

@@ -910,9 +910,11 @@ class AtpClient:
     requests the document again once that copy is more than refresh_after
     seconds old (300 when absent, the Section 8.1 polling interval; at most
     MAX_DISCOVERY_AGE). The age of a copy is the time since the client
-    received it plus the Age header of the answer that carried it. Pass
-    discovery to start from a stored copy, and discovery_age for its age in
-    seconds (0 when absent)."""
+    received it plus the Age header of the answer that carried it; the time
+    since receipt is the larger of the times elapsed on time.monotonic() and
+    on time.time(), so time the host spends asleep counts. Pass discovery to
+    start from a stored copy, and discovery_age for its age in seconds (0
+    when absent)."""
 
     def __init__(
         self,
@@ -951,7 +953,8 @@ class AtpClient:
         self._direct = parts.scheme == "http"
         self._tls = ssl.create_default_context()
         self._discovery = discovery
-        self._received = time.monotonic() - discovery_age
+        # The readings of time.monotonic() and time.time() at which the copy's age was 0.
+        self._received = time.monotonic() - discovery_age, time.time() - discovery_age
 
     def get_discovery(self) -> dict[str, Any]:
         """The Section 7.1 discovery document from /.well-known/atp, or from
@@ -961,14 +964,14 @@ class AtpClient:
         fails, when the copy that arrives is more than MAX_DISCOVERY_AGE
         seconds old by its Age header, or when its Age header is not a number
         of seconds; the client's earlier copy is then not returned."""
-        if self._discovery is None or time.monotonic() - self._received > self.refresh_after:
+        if self._discovery is None or self._copy_age() > self.refresh_after:
             try:
                 document, headers = self._get("/.well-known/atp")
             except AtpError as error:
                 if error.status != 404:
                     raise
                 document, headers = self._get("/.well-known/opena2a")
-            received = time.monotonic()
+            monotonic, wall = time.monotonic(), time.time()
             if not isinstance(document, dict):
                 raise AtpError("the discovery document is not a JSON object")
             age = _age(headers)
@@ -977,8 +980,19 @@ class AtpClient:
                     f"the discovery document was {age} seconds old when it arrived (its Age header), "
                     f"more than the Section 7.1 maximum age of {MAX_DISCOVERY_AGE} seconds"
                 )
-            self._discovery, self._received = document, received - age
+            self._discovery, self._received = document, (monotonic - age, wall - age)
         return self._discovery
+
+    def _copy_age(self) -> float:
+        """The age of the client's copy of the discovery document, in seconds:
+        the larger of the times elapsed since its age was 0 on time.monotonic()
+        and on time.time(). On macOS time.monotonic() reads
+        mach_absolute_time(), which does not advance while the host is asleep,
+        and time.time() goes back when the system clock is set back, so either
+        one alone can give a copy an age smaller than the time since it was
+        received."""
+        monotonic, wall = self._received
+        return max(time.monotonic() - monotonic, time.time() - wall)
 
     def get_trust_proof(self, did: str) -> dict[str, Any]:
         """The current trust proof for did (Section 4.5). A proof the authority

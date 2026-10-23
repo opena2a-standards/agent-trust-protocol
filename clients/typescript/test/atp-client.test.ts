@@ -1121,6 +1121,62 @@ describe("AtpClient", () => {
     assert.deepEqual(authority.requests, ["/.well-known/atp"]);
   });
 
+  it("counts time the host spent asleep in the age of a copy", async (t) => {
+    // On macOS performance.now() follows mach_absolute_time, which does not advance while the
+    // host is asleep, and Date.now() goes back when the system clock is set back. The time
+    // since a copy's age was 0 is the larger of the times elapsed on the two.
+    let monotonic = 0;
+    let wall = 0;
+    t.mock.method(performance, "now", () => monotonic);
+    t.mock.method(Date, "now", () => wall);
+    const proof = signedProof([signer]);
+    // discoveryAgeMs, milliseconds on performance.now(), milliseconds on Date.now(), requested again
+    const cases: [number, number, number, boolean][] = [
+      [0, 0, 300_000, false],
+      [0, 0, 300_001, true],
+      [0, 0, 3_601_000, true],
+      [290_000, 0, 11_000, true],
+      [0, 300_001, 0, true],
+      [0, 300_001, -86_400_000, true],
+      [0, 290_000, -86_400_000, false],
+    ];
+    answerDiscovery({ status: 503, body: { error: "unavailable" } });
+    for (const [discoveryAgeMs, elapsed, wallElapsed, requested] of cases) {
+      const label = `discoveryAgeMs ${discoveryAgeMs}, ${elapsed} on performance.now(), ${wallElapsed} on Date.now()`;
+      monotonic = 1_000_000;
+      wall = 1_800_000_000_000;
+      authority.requests.length = 0;
+      const local = new atp.AtpClient(client.baseUrl, { discovery, discoveryAgeMs });
+      monotonic += elapsed;
+      wall += wallElapsed;
+      if (requested) {
+        await assert.rejects(local.verify(proof, { now: CLOCK }), atp.AtpError, label);
+      } else {
+        assert.deepEqual(await local.verify(proof, { now: CLOCK }), ACCEPTED, label);
+      }
+      assert.equal(count("/.well-known/atp"), requested ? 1 : 0, label);
+    }
+  });
+
+  it("a removed key stops verifying once the host slept past refreshAfterMs", async (t) => {
+    // As in the test above, for a copy the client fetched: its Age header of 200 seconds and
+    // 100001 milliseconds on Date.now() make it 300001 milliseconds old, while
+    // performance.now() stands still.
+    let wall = 1_800_000_000_000;
+    t.mock.method(performance, "now", () => 1_000_000);
+    t.mock.method(Date, "now", () => wall);
+    const proof = signedProof([signer]);
+    answerDiscovery({ status: 200, body: discovery, headers: { Age: "200" } });
+    assert.deepEqual(await client.verify(proof, { now: CLOCK }), ACCEPTED);
+    const other = new Signer(`${AUTHORITY}#key-2`).key({ status: "active", validFrom: "2026-01-01T00:00:00Z" });
+    answerDiscovery({ status: 200, body: { ...discovery, publicKeys: [other] } });
+    wall += 100_000;
+    assert.deepEqual(await client.verify(proof, { now: CLOCK }), ACCEPTED);
+    wall += 1;
+    assertRejected(await client.verify(proof, { now: CLOCK }), "SIGNATURE_INVALID", "does not resolve");
+    assert.equal(count("/.well-known/atp"), 2);
+  });
+
   it("checks refreshAfterMs and discoveryAgeMs", () => {
     const cases: [string, unknown[]][] = [
       ["refreshAfterMs", [-1, atp.MAX_DISCOVERY_AGE_MS + 1, Number.NaN, "300000"]],
