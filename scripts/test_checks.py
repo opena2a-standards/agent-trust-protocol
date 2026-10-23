@@ -2,15 +2,16 @@
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, Sigstore co-signature, two-authority
 proof (with its Ed25519 verification), threat model, discovery transport and
-maximum age, issuer key set, issuer
-key set proof (with the Section 4.4 count), signed timestamp, ATX status, fixture coverage, A2A agent card path and Verifiable
-Credential form checks in validate_examples.py, check_guides.py, the
+maximum age, issuer key set, issuer key set proof (with the Section 4.4 count),
+signed timestamp, ATX status, fixture coverage, A2A agent card path and
+Verifiable Credential form checks in validate_examples.py, check_guides.py, the
 conformance scripts (run against fixture_authority.py; needs bash, curl and
 jq), the error fixture_authority.py stops with when it cannot read an example
 it serves or listen on its port, the registry generation and --check mode of
 gen_registries.py, and the test-suite and package sentences of the
 .pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
 """
+import ast
 import base64
 import calendar
 import contextlib
@@ -5291,6 +5292,42 @@ class LegacyPathMilestoneTest(unittest.TestCase):
         self.assertIn("optional alias", self.entry)
         self.assertNotIn("must gain", self.entry)
         self.assertEqual(self.FINAL.findall(self.entry), self.FINAL.findall(self.rule))
+
+
+def fill_errors(lines, first=1, width=79):
+    """What breaks the fill of one paragraph's source lines, numbered from
+    first: a line longer than width, and a line other than the last that could
+    take the first word of the next line and stay within width."""
+    errors = []
+    pairs = itertools.zip_longest(lines, lines[1:], fillvalue="")
+    for number, (line, following) in enumerate(pairs, first):
+        if len(line) > width:
+            errors.append(f"line {number} is {len(line)} characters, more than {width}")
+        word = following.split()[:1]
+        if word and len(line) + 1 + len(word[0]) <= width:
+            errors.append(f"line {number} could take {word[0]!r} from line {number + 1}")
+    return errors
+
+
+class ModuleDocstringTest(unittest.TestCase):
+    def test_module_docstring_is_one_paragraph_filled_to_79_characters(self):
+        source = Path(__file__).read_text(encoding="utf-8")
+        docstring = ast.parse(source).body[0]
+        lines = source.splitlines()[docstring.lineno - 1:docstring.end_lineno]
+        self.assertTrue(lines[0].startswith('"""'), lines[0])
+        self.assertEqual(lines[-1], '"""')
+        # The opening """ line through the paragraph's last line.
+        self.assertEqual(fill_errors(lines[:-1], docstring.lineno), [])
+        # Lines 5 and 6 of the docstring before it was filled again.
+        regressed = [
+            "maximum age, issuer key set, issuer",
+            "key set proof (with the Section 4.4 count), signed timestamp, ATX status, fixture coverage, "
+            "A2A agent card path and Verifiable",
+        ]
+        self.assertEqual(
+            fill_errors(regressed, 5),
+            ["line 5 could take 'key' from line 6", "line 6 is 126 characters, more than 79"],
+        )
 
 
 if __name__ == "__main__":
