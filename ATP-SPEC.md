@@ -1364,6 +1364,10 @@ specifications cite this section.
 
 Implementations MUST NOT sign JSON-serialized payloads directly. JSON serialization is non-deterministic (field ordering, floating-point precision). The canonical payload format defined in Section 4.3 MUST be used.
 
+### 10.4 Version and suite agility
+
+ATP defines no version or suite negotiation. An authority declares its protocol version in its discovery document (Section 7.1, `version`); a credential declares its own version (`atcVersion`, inside the signed bytes, ATX core.md §1.3a.2) and its signature suites (`signatures[].algorithm`); a verifier that does not implement a declared version or suite rejects the artifact (ATX core.md §1.3 step 1 and §13; Section 4.4 step 4). Versions and suites change by specification revision (ATX core.md §14), never by an exchange on the verification path: such an exchange would add the network dependency Section 4.4 and ATX core.md §9 forbid, and would reopen the downgrade the fail-closed rules remove. Version transition is ATX core.md §1.3a.5.
+
 ---
 
 ## 11. IANA Considerations
