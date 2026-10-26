@@ -8,6 +8,11 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Added
 
+- Section 10.4: version and suite agility. ATP defines no version or suite negotiation:
+  versions and suites are declared (the discovery document's `version`; a credential's
+  `atcVersion` inside the signed bytes and its `signatures[].algorithm`), a verifier that
+  does not implement a declared version or suite rejects the artifact (it fails closed), and
+  the sets change by specification revision, never by an exchange on the verification path.
 - `clients/python`: `verify_trust_proof` applies Section 4.4 step 7 (conformance Level 3)
   when it is given `second_authorities`, which maps the DID of each authority the verifier
   knows as a second authority to that authority's Section 7.1 `publicKeys` entries. A
