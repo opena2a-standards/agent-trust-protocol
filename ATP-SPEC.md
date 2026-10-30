@@ -129,8 +129,8 @@ Where:
   — for agents typically `agent`, `mcp_server`, `skill`, `ai_tool`, or `llm`
   (`a2a_agent` is a deprecated legacy alias of `agent`)
 - `agent_name` is the package name in the unescaped form that the
-  [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a)
-  Section 3.1.1 defines for signed artifacts; verifiers compare identifiers after
+  [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a) Sections 3.1 and 3.1.1
+  define for signed artifacts; verifiers compare identifiers after
   normalization (its Section 3.3) and never normalize before signature verification
 
 Examples:
