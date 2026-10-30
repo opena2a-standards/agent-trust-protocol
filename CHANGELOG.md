@@ -247,6 +247,7 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 3.1: `agent_name` cites did:opena2a Sections 3.1 and 3.1.1, not Section 3.1.1 alone.
 - Section 4.4 step 7 names its reject category: a proof that fails the step is rejected with
   `SIGNATURE_INVALID`, the category of the step 4 rejections. Step 7 named no category.
   Section 4.4.1 names the Python client's step 7 check beside `scripts/validate_examples.py`.
