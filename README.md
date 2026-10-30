@@ -24,6 +24,12 @@ curl -X POST https://api.oa2a.org/api/v1/trust/verify \
 curl https://api.oa2a.org/.well-known/atp
 ```
 
+## Who this is for
+
+Security leaders deciding which trust authorities their agents may rely on, identity architects fitting trust proofs beside the DIDs and credentials they run, engineers who check proofs and revocations, developers who implement an authority or a verifier, auditors reading the transparency log, and standards reviewers.
+
+[Who reads this](docs/use-cases.md#who-reads-this) names the question each one brings and the section of the specification that answers it.
+
 ## Specification
 
 [ATP-SPEC.md](ATP-SPEC.md) — the full protocol specification.
@@ -82,7 +88,7 @@ This hybrid proof carries both an Ed25519 signature for fast local verification 
 ## Documentation
 
 - [ATP-SPEC.md](ATP-SPEC.md): the protocol specification
-- [docs/use-cases.md](docs/use-cases.md): three use cases, what works today and where each stops, and why ATX
+- [docs/use-cases.md](docs/use-cases.md): who reads the specification, five use cases, what works today and where each stops, and why ATX
 - [docs/interoperability.md](docs/interoperability.md): the standards ATP is designed to complement
 - [docs/reference-implementation.md](docs/reference-implementation.md): a recorded reference authority response and conformance run
 - [conformance/README.md](conformance/README.md): the live-endpoint conformance scripts
