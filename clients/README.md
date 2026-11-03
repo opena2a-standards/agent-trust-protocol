@@ -32,8 +32,9 @@ it, and raises `AtpError` for a proof about another DID. It compares the proof's
 the requested one as exact strings, so it raises `ValueError`, before it sends a request, for
 a `did` that holds a `%`: did:opena2a Section 3.1.2 gives the percent-encoded and unescaped
 forms of a DID the same subject, and the error names the unescaped form, with each `%XX`
-decoded once, when every `%` begins a percent-encoding of UTF-8 text (for
-`did:opena2a:mcp_server:%40scope%2Fname` it names `did:opena2a:mcp_server:@scope/name`).
+decoded once, when every `%` begins a percent-encoding of UTF-8 text (for a `did` that
+writes the `@` and `/` of `did:opena2a:mcp_server:@scope/name` as `%40` and `%2F`, it
+names `did:opena2a:mcp_server:@scope/name`).
 Redirects are not followed. The base
 URL is an `https` URL, as Section 7.1 requires, or an `http` URL whose host is a loopback
 address literal, an IPv4 address in `127.0.0.0/8` or the IPv6 address `::1`; otherwise the

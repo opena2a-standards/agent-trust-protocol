@@ -422,10 +422,10 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 ### Fixed
 
 - `clients/python` and `clients/typescript`: `get_trust_proof` (`getTrustProof`) compared
-  the `did` of the answer with the requested DID as exact strings, so a request for
-  `did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem` that the authority
-  answered for `did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem` raised
-  `AtpError` ("the authority did not answer with a trust proof for ..."), although
+  the `did` of the answer with the requested DID as exact strings, so a request for the
+  percent-encoded form of `did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem`
+  (`%40` for its `@`, `%2F` for its `/`) that the authority answered for the unescaped form
+  raised `AtpError` ("the authority did not answer with a trust proof for ..."), although
   did:opena2a Section 3.1.2 gives both forms the same subject. A `did` that holds a `%` now
   raises `ValueError` (a `TypeError` in TypeScript) before any request is sent. The error
   names the unescaped form, with each `%XX` decoded once, when every `%` begins a
