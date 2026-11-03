@@ -2297,6 +2297,54 @@ class VerifiableCredentialFormTest(unittest.TestCase):
         self.assertIn("declaredPurpose", listed)
         self.assertEqual(listed - {row["ATX member"] for row in self.rows}, set())
 
+    @staticmethod
+    def section_sentences(text, heading):
+        """The prose sentences under the heading line `heading` of `text`, up
+        to the next heading."""
+        lines = text.split("\n")
+        start = lines.index(heading) + 1
+        end = next((i for i in range(start, len(lines)) if lines[i].startswith("#")), len(lines))
+        return [
+            sentence
+            for unit in validate_examples.readme_units("\n".join(lines[start:end]))
+            for _, sentence in validate_examples.unit_sentences(unit)
+        ]
+
+    def test_atc_version_is_outside_the_tables_and_each_mapping_text_says_so(self):
+        """Section 10.4 names `atcVersion`, the member that declares a
+        credential's own version inside its signed bytes. Neither Section 4.6
+        table has a row for it, and neither example nor the Verifiable
+        Credential schema names it, so a credential that carries it has no
+        recoverable mapped form. Section 10.4, the Verifiable Credential Form
+        and the README's account of the mapping each say so."""
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        _, fields = validate_examples.table_after_marker(spec.split("\n"), "#### Schema")
+        listed = {name.strip() for row in fields for name in row["Field"].split(",")}
+        rows = {row["ATX member"] for row in self.rows}
+        self.assertNotIn("atcVersion", listed | rows)
+        for name in ("examples/atx-example.json", "examples/atx-vc-example.json", self.VC_SCHEMA):
+            with self.subTest(name):
+                self.assertNotIn("atcVersion", (ROOT / name).read_text(encoding="utf-8"))
+
+        version = self.section_sentences(spec, "### 10.4 Version and suite agility")
+        self.assertTrue(any("`atcVersion`" in sentence for sentence in version), version)
+        outside = [
+            sentence
+            for sentence in version
+            if "`atcVersion`" in sentence and "not part of the Section 4.6 tables" in sentence
+        ]
+        self.assertTrue(outside, version)
+        form = self.section_sentences(spec, "#### Verifiable Credential Form")
+        self.assertTrue(any("no row for `atcVersion`" in sentence for sentence in form), form)
+        mapping = [
+            sentence
+            for sentence in self.section_sentences(readme, "### Verifiable Credential form")
+            if "Section 4.6" in sentence and "maps" in sentence
+        ]
+        self.assertTrue(mapping, "no README sentence says that Section 4.6 maps the members")
+        self.assertEqual([sentence for sentence in mapping if "`atcVersion`" not in sentence], [])
+
     def test_schema_requires_the_base_context_and_both_types(self):
         context = self.vc["@context"]
         for edit in (
