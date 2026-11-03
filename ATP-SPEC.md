@@ -624,6 +624,7 @@ An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://w
 | (none) | `type` | `["VerifiableCredential", "AtxCredential"]` |
 | `issuerDid` | `issuer` | unchanged |
 | `did` | `credentialSubject.id` | unchanged |
+| `version` | `credentialSubject.version` | unchanged |
 | `issuedAt` | `validFrom` | unchanged |
 | `expiresAt` | `validUntil` | unchanged |
 | `trustLevel` | `credentialSubject.trustLevel` | unchanged |
@@ -634,10 +635,9 @@ An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://w
 | `behavioralProfile` | `credentialSubject.behavioralProfile` | unchanged |
 | `scanSummary` | `credentialSubject.scanSummary` | unchanged |
 | `declaredPurpose` | `credentialSubject.declaredPurpose` | unchanged |
-| `version` | `version` | unchanged |
 | `signatures` | `signatures` | unchanged |
 
-The first `@context` item is the base context the data model requires. The second expands `AtxCredential` and the ATX member names in the table to IRIs under `https://specs.opena2a.org/ns/atx#`, so the mapped form needs no context document beyond the base one. `version` and `signatures` describe the credential, not its subject, and stay at the top level.
+The first `@context` item is the base context the data model requires. The second expands `AtxCredential` and the ATX member names in the table to IRIs under `https://specs.opena2a.org/ns/atx#`, so the mapped form needs no context document beyond the base one. `signatures` describes the credential, not its subject, and stays at the top level. `version` is the agent's version, as in [atx-spec core.md Section 1.1](https://github.com/opena2a-standards/atx-spec/blob/main/core.md), so it is a claim about the subject and moves to `credentialSubject.version`.
 
 `validFrom` and `validUntil` take XML Schema `dateTimeStamp` values. An ATX timestamp is one when it is written with an uppercase `T` and either `Z` or a numeric offset, as in `examples/atx-example.json`.
 

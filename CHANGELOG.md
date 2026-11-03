@@ -175,8 +175,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - Section 4.6 "Verifiable Credential Form": the mapping from an ATX credential to the W3C
   Verifiable Credentials Data Model 2.0 structure, one table row per member (`issuerDid` to
   `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and
-  `validUntil`, each claim under `credentialSubject`, `version` and `signatures` unchanged at
-  the top level, constant `@context` and `type`). The section says what the mapped form is
+  `validUntil`, each claim under `credentialSubject`, `signatures` unchanged at the top
+  level, constant `@context` and `type`). The section says what the mapped form is
   not: no Verifiable Credentials securing mechanism secures it, and its ATX signatures are
   verified on the ATX credential the mapping recovers. `examples/atx-vc-example.json` is
   `examples/atx-example.json` in that form and `schemas/atx-vc-v1.schema.json` is its shape.
@@ -430,6 +430,20 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   removed from a copy the client fetched with an `Age` of 200 seconds, which still verifies
   after 100 seconds on the system clock alone and stops verifying after 101.
   `clients/README.md` and the class doc comments state the rule.
+- Section 4.6: the Verifiable Credential mapping table placed the ATX member `version` at
+  the top level of the mapped form, and the text after the table said `version` describes
+  the credential, not its subject. In atx-spec core.md Section 1.1 `version` is the agent's
+  version; the credential's own version is `atcVersion`, which Section 10.4 names. The table
+  now places `version` at `credentialSubject.version`, and the text after the table names
+  `signatures` as what describes the credential and stays at the top level, and `version` as
+  a claim about the subject. `examples/atx-example.json` held `1.1-draft` in `version`;
+  `version` now holds an agent version, `2.1.4`. `examples/atx-vc-example.json` is that
+  example under the corrected table, and `schemas/atx-vc-v1.schema.json` takes `version`
+  under `credentialSubject` as a non-empty string and refuses it at the top level.
+  `scripts/test_checks.py` checks the row, the sentence after the table that names what
+  describes the credential, both examples and those schema rules. One entry above is
+  corrected: the Section 4.6 entry under Added named `version` among the members the mapped
+  form keeps at the top level.
 - `conformance/lib.sh`: the Section 7.1 transport rule allowed the IPv6 loopback address only
   as `[::1]`. Under `http://[0:0:0:0:0:0:0:1]`, `http://[0::1]` and `http://[::0001]` with the
   port of an authority listening on `::1`, no request was sent, every test failed, and T1.1,

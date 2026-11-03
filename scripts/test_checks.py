@@ -2270,6 +2270,43 @@ class VerifiableCredentialFormTest(unittest.TestCase):
         self.assertEqual(set(subject["properties"]), placed)
         self.assertIs(subject["additionalProperties"], False)
 
+    def test_version_is_the_agents_and_sits_under_credential_subject(self):
+        """atx-spec core.md Section 1.1: `version` is the agent's version, a
+        claim about the subject. The table places it at
+        credentialSubject.version and keeps `signatures` alone at the top
+        level, the sentence after the table that names what describes the
+        credential names `signatures` alone, both examples carry the same
+        agent version, and the schema refuses `version` at the top level and
+        an empty string or a number as the agent's version."""
+        placed = {row["ATX member"]: row["Verifiable Credential property"] for row in self.rows}
+        self.assertEqual(placed.get("version"), "credentialSubject.version")
+        kept = sorted(member for member, where in placed.items() if member == where)
+        self.assertEqual(kept, ["signatures"])
+
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        section = spec.split(f"\n{validate_examples.VC_FORM_HEADING}\n", 1)[1].split("\n#", 1)[0]
+        stated = [
+            sentence
+            for paragraph in section.split("\n\n")
+            for sentence in validate_examples.SENTENCE_BREAK.split(" ".join(paragraph.split()))
+            if "the credential, not its subject" in sentence
+        ]
+        self.assertEqual(len(stated), 1, stated)
+        self.assertEqual(sorted(re.findall(r"`([^`]+)`", stated[0])), kept)
+
+        self.assertIsInstance(self.atx.get("version"), str)
+        self.assertEqual(self.vc["credentialSubject"].get("version"), self.atx["version"])
+        self.assertNotIn("version", self.vc)
+
+        at_top = copy.deepcopy(self.vc)
+        at_top["version"] = at_top["credentialSubject"].pop("version")
+        self.assertFalse(self.validator.is_valid(at_top))
+        for value in ("", 2):
+            with self.subTest(value=value):
+                edited = copy.deepcopy(self.vc)
+                edited["credentialSubject"]["version"] = value
+                self.assertFalse(self.validator.is_valid(edited))
+
     def test_atx_member_without_a_row_fails(self):
         rows = [row for row in self.rows if row["ATX member"] != "capabilities"]
         self.assertEqual(
