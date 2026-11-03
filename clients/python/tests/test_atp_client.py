@@ -1039,6 +1039,40 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(atp.AtpError, "did not answer with a trust proof"):
             self.client.get_trust_proof("did:opena2a:agent:another-agent")
 
+    def test_a_percent_encoded_did_raises_value_error_naming_its_unescaped_form_before_any_request(self):
+        # did:opena2a Section 3.1.2: the percent-encoded and unescaped forms
+        # denote the same subject, and the authority answers with the
+        # unescaped one, which an exact comparison refused with AtpError.
+        unescaped = "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
+        self.server.routes = {"/api/v1/trust/proof": (200, {"did": unescaped})}
+        cases = [
+            (
+                "did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem",
+                "did did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem is percent-encoded; "
+                f"request its unescaped form {unescaped} (did:opena2a Section 3.1.2)",
+            ),
+            (
+                "did:opena2a:mcp_server:%40scope%2fname",
+                "did did:opena2a:mcp_server:%40scope%2fname is percent-encoded; "
+                "request its unescaped form did:opena2a:mcp_server:@scope/name (did:opena2a Section 3.1.2)",
+            ),
+            (
+                "did:opena2a:agent:a%0Ab",
+                'did did:opena2a:agent:a%0Ab is percent-encoded; '
+                'request its unescaped form "did:opena2a:agent:a\\nb" (did:opena2a Section 3.1.2)',
+            ),
+        ]
+        for did, message in cases:
+            with self.subTest(did=did), self.assertRaises(ValueError) as raised:
+                self.client.get_trust_proof(did)
+            self.assertEqual(str(raised.exception), message)
+        for did in ["did:opena2a:agent:a%", "did:opena2a:agent:a%4", "did:opena2a:agent:a%ZZ", "did:opena2a:agent:a%FF"]:
+            with self.subTest(did=did), self.assertRaises(ValueError) as raised:
+                self.client.get_trust_proof(did)
+            self.assertEqual(str(raised.exception), f"did {did} holds a % that does not begin a percent-encoding of UTF-8 text")
+        self.assertEqual(self.server.requests, [])
+        self.assertEqual(self.client.get_trust_proof(unescaped), {"did": unescaped})
+
     def test_discovery_falls_back_to_the_legacy_path_on_404(self):
         self.server.routes = {"/.well-known/opena2a": (200, self.discovery)}
         self.assertEqual(self.client.get_discovery(), self.discovery)
