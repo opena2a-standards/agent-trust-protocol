@@ -616,7 +616,7 @@ See `examples/atx-example.json` for an illustrative v1.1-draft proof showing all
 
 #### Verifiable Credential Form
 
-An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/) document as issued: it carries none of the four properties that data model requires (`@context`, `type`, `issuer`, `credentialSubject`). It does carry an issuer, a subject and claims, under other names. The table below is the mapping from an ATX credential to that data model's structure. Each row places one member; a member the table does not name has no place in the mapped form.
+An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/) document as issued: it carries none of the four properties that data model requires (`@context`, `type`, `issuer`, `credentialSubject`). It does carry an issuer, a subject and claims, under other names. The table below is the mapping from an ATX credential to that data model's structure. Each row places one member; a member the table does not name has no place in the mapped form. The table has no row for `atcVersion`, the member that declares a credential's own version inside its signed bytes (Section 10.4), so the mapping is for an ATX credential that does not carry it: the mapped form of a credential that carries it would leave out a member its signatures cover, and reading the table right to left would not recover that credential.
 
 | ATX member | Verifiable Credential property | Value |
 |------------|--------------------------------|-------|
@@ -1367,6 +1367,8 @@ Implementations MUST NOT sign JSON-serialized payloads directly. JSON serializat
 ### 10.4 Version and suite agility
 
 ATP defines no version or suite negotiation. An authority declares its protocol version in its discovery document (Section 7.1, `version`); a credential declares its own version (`atcVersion`, inside the signed bytes, ATX core.md §1.3a.2) and its signature suites (`signatures[].algorithm`); a verifier that does not implement a declared version or suite rejects the artifact (ATX core.md §1.3 step 1 and §13; Section 4.4 step 4). Versions and suites change by specification revision (ATX core.md §14), never by an exchange on the verification path: such an exchange would add the network dependency ATX core.md §9 forbids, and would reopen the downgrade the fail-closed rules remove. Version transition is ATX core.md §1.3a.5.
+
+`atcVersion` is defined by ATX core.md §1.3a.2 and is not part of the Section 4.6 tables: neither the schema table nor the Verifiable Credential mapping table has a row for it, and neither `examples/atx-example.json` nor `schemas/atx-vc-v1.schema.json` names it. The Section 4.6 mapping is for a credential that does not carry `atcVersion`.
 
 ---
 

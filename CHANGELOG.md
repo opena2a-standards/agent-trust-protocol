@@ -247,6 +247,18 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Changed
 
+- Section 10.4: `atcVersion` is defined by ATX core.md §1.3a.2 and is not part of the Section
+  4.6 tables. Neither table has a row for it, and neither `examples/atx-example.json` nor
+  `schemas/atx-vc-v1.schema.json` names it. Section 4.6 and the README's account of the
+  mapping say that the Verifiable Credential mapping is for a credential that does not carry
+  `atcVersion`, and Section 4.6 says why: the mapped form of one that carries it would leave
+  out a member its signatures cover, and reading the table right to left would not recover
+  that credential. Section 10.4 named the member, Section 4.6 did not, and Section 4.6 said
+  with no exception that reading its table right to left recovers the ATX credential. `scripts/test_checks.py` checks that
+  neither Section 4.6 table has an `atcVersion` row and neither example nor the Verifiable
+  Credential schema names it, that Section 10.4 says it is not part of the Section 4.6 tables
+  and the Verifiable Credential Form that its table has no row for it, and that the README
+  sentence on the mapping names it.
 - Section 3.1: `agent_name` cites did:opena2a Sections 3.1 and 3.1.1, not Section 3.1.1 alone.
 - Section 4.4 step 7 names its reject category: a proof that fails the step is rejected with
   `SIGNATURE_INVALID`, the category of the step 4 rejections. Step 7 named no category.
