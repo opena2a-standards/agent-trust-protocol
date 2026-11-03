@@ -61,6 +61,12 @@ and the Section 8.1 response are not signed, so a prose sentence of ATP-SPEC.md
 saying authenticity rides or rests on the transport cites Section 7.1, not only
 one of its subsections.
 
+Section 3.1 restates the identifier comparison rule of did:opena2a Section
+3.1.1: identifiers are compared after decoding and normalization, and neither
+is applied before signature verification. A prose sentence of ATP-SPEC.md names
+decoding at least as many times as it names normalization, and one that names a
+revocation and the proof's `did` cites Section 3.1.
+
 The Section 4.3 table of served timestamps gives, for each, the form the
 canonical string carries (UTC, whole seconds with fractional seconds dropped,
 `Z` suffix), and includes a served timestamp with fractional seconds, so the
@@ -1436,6 +1442,53 @@ def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
     return errors
 
 
+# did:opena2a Section 3.1.1: verifiers compare identifiers after the decoding
+# of its Section 3.1.2 and the normalization of its Section 3.3, and do neither
+# before verifying a signature over bytes that contain the identifier.
+NORMALIZES = re.compile(r"\bnormali[sz]", re.IGNORECASE)
+DECODES = re.compile(r"\bdecod", re.IGNORECASE)
+# A sentence that applies a revocation to the DID a trust proof names.
+PROOF_DID = "proof's `did`"
+REVOCATION_WORD = re.compile(r"\brevo(?:cation|ked?)\b", re.IGNORECASE)
+CITES_DID_FORMAT = re.compile(r"(?:\bSection |§)3\.1(?!\.?\d)")
+
+
+def identifier_comparison_errors(text: str) -> list[str]:
+    """did:opena2a Section 3.1.1 makes verifiers compare identifiers after the
+    decoding of its Section 3.1.2 and the normalization of its Section 3.3,
+    and forbids both before signature verification. A prose sentence naming
+    normalization (a word starting "normaliz" or "normalis") N times names
+    decoding (a word starting "decod") at least N times, so neither half of a
+    restated rule leaves decoding out. A prose sentence naming a revocation
+    and the proof's `did` cites Section 3.1, which states how they are
+    compared. Code blocks are not checked. Reported at the line the sentence
+    starts on."""
+    code = {number for number, _, kind in markdown_lines(text) if kind != "prose"}
+    errors = []
+    for unit in readme_units(text):
+        if unit[0][0] in code:
+            continue
+        for lineno, sentence in unit_sentences(unit):
+            if len(DECODES.findall(sentence)) < len(NORMALIZES.findall(sentence)):
+                errors.append(
+                    f"ATP-SPEC.md:{lineno}: names normalization without the decoding of "
+                    "did:opena2a Section 3.1.2 beside it; did:opena2a Section 3.1.1 compares "
+                    "identifiers after both and applies neither before signature "
+                    f"verification: {sentence.strip()!r}"
+                )
+            if (
+                PROOF_DID in sentence
+                and REVOCATION_WORD.search(sentence)
+                and not CITES_DID_FORMAT.search(sentence)
+            ):
+                errors.append(
+                    f"ATP-SPEC.md:{lineno}: applies a revocation to the proof's `did` without "
+                    f"citing Section 3.1, which states how identifiers are compared: "
+                    f"{sentence.strip()!r}"
+                )
+    return errors
+
+
 # Section 4.4.1: the proof two authorities co-sign. The first table under the
 # heading gives the Ed25519 public key each keyId of the proof names.
 TWO_AUTHORITY_HEADING = "#### 4.4.1 Two-authority proof (Level 3)"
@@ -2071,6 +2124,15 @@ def main() -> int:
         failures += 1
     else:
         print("transport OK   ATP-SPEC.md transport claims vs the Section 7.1 rule and maximum age")
+
+    comparison_errors = identifier_comparison_errors(spec)
+    if comparison_errors:
+        print("compare FAIL   ATP-SPEC.md identifier comparison vs did:opena2a Section 3.1.1")
+        for err in comparison_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("compare OK     ATP-SPEC.md identifier comparison vs did:opena2a Section 3.1.1")
 
     discovery_errors = discovery_path_errors(readme)
     if discovery_errors:

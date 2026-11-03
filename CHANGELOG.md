@@ -260,6 +260,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   and the Verifiable Credential Form that its table has no row for it, and that the README
   sentence on the mapping names it.
 - Section 3.1: `agent_name` cites did:opena2a Sections 3.1 and 3.1.1, not Section 3.1.1 alone.
+- Section 3.1 states the identifier comparison rule of did:opena2a Section 3.1.1 with its
+  decoding step: verifiers compare identifiers after the decoding of did:opena2a Section 3.1.2
+  and the normalization of its Section 3.3, and decode or normalize no identifier before
+  verifying a signature over bytes that contain it. The sentence named normalization alone in
+  both halves. Section 4.4 applies a Section 8.1 revocation entry whose `agentDid` is the
+  proof's `did` under that comparison. `scripts/validate_examples.py` fails a prose sentence of
+  ATP-SPEC.md that names normalization more times than decoding, and one that names a
+  revocation and the proof's `did` without citing Section 3.1.
 - Section 4.4 step 7 names its reject category: a proof that fails the step is rejected with
   `SIGNATURE_INVALID`, the category of the step 4 rejections. Step 7 named no category.
   Section 4.4.1 names the Python client's step 7 check beside `scripts/validate_examples.py`.
