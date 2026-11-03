@@ -413,6 +413,16 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `clients/python` and `clients/typescript`: `get_trust_proof` (`getTrustProof`) compared
+  the `did` of the answer with the requested DID as exact strings, so a request for
+  `did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem` that the authority
+  answered for `did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem` raised
+  `AtpError` ("the authority did not answer with a trust proof for ..."), although
+  did:opena2a Section 3.1.2 gives both forms the same subject. A `did` that holds a `%` now
+  raises `ValueError` (a `TypeError` in TypeScript) before any request is sent. The error
+  names the unescaped form, with each `%XX` decoded once, when every `%` begins a
+  percent-encoding of UTF-8 text, and says that it does not otherwise (`%`, `%4`, `%ZZ` and
+  `%FF` in the tests). The proof's `did` is still compared as an exact string.
 - `clients/python` and `clients/typescript`: `AtpClient` took the age of its copy of the
   discovery document from `time.monotonic()` and `performance.now()` alone. On macOS
   `time.monotonic()` reads `mach_absolute_time()`, and `performance.now()` follows the same

@@ -898,6 +898,42 @@ describe("AtpClient", () => {
     });
   });
 
+  it("getTrustProof throws a TypeError naming the unescaped form of a percent-encoded did, before any request", async () => {
+    // did:opena2a Section 3.1.2: the percent-encoded and unescaped forms
+    // denote the same subject, and the authority answers with the unescaped
+    // one, which an exact comparison refused with AtpError.
+    const unescaped = "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem";
+    authority.routes = new Map<string, Route>([["/api/v1/trust/proof", { status: 200, body: { did: unescaped } }]]);
+    const cases: [string, string][] = [
+      [
+        "did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem",
+        "did did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem is percent-encoded; " +
+          `request its unescaped form ${unescaped} (did:opena2a Section 3.1.2)`,
+      ],
+      [
+        "did:opena2a:mcp_server:%40scope%2fname",
+        "did did:opena2a:mcp_server:%40scope%2fname is percent-encoded; " +
+          "request its unescaped form did:opena2a:mcp_server:@scope/name (did:opena2a Section 3.1.2)",
+      ],
+      [
+        "did:opena2a:agent:a%0Ab",
+        "did did:opena2a:agent:a%0Ab is percent-encoded; " +
+          'request its unescaped form "did:opena2a:agent:a\\nb" (did:opena2a Section 3.1.2)',
+      ],
+    ];
+    for (const [did, message] of cases) {
+      await assert.rejects(client.getTrustProof(did), { name: "TypeError", message });
+    }
+    for (const did of ["did:opena2a:agent:a%", "did:opena2a:agent:a%4", "did:opena2a:agent:a%ZZ", "did:opena2a:agent:a%FF"]) {
+      await assert.rejects(client.getTrustProof(did), {
+        name: "TypeError",
+        message: `did ${did} holds a % that does not begin a percent-encoding of UTF-8 text`,
+      });
+    }
+    assert.deepEqual(authority.requests, []);
+    assert.deepEqual(await client.getTrustProof(unescaped), { did: unescaped });
+  });
+
   it("getTrustProof throws a TypeError for a did that UTF-8 cannot encode, before any request", async () => {
     for (const did of [`${AGENT}\uD800`, `${AGENT}\uDC00x`]) {
       await assert.rejects(client.getTrustProof(did), {
