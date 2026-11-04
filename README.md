@@ -63,7 +63,7 @@ The ATX v1.1 fields are signed inside the ATX credential's `JCS(TBS)`, never in 
 
 ### Verifiable Credential form
 
-An ATX credential is not a Verifiable Credentials Data Model 2.0 document as issued: it has no `@context`, `type`, `issuer` or `credentialSubject`. [ATP-SPEC.md Section 4.6](./ATP-SPEC.md#verifiable-credential-form) maps each ATX member to that structure: `issuerDid` to `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and `validUntil`, and each claim under `credentialSubject`.
+An ATX credential is not a Verifiable Credentials Data Model 2.0 document as issued: it has no `@context`, `type`, `issuer` or `credentialSubject`. [ATP-SPEC.md Section 4.6](./ATP-SPEC.md#verifiable-credential-form) maps each member of an ATX credential that does not carry `atcVersion` to that structure: `issuerDid` to `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and `validUntil`, and each claim under `credentialSubject`. `atcVersion` declares a credential's own version inside its signed bytes (ATP-SPEC.md Section 10.4), and the mapping table has no row for it.
 
 [`examples/atx-vc-example.json`](./examples/atx-vc-example.json) is [`examples/atx-example.json`](./examples/atx-example.json) in that form. CI validates it against [`schemas/atx-vc-v1.schema.json`](./schemas/atx-vc-v1.schema.json) and against the mapping table. To run the same check (needs the Python `jsonschema` package):
 
