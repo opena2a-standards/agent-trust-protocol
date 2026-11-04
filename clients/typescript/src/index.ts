@@ -174,6 +174,30 @@ function shown(text: string): string {
   );
 }
 
+/**
+ * Throw a TypeError for a did that holds a %: one that names its unescaped
+ * form, with each %XX decoded once, when every % begins one and the decoded
+ * bytes are UTF-8, and one that says the did is not a percent-encoding of
+ * UTF-8 text otherwise.
+ */
+function refusePercentEncoded(did: string): void {
+  if (!did.includes("%")) return;
+  let unescaped: string | null = null;
+  try {
+    // decodeURIComponent throws a URIError for a % that does not begin %XX
+    // and for decoded bytes that are not UTF-8.
+    unescaped = decodeURIComponent(did);
+  } catch {
+    // unescaped stays null.
+  }
+  if (unescaped === null) {
+    throw new TypeError(`did ${shown(did)} holds a % that does not begin a percent-encoding of UTF-8 text`);
+  }
+  throw new TypeError(
+    `did ${shown(did)} is percent-encoded; request its unescaped form ${shown(unescaped)} (did:opena2a Section 3.1.2)`,
+  );
+}
+
 // Wire values
 
 /** The days from 1970-01-01 to a date of the proleptic Gregorian calendar. */
@@ -1058,10 +1082,18 @@ export class AtpClient {
    * wraps under "proof" is unwrapped; a proof about another DID throws. A did
    * that holds a lone surrogate, which UTF-8 cannot encode, throws a TypeError
    * before any request is sent.
+   *
+   * A did that holds a % throws a TypeError before any request is sent.
+   * did:opena2a Section 3.1.2 gives the percent-encoded and unescaped forms
+   * of a DID the same subject, and this client compares the did of the
+   * answer with the requested one as exact strings, so it accepts only the
+   * unescaped form. The error names that form when each % begins a
+   * percent-encoding of UTF-8 text.
    */
   async getTrustProof(did: string): Promise<JsonObject> {
     // encodeURIComponent would throw a URIError for a lone surrogate.
     if (!did.isWellFormed()) throw new TypeError("did holds a lone surrogate, which UTF-8 cannot encode");
+    refusePercentEncoded(did);
     const { body } = await this.#get(`/api/v1/trust/proof?did=${encodeURIComponent(did)}`);
     const proof = isObject(body) ? (Object.hasOwn(body, "proof") ? body["proof"] : body) : null;
     if (!isObject(proof) || member(proof, "did") !== did) {

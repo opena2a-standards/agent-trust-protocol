@@ -145,6 +145,35 @@ def _shown(text: str) -> str:
     return text if _PLAIN.fullmatch(text) else json.dumps(text)
 
 
+_NOT_AN_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+
+def _refuse_percent_encoded(did: str) -> None:
+    """Raise ValueError for a did that holds a %: one that names its
+    unescaped form, with each %XX decoded once, when every % begins one and
+    the decoded bytes are UTF-8, and one that says the did is not a
+    percent-encoding of UTF-8 text otherwise. A did that UTF-8 cannot encode
+    is left to urllib.parse.quote, which raises UnicodeEncodeError for it."""
+    if "%" not in did:
+        return
+    try:
+        raw = did.encode("utf-8")
+    except UnicodeEncodeError:
+        return
+    unescaped = None
+    if not _NOT_AN_ESCAPE.search(did):
+        try:
+            unescaped = urllib.parse.unquote_to_bytes(raw).decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    if unescaped is None:
+        raise ValueError(f"did {_shown(did)} holds a % that does not begin a percent-encoding of UTF-8 text")
+    raise ValueError(
+        f"did {_shown(did)} is percent-encoded; request its unescaped form {_shown(unescaped)} "
+        "(did:opena2a Section 3.1.2)"
+    )
+
+
 def _member(parent: str, name: Any) -> str:
     """How a reason names member name of parent: parent.name when name is an
     identifier, otherwise parent["name"] with name in JSON string form."""
@@ -996,7 +1025,15 @@ class AtpClient:
 
     def get_trust_proof(self, did: str) -> dict[str, Any]:
         """The current trust proof for did (Section 4.5). A proof the authority
-        wraps under "proof" is unwrapped; a proof about another DID raises."""
+        wraps under "proof" is unwrapped; a proof about another DID raises.
+
+        A did that holds a % raises ValueError before any request is sent.
+        did:opena2a Section 3.1.2 gives the percent-encoded and unescaped
+        forms of a DID the same subject, and this client compares the did of
+        the answer with the requested one as exact strings, so it accepts only
+        the unescaped form. The error names that form when each % begins a
+        percent-encoding of UTF-8 text."""
+        _refuse_percent_encoded(did)
         body, _ = self._get("/api/v1/trust/proof?did=" + urllib.parse.quote(did, safe=""))
         proof = body.get("proof", body) if isinstance(body, dict) else None
         if not isinstance(proof, dict) or proof.get("did") != did:

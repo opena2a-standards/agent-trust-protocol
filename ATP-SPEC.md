@@ -130,8 +130,10 @@ Where:
   (`a2a_agent` is a deprecated legacy alias of `agent`)
 - `agent_name` is the package name in the unescaped form that the
   [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a) Sections 3.1 and 3.1.1
-  define for signed artifacts; verifiers compare identifiers after
-  normalization (its Section 3.3) and never normalize before signature verification
+  define for signed artifacts; verifiers compare identifiers as its Section 3.1.1 requires,
+  after the decoding of its Section 3.1.2 and the normalization of its Section 3.3, and
+  decode or normalize no identifier before verifying a signature over bytes that contain it,
+  so the percent-encoded and unescaped forms of one DID compare equal
 
 Examples:
 ```
@@ -475,9 +477,10 @@ example.
 
 Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation
 of the agent itself is Section 8.1: a verifier that reads the revocation list applies an
-entry for the proof's `did` whether or not the entry carries a `transparencyLogIndex`, and
-requires no inclusion proof for an entry without one (an agent revoked before the authority
-logged anything for it).
+entry whose `agentDid` is the proof's `did`, the two compared as Section 3.1 compares
+identifiers, whether or not the entry carries a `transparencyLogIndex`, and requires no
+inclusion proof for an entry without one (an agent revoked before the authority logged
+anything for it).
 
 #### 4.4.1 Two-authority proof (Level 3)
 
