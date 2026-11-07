@@ -64,8 +64,11 @@ one of its subsections.
 Section 3.1 restates the identifier comparison rule of did:opena2a Section
 3.1.1: identifiers are compared after decoding and normalization, and neither
 is applied before signature verification. A prose sentence of ATP-SPEC.md names
-decoding at least as many times as it names normalization, and one that names a
-revocation and the proof's `did` cites Section 3.1.
+decoding at least as many times as it names normalization, and one that names
+the proof's `did` and a revocation (revocation, revocations, revoke, revokes,
+revoked or revoking) cites Section 3.1, alone or in a list such as "Sections 3.1
+and 3.3". A section number after the name of another document, as in
+"did:opena2a Section 3.1", cites that document, not ATP-SPEC.md.
 
 The Section 4.3 table of served timestamps gives, for each, the form the
 canonical string carries (UTC, whole seconds with fractional seconds dropped,
@@ -92,6 +95,15 @@ A README line that links ATP-SPEC.md and names a version names the version in
 the specification's `**Version:**` header. A link fragment (`#4.3.1-...`) and a
 section number (`Section 4.3.1`, `§4.3.1`, `Sections 4.3.1 and 5.1.1`) are not
 read as versions.
+
+A relative link from a docs/*.md file to ATP-SPEC.md leads to the ATP-SPEC.md
+at the repository root, and its fragment is the anchor of a heading of
+ATP-SPEC.md, so a link that cites a section fails once the heading is renamed or
+renumbered. A line reference such as `ATP-SPEC.md:265` fails: an edit above the
+line moves it, and the reference does not say what it cites. Lines in code
+blocks are not read. A docs/*.md file that is not UTF-8, or a link in docs/
+whose name ends in .md and whose target is not there, holds no link this check
+can read: the check names it as not compared and does not fail on it.
 
 The reference implementation's source is not public, so README.md and ATP-SPEC.md
 link to no repository an anonymous reader cannot open, by its web, SSH, wiki, API,
@@ -179,6 +191,7 @@ import copy
 import hashlib
 import json
 import pathlib
+import posixpath
 import re
 import sys
 from bisect import bisect_right
@@ -1447,10 +1460,38 @@ def federation_claim_errors(text: str, name: str = "README.md") -> list[str]:
 # before verifying a signature over bytes that contain the identifier.
 NORMALIZES = re.compile(r"\bnormali[sz]", re.IGNORECASE)
 DECODES = re.compile(r"\bdecod", re.IGNORECASE)
-# A sentence that applies a revocation to the DID a trust proof names.
+# A sentence that applies a revocation to the DID a trust proof names: it
+# names the proof's `did` and revocation, revocations, revoke, revokes,
+# revoked or revoking.
 PROOF_DID = "proof's `did`"
-REVOCATION_WORD = re.compile(r"\brevo(?:cation|ked?)\b", re.IGNORECASE)
-CITES_DID_FORMAT = re.compile(r"(?:\bSection |§)3\.1(?!\.?\d)")
+REVOCATION_WORD = re.compile(r"\brevo(?:cations?|kes?|ked|king)\b", re.IGNORECASE)
+# The section of ATP-SPEC.md that states how identifiers are compared.
+DID_FORMAT_SECTION = "3.1"
+# A section citation (SECTION_NUMBERS) right after the name of another
+# document is a section of that document, not of ATP-SPEC.md: a DID method
+# ("did:opena2a Section 3.1", "the did:opena2a method specification Section
+# 3.1"), an RFC ("RFC 9162 Section 2.1"), a Markdown file other than
+# ATP-SPEC.md ("atx-spec core.md Section 1.3"), atx-spec, AAP, DID Core, a link
+# ("[did:opena2a method specification](...) Sections 3.1 and 3.1.1"), or "its",
+# with which ATP-SPEC.md cites a section of a document it named before.
+OTHER_DOCUMENT = re.compile(
+    r"(?:\bdid:[a-z0-9]+(?:\s+method\s+specification)?|\bRFC\s*\d+"
+    r"|(?<![\w.-])(?!ATP-SPEC\.md$)[\w.-]+\.md|\batx-spec|\bAAP|\bDID\s+Core|\b[Ii]ts"
+    r"|\]\([^()\s]*\))$"
+)
+
+
+def cites_section(sentence: str, section: str) -> bool:
+    """True when sentence cites Section `section` of ATP-SPEC.md: the number
+    is one of a citation SECTION_NUMBERS reads ("Section 3.1", "§3.1",
+    "Sections 3.1 and 3.3") that does not follow the name of another document
+    (OTHER_DOCUMENT)."""
+    for citation in SECTION_NUMBERS.finditer(sentence):
+        if OTHER_DOCUMENT.search(sentence[: citation.start()].rstrip()):
+            continue
+        if section in re.findall(SECTION_NUMBER, citation.group(0)):
+            return True
+    return False
 
 
 def identifier_comparison_errors(text: str) -> list[str]:
@@ -1460,9 +1501,10 @@ def identifier_comparison_errors(text: str) -> list[str]:
     normalization (a word starting "normaliz" or "normalis") N times names
     decoding (a word starting "decod") at least N times, so neither half of a
     restated rule leaves decoding out. A prose sentence naming a revocation
-    and the proof's `did` cites Section 3.1, which states how they are
-    compared. Code blocks are not checked. Reported at the line the sentence
-    starts on."""
+    (REVOCATION_WORD) and the proof's `did` cites Section 3.1 of ATP-SPEC.md,
+    which states how they are compared (cites_section: "Sections 3.1 and 3.3"
+    cites it, "did:opena2a Section 3.1" does not). Code blocks are not
+    checked. Reported at the line the sentence starts on."""
     code = {number for number, _, kind in markdown_lines(text) if kind != "prose"}
     errors = []
     for unit in readme_units(text):
@@ -1479,13 +1521,90 @@ def identifier_comparison_errors(text: str) -> list[str]:
             if (
                 PROOF_DID in sentence
                 and REVOCATION_WORD.search(sentence)
-                and not CITES_DID_FORMAT.search(sentence)
+                and not cites_section(sentence, DID_FORMAT_SECTION)
             ):
                 errors.append(
                     f"ATP-SPEC.md:{lineno}: applies a revocation to the proof's `did` without "
                     f"citing Section 3.1, which states how identifiers are compared: "
                     f"{sentence.strip()!r}"
                 )
+    return errors
+
+
+# A Markdown heading line with its text, and an inline link in that text.
+HEADING = re.compile(r"#{1,6}[ \t]+(.*)")
+INLINE_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+NOT_IN_ANCHOR = re.compile(r"[^\w\- ]")
+# A relative inline link to a file named ATP-SPEC.md: its path, and its
+# fragment when it has one. A line reference such as `ATP-SPEC.md:265`.
+SPEC_LINK = re.compile(r"\]\(((?:[^()\s#:]*/)?ATP-SPEC\.md)(?:#([^()\s]*))?\)")
+LINE_REFERENCE = re.compile(r"\bATP-SPEC\.md:\d+")
+
+
+def heading_anchors(text: str) -> set[str]:
+    """The anchor GitHub gives each heading of text, the fragment of a link to
+    the heading: the heading's text with each inline link replaced by its
+    text, lowercased, without the characters other than letters, digits,
+    underscores, hyphens and spaces, and with each space replaced by a
+    hyphen. A closing sequence of #s after a space is not part of the text. A
+    heading whose anchor an earlier heading has gets -1, -2 and so on. Lines
+    in code blocks are not headings."""
+    anchors = set()
+    for _, line, kind in markdown_lines(text):
+        match = HEADING.fullmatch(line) if kind == "prose" else None
+        if match is None:
+            continue
+        title = match.group(1).rstrip(" \t")
+        unclosed = title.rstrip("#")
+        if unclosed != title and unclosed[-1:] in (" ", "\t"):
+            title = unclosed.rstrip(" \t")
+        anchor = NOT_IN_ANCHOR.sub("", INLINE_LINK.sub(r"\1", title).lower()).replace(" ", "-")
+        unique, count = anchor, 0
+        while unique in anchors:
+            count += 1
+            unique = f"{anchor}-{count}"
+        anchors.add(unique)
+    return anchors
+
+
+def spec_link_documents() -> list[pathlib.Path]:
+    """The docs/*.md files, which cite sections of ATP-SPEC.md by link. A
+    directory in docs/ whose name ends in .md is not one of them; a link of
+    that name whose target is not there is, so the check names it as not
+    compared."""
+    return listed_files(ROOT / "docs", "*.md")
+
+
+def spec_link_errors(name: str, text: str, anchors: set[str]) -> list[str]:
+    """In the document at path name, relative to the repository root, a
+    relative link to a file named ATP-SPEC.md leads to the ATP-SPEC.md at the
+    root, and its fragment, when it has one, is one of anchors, the heading
+    anchors of ATP-SPEC.md, so a link that cites a section fails once the
+    heading is renamed or renumbered. A line reference such as
+    `ATP-SPEC.md:265` is an error: an edit above the line moves it, and the
+    reference does not say what it cites. Lines in code blocks are not read."""
+    folder = posixpath.dirname(name)
+    errors = []
+    for number, line, kind in markdown_lines(text):
+        if kind != "prose":
+            continue
+        for link in SPEC_LINK.finditer(line):
+            path, fragment = link.groups()
+            if posixpath.normpath(posixpath.join(folder, path)) != "ATP-SPEC.md":
+                errors.append(
+                    f"{name}:{number}: links {path}, which is not the ATP-SPEC.md at the "
+                    "repository root"
+                )
+            elif fragment is not None and fragment not in anchors:
+                errors.append(
+                    f"{name}:{number}: links ATP-SPEC.md#{fragment}, which is the anchor of no "
+                    "heading of ATP-SPEC.md"
+                )
+        for reference in LINE_REFERENCE.findall(line):
+            errors.append(
+                f"{name}:{number}: cites {reference}, a line number that an edit above the line "
+                "moves; cite the section by a link to its heading"
+            )
     return errors
 
 
@@ -2210,6 +2329,29 @@ def main() -> int:
         failures += 1
     else:
         print("version OK     README.md vs ATP-SPEC.md header")
+
+    # A docs/*.md file that cannot be read holds no link this check can read:
+    # it is named as not compared and is not a failure of this check.
+    anchors = heading_anchors(spec)
+    link_errors = []
+    for doc in spec_link_documents():
+        name = doc.relative_to(ROOT).as_posix()
+        try:
+            text = doc.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            print(f"links SKIP     {name}: not compared, not UTF-8: {exc}")
+        except OSError as exc:
+            # A link whose target is not there: the error, not a path on disk.
+            print(f"links SKIP     {name}: not compared, cannot be read: {exc.strerror}")
+        else:
+            link_errors += spec_link_errors(name, text, anchors)
+    if link_errors:
+        print("links FAIL     docs/*.md links vs ATP-SPEC.md headings")
+        for err in link_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("links OK       docs/*.md links vs ATP-SPEC.md headings")
 
     for doc in ("README.md", "ATP-SPEC.md"):
         federation_errors = federation_claim_errors(documents[doc], doc)

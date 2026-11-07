@@ -174,24 +174,46 @@ function shown(text: string): string {
   );
 }
 
+// did:opena2a Section 3.1: a DID as its prefix and resource-type, its
+// resource-id, and its fragment with the "#" (empty when there is none). The
+// resource-id admits the unreserved characters, ":" and %XX triplets; the
+// other parts admit no triplet.
+const OPENA2A_DID = /^(did:opena2a:[a-z][a-z_]*:)((?:[A-Za-z0-9._/@:-]|%[0-9A-Fa-f]{2})+)((?:#[A-Za-z0-9._/@-]+)?)$/;
+// The characters a resource-id admits unescaped: the unreserved rule and ":".
+const RESOURCE_ID_UNESCAPED = /^[A-Za-z0-9._/@:-]+$/;
+const TRIPLET = /%([0-9A-Fa-f]{2})/g;
+
+/**
+ * The unescaped form did:opena2a Section 3.1.2 gives did: its resource-id
+ * with each %XX replaced, once, by the octet it denotes, and the prefix, the
+ * resource-type and the fragment unchanged. null when did is not a
+ * did:opena2a DID under Section 3.1, or when a triplet of its resource-id
+ * decodes to an octet the resource-id does not admit unescaped (a %, a #, a
+ * space, a control character or an octet above %7F among them), which makes
+ * the DID invalid.
+ */
+function unescapedForm(did: string): string | null {
+  const match = OPENA2A_DID.exec(did);
+  if (match === null) return null;
+  const [, prefix = "", resourceId = "", fragment = ""] = match;
+  const decoded = resourceId.replace(TRIPLET, (_triplet, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  return RESOURCE_ID_UNESCAPED.test(decoded) ? prefix + decoded + fragment : null;
+}
+
 /**
  * Throw a TypeError for a did that holds a %: one that names its unescaped
- * form, with each %XX decoded once, when every % begins one and the decoded
- * bytes are UTF-8, and one that says the did is not a percent-encoding of
- * UTF-8 text otherwise.
+ * form when did:opena2a Section 3.1.2 gives it one (unescapedForm), and one
+ * that says the did is not a valid did:opena2a DID, and names no form,
+ * otherwise.
  */
 function refusePercentEncoded(did: string): void {
   if (!did.includes("%")) return;
-  let unescaped: string | null = null;
-  try {
-    // decodeURIComponent throws a URIError for a % that does not begin %XX
-    // and for decoded bytes that are not UTF-8.
-    unescaped = decodeURIComponent(did);
-  } catch {
-    // unescaped stays null.
-  }
+  const unescaped = unescapedForm(did);
   if (unescaped === null) {
-    throw new TypeError(`did ${shown(did)} holds a % that does not begin a percent-encoding of UTF-8 text`);
+    throw new TypeError(
+      `did ${shown(did)} holds a % and is not a valid did:opena2a DID ` +
+        "(did:opena2a Sections 3.1 and 3.1.2), so it has no unescaped form to request",
+    );
   }
   throw new TypeError(
     `did ${shown(did)} is percent-encoded; request its unescaped form ${shown(unescaped)} (did:opena2a Section 3.1.2)`,
@@ -1087,8 +1109,11 @@ export class AtpClient {
    * did:opena2a Section 3.1.2 gives the percent-encoded and unescaped forms
    * of a DID the same subject, and this client compares the did of the
    * answer with the requested one as exact strings, so it accepts only the
-   * unescaped form. The error names that form when each % begins a
-   * percent-encoding of UTF-8 text.
+   * unescaped form. The error names that form when Section 3.1.2 gives the
+   * did one: the did is a did:opena2a DID under Section 3.1, and its
+   * resource-id, decoded once, holds only characters a resource-id admits
+   * unescaped. For any other did that holds a % and no lone surrogate, the
+   * error says the did is not a valid did:opena2a DID and names no form.
    */
   async getTrustProof(did: string): Promise<JsonObject> {
     // encodeURIComponent would throw a URIError for a lone surrogate.

@@ -916,22 +916,55 @@ describe("AtpClient", () => {
           "request its unescaped form did:opena2a:mcp_server:@scope/name (did:opena2a Section 3.1.2)",
       ],
       [
-        "did:opena2a:agent:a%0Ab",
-        "did did:opena2a:agent:a%0Ab is percent-encoded; " +
-          'request its unescaped form "did:opena2a:agent:a\\nb" (did:opena2a Section 3.1.2)',
+        // The resource-id is decoded and the fragment is kept as it is.
+        "did:opena2a:agent:agent%5Fconformance%5Ftest%5F001#key-1",
+        "did did:opena2a:agent:agent%5Fconformance%5Ftest%5F001#key-1 is percent-encoded; " +
+          "request its unescaped form did:opena2a:agent:agent_conformance_test_001#key-1 (did:opena2a Section 3.1.2)",
+      ],
+      [
+        // A resource-id admits a ":" unescaped.
+        "did:opena2a:agent:a%3Ab",
+        "did did:opena2a:agent:a%3Ab is percent-encoded; " +
+          "request its unescaped form did:opena2a:agent:a:b (did:opena2a Section 3.1.2)",
       ],
     ];
     for (const [did, message] of cases) {
       await assert.rejects(client.getTrustProof(did), { name: "TypeError", message });
     }
-    for (const did of ["did:opena2a:agent:a%", "did:opena2a:agent:a%4", "did:opena2a:agent:a%ZZ", "did:opena2a:agent:a%FF"]) {
+    assert.deepEqual(authority.requests, []);
+    assert.deepEqual(await client.getTrustProof(unescaped), { did: unescaped });
+  });
+
+  it("getTrustProof throws a TypeError naming no form for a did that Section 3.1.2 makes invalid, before any request", async () => {
+    // did:opena2a Section 3.1.2 decodes the resource-id once and nothing
+    // else, and a triplet that decodes to a character the resource-id does
+    // not admit unescaped makes the DID invalid, so it has no unescaped form.
+    const invalid = [
+      "did:opena2a:agent:a%25b", // a %; the result is not decoded again
+      "did:opena2a:agent:a%b",
+      "did:opena2a:agent:a%2523",
+      "did:opena2a:agent:a%23", // a #
+      "did:opena2a:agent:a%20b", // a space
+      "did:opena2a:agent:caf%C3%A9", // octets above %7F
+      "did:opena2a:agent:a%0Ab", // a control character
+      "did:opena2a:agent:x#key%41", // a triplet in the fragment
+      "did%3Aopena2a:agent:x", // a triplet in the prefix
+      "did:opena2a:mcp%5Fserver:x", // a triplet in the resource-type
+      "did:opena2a:agent:a%",
+      "did:opena2a:agent:a%4",
+      "did:opena2a:agent:a%ZZ",
+      "did:opena2a:agent:a%FF",
+      "did:web:example.com%3A8080", // not a did:opena2a DID
+    ];
+    for (const did of invalid) {
       await assert.rejects(client.getTrustProof(did), {
         name: "TypeError",
-        message: `did ${did} holds a % that does not begin a percent-encoding of UTF-8 text`,
+        message:
+          `did ${did} holds a % and is not a valid did:opena2a DID ` +
+          "(did:opena2a Sections 3.1 and 3.1.2), so it has no unescaped form to request",
       });
     }
     assert.deepEqual(authority.requests, []);
-    assert.deepEqual(await client.getTrustProof(unescaped), { did: unescaped });
   });
 
   it("getTrustProof throws a TypeError for a did that UTF-8 cannot encode, before any request", async () => {
