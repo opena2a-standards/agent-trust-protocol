@@ -130,8 +130,10 @@ Where:
   (`a2a_agent` is a deprecated legacy alias of `agent`)
 - `agent_name` is the package name in the unescaped form that the
   [did:opena2a method specification](https://github.com/opena2a-standards/did-method-opena2a) Sections 3.1 and 3.1.1
-  define for signed artifacts; verifiers compare identifiers after
-  normalization (its Section 3.3) and never normalize before signature verification
+  define for signed artifacts; verifiers compare identifiers as its Section 3.1.1 requires,
+  after the decoding of its Section 3.1.2 and the normalization of its Section 3.3, and
+  decode or normalize no identifier before verifying a signature over bytes that contain it,
+  so the percent-encoded and unescaped forms of one DID compare equal
 
 Examples:
 ```
@@ -475,9 +477,10 @@ example.
 
 Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation
 of the agent itself is Section 8.1: a verifier that reads the revocation list applies an
-entry for the proof's `did` whether or not the entry carries a `transparencyLogIndex`, and
-requires no inclusion proof for an entry without one (an agent revoked before the authority
-logged anything for it).
+entry whose `agentDid` is the proof's `did`, the two compared as Section 3.1 compares
+identifiers, whether or not the entry carries a `transparencyLogIndex`, and requires no
+inclusion proof for an entry without one (an agent revoked before the authority logged
+anything for it).
 
 #### 4.4.1 Two-authority proof (Level 3)
 
@@ -624,6 +627,7 @@ An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://w
 | (none) | `type` | `["VerifiableCredential", "AtxCredential"]` |
 | `issuerDid` | `issuer` | unchanged |
 | `did` | `credentialSubject.id` | unchanged |
+| `version` | `credentialSubject.version` | unchanged |
 | `issuedAt` | `validFrom` | unchanged |
 | `expiresAt` | `validUntil` | unchanged |
 | `trustLevel` | `credentialSubject.trustLevel` | unchanged |
@@ -634,10 +638,9 @@ An ATX credential is not a [W3C Verifiable Credentials Data Model 2.0](https://w
 | `behavioralProfile` | `credentialSubject.behavioralProfile` | unchanged |
 | `scanSummary` | `credentialSubject.scanSummary` | unchanged |
 | `declaredPurpose` | `credentialSubject.declaredPurpose` | unchanged |
-| `version` | `version` | unchanged |
 | `signatures` | `signatures` | unchanged |
 
-The first `@context` item is the base context the data model requires. The second expands `AtxCredential` and the ATX member names in the table to IRIs under `https://specs.opena2a.org/ns/atx#`, so the mapped form needs no context document beyond the base one. `version` and `signatures` describe the credential, not its subject, and stay at the top level.
+The first `@context` item is the base context the data model requires. The second expands `AtxCredential` and the ATX member names in the table to IRIs under `https://specs.opena2a.org/ns/atx#`, so the mapped form needs no context document beyond the base one. `signatures` describes the credential, not its subject, and stays at the top level. `version` is the agent's version, as in [atx-spec core.md Section 1.1](https://github.com/opena2a-standards/atx-spec/blob/main/core.md), so it is a claim about the subject and moves to `credentialSubject.version`.
 
 `validFrom` and `validUntil` take XML Schema `dateTimeStamp` values. An ATX timestamp is one when it is written with an uppercase `T` and either `Z` or a numeric offset, as in `examples/atx-example.json`.
 

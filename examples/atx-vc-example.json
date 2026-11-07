@@ -9,6 +9,7 @@
   "validUntil": "2026-05-20T14:00:00Z",
   "credentialSubject": {
     "id": "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+    "version": "2.1.4",
     "trustLevel": 3,
     "trustScore": 0.82,
     "verdict": "passed",
@@ -53,7 +54,6 @@
       "egressScopes": []
     }
   },
-  "version": "1.1-draft",
   "signatures": [
     {
       "keyId": "did:opena2a:registry:opena2a.org#key-v1",

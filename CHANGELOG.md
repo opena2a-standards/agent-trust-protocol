@@ -175,8 +175,8 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 - Section 4.6 "Verifiable Credential Form": the mapping from an ATX credential to the W3C
   Verifiable Credentials Data Model 2.0 structure, one table row per member (`issuerDid` to
   `issuer`, `did` to `credentialSubject.id`, `issuedAt` and `expiresAt` to `validFrom` and
-  `validUntil`, each claim under `credentialSubject`, `version` and `signatures` unchanged at
-  the top level, constant `@context` and `type`). The section says what the mapped form is
+  `validUntil`, each claim under `credentialSubject`, `signatures` unchanged at the top
+  level, constant `@context` and `type`). The section says what the mapped form is
   not: no Verifiable Credentials securing mechanism secures it, and its ATX signatures are
   verified on the ATX credential the mapping recovers. `examples/atx-vc-example.json` is
   `examples/atx-example.json` in that form and `schemas/atx-vc-v1.schema.json` is its shape.
@@ -260,6 +260,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   and the Verifiable Credential Form that its table has no row for it, and that the README
   sentence on the mapping names it.
 - Section 3.1: `agent_name` cites did:opena2a Sections 3.1 and 3.1.1, not Section 3.1.1 alone.
+- Section 3.1 states the identifier comparison rule of did:opena2a Section 3.1.1 with its
+  decoding step: verifiers compare identifiers after the decoding of did:opena2a Section 3.1.2
+  and the normalization of its Section 3.3, and decode or normalize no identifier before
+  verifying a signature over bytes that contain it. The sentence named normalization alone in
+  both halves. Section 4.4 applies a Section 8.1 revocation entry whose `agentDid` is the
+  proof's `did` under that comparison. `scripts/validate_examples.py` fails a prose sentence of
+  ATP-SPEC.md that names normalization more times than decoding, and one that names a
+  revocation and the proof's `did` without citing Section 3.1.
 - Section 4.4 step 7 names its reject category: a proof that fails the step is rejected with
   `SIGNATURE_INVALID`, the category of the step 4 rejections. Step 7 named no category.
   Section 4.4.1 names the Python client's step 7 check beside `scripts/validate_examples.py`.
@@ -413,6 +421,16 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `clients/python` and `clients/typescript`: `get_trust_proof` (`getTrustProof`) compared
+  the `did` of the answer with the requested DID as exact strings, so a request for the
+  percent-encoded form of `did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem`
+  (`%40` for its `@`, `%2F` for its `/`) that the authority answered for the unescaped form
+  raised `AtpError` ("the authority did not answer with a trust proof for ..."), although
+  did:opena2a Section 3.1.2 gives both forms the same subject. A `did` that holds a `%` now
+  raises `ValueError` (a `TypeError` in TypeScript) before any request is sent. The error
+  names the unescaped form, with each `%XX` decoded once, when every `%` begins a
+  percent-encoding of UTF-8 text, and says that it does not otherwise (`%`, `%4`, `%ZZ` and
+  `%FF` in the tests). The proof's `did` is still compared as an exact string.
 - `clients/python` and `clients/typescript`: `AtpClient` took the age of its copy of the
   discovery document from `time.monotonic()` and `performance.now()` alone. On macOS
   `time.monotonic()` reads `mach_absolute_time()`, and `performance.now()` follows the same
@@ -430,6 +448,20 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   removed from a copy the client fetched with an `Age` of 200 seconds, which still verifies
   after 100 seconds on the system clock alone and stops verifying after 101.
   `clients/README.md` and the class doc comments state the rule.
+- Section 4.6: the Verifiable Credential mapping table placed the ATX member `version` at
+  the top level of the mapped form, and the text after the table said `version` describes
+  the credential, not its subject. In atx-spec core.md Section 1.1 `version` is the agent's
+  version; the credential's own version is `atcVersion`, which Section 10.4 names. The table
+  now places `version` at `credentialSubject.version`, and the text after the table names
+  `signatures` as what describes the credential and stays at the top level, and `version` as
+  a claim about the subject. `examples/atx-example.json` held `1.1-draft` in `version`;
+  `version` now holds an agent version, `2.1.4`. `examples/atx-vc-example.json` is that
+  example under the corrected table, and `schemas/atx-vc-v1.schema.json` takes `version`
+  under `credentialSubject` as a non-empty string and refuses it at the top level.
+  `scripts/test_checks.py` checks the row, the sentence after the table that names what
+  describes the credential, both examples and those schema rules. One entry above is
+  corrected: the Section 4.6 entry under Added named `version` among the members the mapped
+  form keeps at the top level.
 - `conformance/lib.sh`: the Section 7.1 transport rule allowed the IPv6 loopback address only
   as `[::1]`. Under `http://[0:0:0:0:0:0:0:1]`, `http://[0::1]` and `http://[::0001]` with the
   port of an authority listening on `::1`, no request was sent, every test failed, and T1.1,

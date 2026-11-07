@@ -2,14 +2,15 @@
 """Regression tests for check_license.py, the README, reference implementation,
 specification claim, revocation schema, Sigstore co-signature, two-authority
 proof (with its Ed25519 verification), threat model, discovery transport and
-maximum age, issuer key set, issuer key set proof (with the Section 4.4 count),
-signed timestamp, ATX status, fixture coverage, A2A agent card path and
-Verifiable Credential form checks in validate_examples.py, check_guides.py, the
-conformance scripts (run against fixture_authority.py; needs bash, curl and
-jq), the error fixture_authority.py stops with when it cannot read an example
-it serves or listen on its port, the registry generation and --check mode of
-gen_registries.py, and the test-suite and package sentences of the
-.pre-push-review-not-required marker. Run: python3 scripts/test_checks.py
+maximum age, identifier comparison, issuer key set, issuer key set proof (with
+the Section 4.4 count), signed timestamp, ATX status, fixture coverage, A2A
+agent card path and Verifiable Credential form checks in validate_examples.py,
+check_guides.py, the conformance scripts (run against fixture_authority.py;
+needs bash, curl and jq), the error fixture_authority.py stops with when it
+cannot read an example it serves or listen on its port, the registry generation
+and --check mode of gen_registries.py, and the test-suite and package sentences
+of the .pre-push-review-not-required marker. Run: python3
+scripts/test_checks.py
 """
 import ast
 import base64
@@ -1374,6 +1375,107 @@ class DiscoveryTransportTest(unittest.TestCase):
         self.assertIn("names no transport", out.getvalue())
 
 
+# The Section 3.1 and Section 4.4 sentences of issue #122, before the fix.
+ISSUE_COMPARISON = (
+    "- `agent_name` is the package name in the unescaped form that the\n"
+    "  [did:opena2a method specification](https://example.org/did) Sections 3.1 and 3.1.1\n"
+    "  define for signed artifacts; verifiers compare identifiers after\n"
+    "  normalization (its Section 3.3) and never normalize before signature verification\n"
+)
+ISSUE_REVOCATION = (
+    "Step 3 checks the authority's signing keys against key revocation (Section 8.2). Revocation\n"
+    "of the agent itself is Section 8.1: a verifier that reads the revocation list applies an\n"
+    "entry for the proof's `did` whether or not the entry carries a `transparencyLogIndex`, and\n"
+    "requires no inclusion proof for an entry without one.\n"
+)
+FULL_COMPARISON = (
+    "Verifiers compare identifiers after the decoding of its Section 3.1.2 and the\n"
+    "normalization of its Section 3.3, and decode or normalize no identifier before\n"
+    "verifying a signature over bytes that contain it.\n"
+)
+CITED_REVOCATION = (
+    "A verifier applies an entry whose `agentDid` is the proof's `did`, compared as\n"
+    "Section 3.1 compares identifiers, whether or not the entry is revoked by index.\n"
+)
+
+
+class IdentifierComparisonTest(unittest.TestCase):
+    def errors(self, text):
+        return validate_examples.identifier_comparison_errors(text)
+
+    def spec(self):
+        return (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+
+    def test_repository_spec_passes(self):
+        self.assertEqual(self.errors(self.spec()), [])
+
+    def test_issue_comparison_sentence_fails_at_its_first_line(self):
+        errors = self.errors("Intro.\n\n" + ISSUE_COMPARISON)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:3: names normalization"), errors[0])
+
+    def test_issue_revocation_sentence_fails(self):
+        errors = self.errors(ISSUE_REVOCATION)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:1: applies a revocation"), errors[0])
+        self.assertIn("Revocation of the agent itself", errors[0])
+
+    def test_rule_restated_in_full_passes(self):
+        self.assertEqual(self.errors(FULL_COMPARISON), [])
+
+    def test_rule_leaving_decoding_out_of_one_half_fails(self):
+        errors = self.errors(FULL_COMPARISON.replace("decode or normalize", "normalize"))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("names normalization", errors[0])
+
+    def test_british_spelling_is_read(self):
+        errors = self.errors("Verifiers normalise identifiers before comparing them.\n")
+        self.assertEqual(len(errors), 1, errors)
+
+    def test_revocation_sentence_citing_section_3_1_passes(self):
+        self.assertEqual(self.errors(CITED_REVOCATION), [])
+
+    def test_revocation_sentence_citing_a_subsection_fails(self):
+        errors = self.errors(CITED_REVOCATION.replace("Section 3.1 ", "Section 3.10 "))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("without citing Section 3.1", errors[0])
+
+    def test_proof_did_without_a_revocation_is_not_read(self):
+        self.assertEqual(self.errors("Step 1 reads the proof's `did` from the response.\n"), [])
+
+    def test_code_block_is_not_checked(self):
+        text = "Intro.\n\n```text\nverifiers normalize the proof's `did`; revoked\n```\n"
+        self.assertEqual(self.errors(text), [])
+
+    def test_repository_spec_with_the_issue_sentences_fails(self):
+        spec = self.spec()
+        lines = spec.splitlines(keepends=True)
+        bullet = next(i for i, line in enumerate(lines) if line.startswith("- `agent_name`"))
+        after = next(i for i in range(bullet + 1, len(lines)) if not lines[i].startswith("  "))
+        step = next(i for i, line in enumerate(lines) if line.startswith("Step 3 checks"))
+        end = next(i for i in range(step, len(lines)) if not lines[i].strip())
+        regressed = (
+            "".join(lines[:bullet])
+            + ISSUE_COMPARISON
+            + "".join(lines[after:step])
+            + ISSUE_REVOCATION
+            + "".join(lines[end:])
+        )
+        errors = self.errors(regressed)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("names normalization", errors[0])
+        self.assertIn("applies a revocation", errors[1])
+
+    def test_main_fails_on_identifier_comparison_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "identifier_comparison_errors", return_value=["compares no decoding"]
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("compare FAIL", out.getvalue())
+        self.assertIn("compares no decoding", out.getvalue())
+
+
 KEY_SET_HEADING = "#### 7.1.1 Issuer key set"
 
 
@@ -2269,6 +2371,43 @@ class VerifiableCredentialFormTest(unittest.TestCase):
         subject = self.schema["properties"]["credentialSubject"]
         self.assertEqual(set(subject["properties"]), placed)
         self.assertIs(subject["additionalProperties"], False)
+
+    def test_version_is_the_agents_and_sits_under_credential_subject(self):
+        """atx-spec core.md Section 1.1: `version` is the agent's version, a
+        claim about the subject. The table places it at
+        credentialSubject.version and keeps `signatures` alone at the top
+        level, the sentence after the table that names what describes the
+        credential names `signatures` alone, both examples carry the same
+        agent version, and the schema refuses `version` at the top level and
+        an empty string or a number as the agent's version."""
+        placed = {row["ATX member"]: row["Verifiable Credential property"] for row in self.rows}
+        self.assertEqual(placed.get("version"), "credentialSubject.version")
+        kept = sorted(member for member, where in placed.items() if member == where)
+        self.assertEqual(kept, ["signatures"])
+
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        section = spec.split(f"\n{validate_examples.VC_FORM_HEADING}\n", 1)[1].split("\n#", 1)[0]
+        stated = [
+            sentence
+            for paragraph in section.split("\n\n")
+            for sentence in validate_examples.SENTENCE_BREAK.split(" ".join(paragraph.split()))
+            if "the credential, not its subject" in sentence
+        ]
+        self.assertEqual(len(stated), 1, stated)
+        self.assertEqual(sorted(re.findall(r"`([^`]+)`", stated[0])), kept)
+
+        self.assertIsInstance(self.atx.get("version"), str)
+        self.assertEqual(self.vc["credentialSubject"].get("version"), self.atx["version"])
+        self.assertNotIn("version", self.vc)
+
+        at_top = copy.deepcopy(self.vc)
+        at_top["version"] = at_top["credentialSubject"].pop("version")
+        self.assertFalse(self.validator.is_valid(at_top))
+        for value in ("", 2):
+            with self.subTest(value=value):
+                edited = copy.deepcopy(self.vc)
+                edited["credentialSubject"]["version"] = value
+                self.assertFalse(self.validator.is_valid(edited))
 
     def test_atx_member_without_a_row_fails(self):
         rows = [row for row in self.rows if row["ATX member"] != "capabilities"]

@@ -28,7 +28,14 @@ if not result.valid:
 `AtpClient` sends two kinds of request: `get_discovery()` reads `/.well-known/atp` (and
 `/.well-known/opena2a` when the first answers 404), and `get_trust_proof(did)` reads
 `/api/v1/trust/proof?did=...`, takes the proof from under `proof` when the authority wraps
-it, and raises `AtpError` for a proof about another DID. Redirects are not followed. The base
+it, and raises `AtpError` for a proof about another DID. It compares the proof's `did` with
+the requested one as exact strings, so it raises `ValueError`, before it sends a request, for
+a `did` that holds a `%`: did:opena2a Section 3.1.2 gives the percent-encoded and unescaped
+forms of a DID the same subject, and the error names the unescaped form, with each `%XX`
+decoded once, when every `%` begins a percent-encoding of UTF-8 text (for a `did` that
+writes the `@` and `/` of `did:opena2a:mcp_server:@scope/name` as `%40` and `%2F`, it
+names `did:opena2a:mcp_server:@scope/name`).
+Redirects are not followed. The base
 URL is an `https` URL, as Section 7.1 requires, or an `http` URL whose host is a loopback
 address literal, an IPv4 address in `127.0.0.0/8` or the IPv6 address `::1`; otherwise the
 constructor raises `ValueError`, for `http://localhost` too. The constructor also raises
@@ -155,8 +162,8 @@ table above except the two named below, leave unchecked what the Python client l
 unchecked and return a `VerifyResult` whose `category` is `null` for a valid input. `now` is
 a `Date` or an RFC 3339 string. Where the Python client raises `ValueError`, this one throws
 a `TypeError`: the constructor throws one for a base URL that holds a `?` or `#`, even with
-nothing after it, and `getTrustProof` throws one for a `did` that holds a lone surrogate,
-before it sends a request. An `AtpError` carries `status`, `null` when the authority gave no
+nothing after it, and `getTrustProof` throws one for a `did` that holds a lone surrogate or
+a `%`, before it sends a request. An `AtpError` carries `status`, `null` when the authority gave no
 HTTP status.
 
 The base URL is an `https` URL, or an `http` URL whose host is a loopback address literal,
