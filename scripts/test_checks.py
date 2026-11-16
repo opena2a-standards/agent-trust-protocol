@@ -4,12 +4,12 @@ specification claim, revocation schema, Sigstore co-signature, two-authority
 proof (with its Ed25519 verification), threat model, discovery transport and
 maximum age, identifier comparison, issuer key set, issuer key set proof (with
 the Section 4.4 count), signed timestamp, ATX status, fixture coverage, A2A
-agent card path and Verifiable Credential form checks in validate_examples.py,
-check_guides.py, the conformance scripts (run against fixture_authority.py;
-needs bash, curl and jq), the error fixture_authority.py stops with when it
-cannot read an example it serves or listen on its port, the registry generation
-and --check mode of gen_registries.py, and the test-suite and package sentences
-of the .pre-push-review-not-required marker. Run: python3
+agent card path, Verifiable Credential form and DID syntax checks in
+validate_examples.py, check_guides.py, the conformance scripts (run against
+fixture_authority.py; needs bash, curl and jq), the error fixture_authority.py
+stops with when it cannot read an example it serves or listen on its port, the
+registry generation and --check mode of gen_registries.py, and the test-suite
+and package sentences of the .pre-push-review-not-required marker. Run: python3
 scripts/test_checks.py
 """
 import ast
@@ -35,7 +35,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
@@ -1087,6 +1087,255 @@ class AgentCardPathTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("card FAIL", out.getvalue())
         self.assertIn("retired path named", out.getvalue())
+
+
+class DidSyntaxTest(unittest.TestCase):
+    def errors(self, text, name="ATP-SPEC.md"):
+        return validate_examples.did_syntax_errors(name, text)
+
+    def entries(self):
+        return json.loads((ROOT / "schemas" / "examples-map.json").read_text(encoding="utf-8"))
+
+    def test_repository_documents_pass(self):
+        documents = [
+            path.relative_to(ROOT).as_posix()
+            for path, _ in validate_examples.did_documents(self.entries())
+        ]
+        for name in (
+            "ATP-SPEC.md",
+            "README.md",
+            "docs/reference-implementation.md",
+            "examples/a2a-integration.md",
+            "examples/atx-example.json",
+            "examples/atx-vc-example.json",
+        ):
+            with self.subTest(name):
+                self.assertIn(name, documents)
+        self.assertEqual(validate_examples.repository_did_errors(self.entries()), ([], []))
+
+    def test_each_example_names_the_check_that_reports_it_unread(self):
+        reporters = {
+            path.relative_to(ROOT).as_posix(): reporter
+            for path, reporter in validate_examples.did_documents(self.entries())
+        }
+        self.assertIsNone(reporters["ATP-SPEC.md"])
+        self.assertIsNone(reporters["docs/reference-implementation.md"])
+        self.assertEqual(reporters["examples/a2a-integration.md"], "A2A agent card check")
+        self.assertEqual(reporters["examples/atx-example.json"], "ATX check")
+        self.assertEqual(reporters["examples/atx-vc-example.json"], "examples map")
+
+    def test_did_production(self):
+        for did in (
+            "did:opena2a:skill:deployment-helper",
+            "did:opena2a:ai_tool:langchain",
+            "did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem",
+            "did:opena2a:authority:opena2a.org",
+        ):
+            with self.subTest(did=did):
+                self.assertTrue(validate_examples.DID_SYNTAX.fullmatch(did))
+        for did in (
+            "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+            "did:opena2a:agent:google/weather-agent",
+            "did:opena2a:skill:",
+            "did:Opena2a:skill:x",
+            "did:opena2a:skill:%4",
+        ):
+            with self.subTest(did=did):
+                self.assertIsNone(validate_examples.DID_SYNTAX.fullmatch(did))
+
+    def test_percent_encoded_form(self):
+        """Section 3.1: each character of `agent_name` other than an ASCII
+        letter, a digit, ".", "-" or "_" is written as the percent-encoding of
+        its UTF-8 bytes, and decoding gives the unescaped form back; the agent
+        type, and a DID of another method, are not changed."""
+        for did, encoded in (
+            (
+                "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+                "did:opena2a:mcp_server:%40modelcontextprotocol%2Fserver-filesystem",
+            ),
+            ("did:opena2a:agent:google/weather-agent", "did:opena2a:agent:google%2Fweather-agent"),
+            ("did:opena2a:skill:deployment-helper", "did:opena2a:skill:deployment-helper"),
+            ("did:opena2a:agent:a:b~cé", "did:opena2a:agent:a%3Ab%7Ec%C3%A9"),
+            ("did:opena2a:skill", "did:opena2a:skill"),
+            ("did:example:a/b", "did:example:a/b"),
+        ):
+            with self.subTest(did=did):
+                self.assertEqual(validate_examples.percent_encoded(did), encoded)
+                self.assertEqual(unquote(encoded), did)
+
+    def test_did_document_carries_the_unescaped_form(self):
+        """did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require the unescaped form
+        in a DID Document's `id` and each `verificationMethod` `id`, so the
+        document of an identifier outside the DID Core syntax passes as it is,
+        and a percent-encoded `id` fails at its line."""
+        unescaped = "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem"
+        escaped = validate_examples.percent_encoded(unescaped)
+        document = (
+            "Intro.\n\n```json\n{\n"
+            '  "id": "%s",\n'
+            '  "verificationMethod": [{\n'
+            '    "id": "%s#key-1",\n'
+            '    "controller": "did:opena2a:authority:opena2a.org"\n'
+            "  }]\n}\n```\n"
+        )
+        self.assertEqual(self.errors(document % (unescaped, unescaped)), [])
+        for ids, line in (((escaped, unescaped), 5), ((unescaped, escaped), 7)):
+            with self.subTest(line=line):
+                errors = self.errors(document % ids)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith(f"ATP-SPEC.md:{line}: id "), errors[0])
+                self.assertIn("holds a %; Section 3.1 puts the unescaped form", errors[0])
+
+    def test_identifier_has_did_core_syntax_in_its_percent_encoded_form(self):
+        for did in (
+            "did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem",
+            "did:opena2a:agent:google/weather-agent",
+            "did:opena2a:mcp_server:${serverName}",
+            "did:opena2a:authority:opena2a.org",
+        ):
+            with self.subTest(did=did):
+                self.assertEqual(self.errors('```json\n{"did": "%s"}\n```\n' % did), [])
+        for did in (
+            "did:opena2a:skill:",
+            "did:Opena2a:skill:x",
+            "did:opena2a:mcp server:x",
+            "did:example:a/b",
+        ):
+            with self.subTest(did=did):
+                errors = self.errors('```json\n{"did": "%s"}\n```\n' % did)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("is not W3C DID Core syntax in the percent-encoded form", errors[0])
+
+    def test_did_url_is_checked_before_its_fragment(self):
+        good = '```json\n{"keyId": "did:opena2a:mcp_server:@scope/pkg#key%201"}\n```\n'
+        bad = '```json\n{"keyId": "did:opena2a:mcp_server:%40scope%2Fpkg#key-1"}\n```\n'
+        self.assertEqual(self.errors(good), [])
+        self.assertEqual(len(self.errors(bad)), 1)
+
+    def test_array_member_reports_the_entry_line(self):
+        text = (
+            '```json\n{"federationPeers": [\n'
+            '  "did:opena2a:authority:trust.google.com",\n'
+            '  "did:opena2a:authority:security.azure.com%2Fpeer"\n'
+            "]}\n```\n"
+        )
+        errors = self.errors(text)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("ATP-SPEC.md:4: federationPeers "), errors[0])
+
+    def test_issuer_key_set_entries_carry_the_unescaped_form(self):
+        """Section 7.1.1: each entry of `keyIds` is a `keyId`, so it names a
+        key and carries the unescaped form, and has the DID Core syntax in the
+        percent-encoded form, like a `keyId` or a `federationPeers` entry."""
+        text = (
+            '```json\n{"issuerKeySet": {"threshold": 2, "keyIds": [\n'
+            '  "did:opena2a:authority:example.org#key-1",\n'
+            '  "did:opena2a:authority:example.org%2Fx#key-2",\n'
+            '  "did:Opena2a:authority:example.org#key-3"\n'
+            "]}}\n```\n"
+        )
+        errors = self.errors(text)
+        self.assertEqual(
+            [error.split(" ", 2)[:2] for error in errors],
+            [["ATP-SPEC.md:4:", "keyIds"], ["ATP-SPEC.md:5:", "keyIds"]],
+        )
+        self.assertIn("holds a %; Section 3.1 puts the unescaped form", errors[0])
+        self.assertIn("is not W3C DID Core syntax in the percent-encoded form", errors[1])
+
+    def test_agent_members_carry_the_unescaped_form(self):
+        unescaped = (
+            '```json\n{"did": "did:opena2a:mcp_server:@scope/pkg",\n'
+            ' "agentDid": "did:opena2a:agent:google/weather-agent"}\n```\n'
+        )
+        self.assertEqual(self.errors(unescaped), [])
+        escaped = (
+            '```json\n{"did": "did:opena2a:mcp_server:%40scope%2Fpkg",\n'
+            ' "agentDid": "did:opena2a:agent:google%2Fweather-agent"}\n```\n'
+        )
+        self.assertEqual(
+            [error.split(" ", 2)[:2] for error in self.errors(escaped)],
+            [["ATP-SPEC.md:2:", "did"], ["ATP-SPEC.md:3:", "agentDid"]],
+        )
+
+    def test_prose_is_not_checked_and_json_files_are_read_whole(self):
+        prose = 'The member `"id": "did:opena2a:skill:a%2Fb"` in prose.\n'
+        self.assertEqual(self.errors(prose), [])
+        errors = self.errors('{"issuerDid": "did:opena2a:registry:a%2Fb"}', "examples/x.json")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("examples/x.json:1: issuerDid "), errors[0])
+
+    def test_credential_subject_id_carries_the_unescaped_form(self):
+        """Section 4.6 takes `did` into `credentialSubject.id` unchanged, so
+        the subject's `id` carries the unescaped form, as an `id` anywhere
+        else does."""
+        for value, count in (
+            ("did:opena2a:mcp_server:@scope/pkg", 0),
+            ("did:opena2a:mcp_server:%40scope%2Fpkg", 1),
+        ):
+            subject = '"id": "%s"' % value
+            for text in (
+                '```json\n{"credentialSubject": {%s, "trustLevel": 3}}\n```\n' % subject,
+                '```json\n{"credentialSubject": [{"trustLevel": 3, %s}]}\n```\n' % subject,
+                '```json\n{"credentialSubject": {"buildAttestation": {%s}}}\n```\n' % subject,
+                '```json\n{"verificationMethod": [{%s}]}\n```\n' % subject,
+            ):
+                with self.subTest(text=text):
+                    self.assertEqual(len(self.errors(text)), count)
+
+    def test_section_3_1_puts_the_unescaped_form_in_a_did_document(self):
+        """Section 3.1 follows did:opena2a for a DID Document's `id`, and no
+        document calls every agent identifier a W3C DID Core DID."""
+        spec = (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+        after = spec.split("\n### 3.1 DID Format\n", 1)[1]
+        section = " ".join(after.split("\n### 3.2 ", 1)[0].split())
+        for sentence in (
+            "and a DID Document's `id` and each `verificationMethod` `id` (Section 3.2), where "
+            "did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require the unescaped form.",
+            "No member carries the percent-encoded form.",
+            "Its DID Document, like the Section 3.2 example, carries the unescaped form, so the "
+            "document's `id` is outside the DID Core syntax.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertIn(sentence, section)
+        for path, _ in validate_examples.did_documents(self.entries()):
+            if path.suffix == ".md":
+                with self.subTest(path=path.name):
+                    text = " ".join(path.read_text(encoding="utf-8").split())
+                    self.assertNotIn("conforming to W3C DID Core", text)
+                    self.assertNotIn("are valid DIDs", text)
+
+    def test_unclosed_strings_and_arrays_are_scanned_in_linear_time(self):
+        # Matching each string and each DID-typed array separately took about
+        # 56 s on 40000 escaped quotes with no closing quote, and 1.5 s on 8000
+        # array openings with no closing bracket, and grew with the square of
+        # their number.
+        for text in ('"' + '\\"' * 100000, '"federationPeers": [' * 20000):
+            with self.subTest(text=text[:22]):
+                started = time.perf_counter()
+                self.assertEqual(self.errors("```json\n" + text + "\n```\n"), [])
+                self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_vc_form_issuer_is_checked(self):
+        """Section 4.6 takes `issuerDid` into `issuer` unchanged, so `issuer`
+        names an authority and carries the unescaped form."""
+        text = (
+            "{\n"
+            '  "issuer": "did:opena2a:registry:a%2Fb",\n'
+            '  "credentialSubject": {"id": "did:opena2a:skill:a/b"}\n'
+            "}\n"
+        )
+        errors = self.errors(text, "examples/x.json")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("examples/x.json:2: issuer "), errors[0])
+
+    def test_main_fails_on_did_errors(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            validate_examples, "repository_did_errors", return_value=(["ATP-SPEC.md:1: id"], [])
+        ), contextlib.redirect_stdout(out):
+            self.assertEqual(validate_examples.main(), 1)
+        self.assertIn("dids FAIL", out.getvalue())
+        self.assertIn("    ATP-SPEC.md:1: id", out.getvalue())
 
 
 class RevocationIndexTest(unittest.TestCase):
@@ -5166,7 +5415,11 @@ class InputFileTest(unittest.TestCase):
     there, and a revocation schema with no object schema for an entry's
     reason. A directory in examples/ whose name ends in .md, or in schemas/
     whose name ends in .schema.json, is not read; a link in schemas/ whose
-    target is not there is one failure line."""
+    target is not there is one failure line. The DID check also reads the files
+    in examples/, and does not compare one that another check reports; the
+    links check also reads docs/, and names a file there it cannot read as not
+    compared without failing, so a Markdown file there that is not UTF-8, or a
+    link there whose target is not there, is one failure of the DID check."""
 
     NOT_RUN = "the checks that read these files did not run"
     MAP = "schemas/examples-map.json"
@@ -5542,6 +5795,60 @@ class InputFileTest(unittest.TestCase):
             "examples/zz.md: cannot be read: No such file or directory",
         )
         self.assertEqual([line for line in lines if "missing.md" in line], [])
+
+    DIDS_FAIL = "dids FAIL      ATP-SPEC.md, README.md, docs/ and examples/ vs Section 3.1"
+    DIDS_OK = "dids OK        ATP-SPEC.md, README.md, docs/ and examples/ vs Section 3.1"
+
+    def test_docs_file_that_cannot_be_read_is_one_failure_of_the_did_check(self):
+        def not_utf8(root):
+            (root / "docs").mkdir()
+            (root / "docs" / "notes.md").write_bytes(b"# Notes\n\xe9\n")
+
+        def broken_link(root):
+            (root / "docs").mkdir()
+            (root / "docs" / "zz.md").symlink_to("missing.md")
+
+        for damage, detail in (
+            (not_utf8, "docs/notes.md: not UTF-8: "),
+            (broken_link, "docs/zz.md: cannot be read: No such file or directory"),
+        ):
+            with self.subTest(detail=detail):
+                lines = self.assert_one_failure_naming(damage, self.DIDS_FAIL, detail)
+                self.assertEqual([line for line in lines if "missing.md" in line], [])
+
+    def test_directory_in_docs_named_as_a_markdown_file_is_not_read(self):
+        code, lines, failed = self.run_main(
+            lambda root: (root / "docs" / "notes.md").mkdir(parents=True)
+        )
+        self.assertEqual((code, failed), (0, []), lines)
+        self.assertIn(self.DIDS_OK, lines)
+
+    def test_example_another_check_reports_is_not_compared_by_the_did_check(self):
+        """A file in examples/ that is not UTF-8 is one failure, of the A2A
+        agent card check, the ATX check or the examples map; the DID check
+        names it as not compared and passes on the files it read."""
+        for name, reporter in (
+            ("examples/a2a-integration.md", "A2A agent card check"),
+            ("examples/atx-example.json", "ATX check"),
+            ("examples/atx-vc-example.json", "examples map"),
+        ):
+            def damage(root, name=name):
+                (root / name).write_bytes(b"\xe9" + (root / name).read_bytes())
+
+            with self.subTest(name=name):
+                code, lines, failed = self.run_main(damage)
+                self.assertEqual(code, 1)
+                self.assertEqual(len(failed), 1, lines)
+                self.assertFalse(failed[0].startswith("dids "), failed[0])
+                skipped = [line for line in lines if line.startswith("dids SKIP")]
+                self.assertEqual(len(skipped), 1, lines)
+                self.assertTrue(
+                    skipped[0].startswith(f"dids SKIP      {name}: not compared, not UTF-8: "),
+                    skipped[0],
+                )
+                self.assertTrue(skipped[0].endswith(f"; the {reporter} reports it"), skipped[0])
+                self.assertIn(self.DIDS_OK, lines)
+                self.assertEqual(lines[-1], "1 failure(s)")
 
     REASON_SCHEMA = "schemas/revocation-list-v1.schema.json"
     REASON_SCHEMA_PATH = "properties.revocations.items.properties.reason"

@@ -157,6 +157,22 @@ only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
 README.
 
+A JSON member that holds an identifier (Section 3.1: a member that names an
+agent, an authority or a key, the `id` of a `credentialSubject`, the Section
+4.6 `issuer` and each entry of a Section 7.1.1 `keyIds` among them, and a DID
+Document's `id` and `controller`) carries its unescaped form, so its `did:`
+value holds no `%` up to any `?` or `#`, and that part has the W3C DID Core
+`did` syntax in the percent-encoded form Section 3.1 states, in every code
+block of ATP-SPEC.md, README.md, docs/*.md and examples/*.md and in every
+examples/*.json file. did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require the
+unescaped form in a DID Document's `id` and each `verificationMethod` `id`. A
+file in examples/ that cannot be read is the failure of the check that reports
+it (the A2A agent card check, the ATX check or the examples map), and this
+check names it as not compared; a file in docs/ that is not UTF-8, or a link
+there whose target is not there, is one failure of this check: the links check,
+which also reads docs/*.md, names such a file as not compared and does not fail
+on it.
+
 The README ATX table lists the fields of the Section 4.6 schema table with the
 same status, the example file carries every ATX v1.1 field, the trust-proof
 schema describes an ATX v1.1 member as ATX v1.1, and none of the three labels
@@ -1974,6 +1990,173 @@ def key_set_proof_check() -> list[str]:
     return errors
 
 
+# W3C DID Core Section 3.1, the `did` production: a method name of lowercase
+# letters and digits, then method-specific characters (letters, digits, ".",
+# "-", "_" and percent-escapes) in colon-separated segments, the last not empty.
+DID_SYNTAX = re.compile(
+    r"did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+"
+)
+# Section 3.1: the members that hold an identifier, each carrying its unescaped
+# form. `issuer` is the Section 4.6 Verifiable Credential form of `issuerDid`,
+# and the `id` of a `credentialSubject` is `did`, which Section 4.6 takes
+# unchanged; each entry of a Section 7.1.1 `keyIds` is a `keyId`; a DID
+# Document's `id` and each `verificationMethod` `id` carry the unescaped form
+# as did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require.
+DID_MEMBERS = (
+    "did", "agentDid", "id", "controller", "issuer", "issuerDid", "trustAuthorityDid",
+    "authorityDid", "proposerDid", "signerDid", "blockerDid", "federationPeers", "keyId",
+    "keyIds", "signingKeyId", "signedBy", "revokedByKeyId",
+)
+# Section 3.1: the percent-encoded form writes each character of a did:opena2a
+# `agent_name` that this matches as the percent-encoding of its UTF-8 bytes.
+NAME_ESCAPED = re.compile(r"[^A-Za-z0-9._-]")
+# A JSON string, group 2 being its closing quote (empty when the string runs to
+# the end of the block), or a structural character. A match that starts at a
+# quote always succeeds, so a block is read in one pass.
+JSON_TOKEN = re.compile(r'"((?:[^"\\]|\\[\s\S])*)("?)|[{}\[\],:]')
+
+
+def did_member_values(block: str):
+    """Yield (member, offset, value) for each closed JSON string in block that
+    is the value of a member DID_MEMBERS names, or an entry of an array that
+    is such a member's value, in one pass over the block."""
+    # Each open object or array, and the member whose value it is; an object
+    # or array in an array takes the array's member.
+    stack: list[tuple[str, str | None]] = []
+    name = previous = None
+    for token in JSON_TOKEN.finditer(block):
+        text = token.group()
+        if text == ":":
+            name = previous
+        elif text in "{[":
+            if name is None and stack and stack[-1][0] == "[":
+                name = stack[-1][1]
+            stack.append((text, name))
+            name = None
+        elif text in "}],":
+            if text != "," and stack:
+                stack.pop()
+            name = None
+        elif token.group(2) and stack:
+            member = stack[-1][1] if name is None and stack[-1][0] == "[" else name
+            if member in DID_MEMBERS:
+                yield member, token.start(), token.group(1)
+        previous = token.group(1) if text.startswith('"') else None
+
+
+def percent_encoded(did: str) -> str:
+    """did in the percent-encoded form of Section 3.1: each character of the
+    `agent_name` of a did:opena2a:<agent_type>:<agent_name> identifier other
+    than an ASCII letter, a digit, ".", "-" or "_" written as the
+    percent-encoding of its UTF-8 bytes. A DID of another method, or one
+    without an `agent_name`, is returned as it is."""
+    parts = did.split(":", 3)
+    if len(parts) < 4 or parts[:2] != ["did", "opena2a"]:
+        return did
+    parts[3] = NAME_ESCAPED.sub(
+        lambda match: "".join(
+            f"%{byte:02X}" for byte in match.group().encode("utf-8", "surrogatepass")
+        ),
+        parts[3],
+    )
+    return ":".join(parts)
+
+
+def code_blocks(name: str, text: str):
+    """Yield (first line number, text) for each code block of a Markdown file,
+    and the whole of any other file as one block."""
+    if not name.endswith(".md"):
+        yield 1, text
+        return
+    first, lines = 0, []
+    for number, line, kind in markdown_lines(text):
+        if kind == "code":
+            first = first or number
+            lines.append(line)
+        elif kind == "fence" and lines:
+            yield first, "\n".join(lines)
+            first, lines = 0, []
+    if lines:
+        yield first, "\n".join(lines)
+
+
+def did_syntax_errors(name: str, text: str) -> list[str]:
+    """Section 3.1: a `did:` value of a member that holds an identifier, alone
+    or in an array, carries the unescaped form, so its part before any `?` or
+    `#` holds no `%`; and that part has the W3C DID Core `did` syntax in the
+    percent-encoded form. Reported at the line the value is on, once."""
+    errors = []
+    for first, block in code_blocks(name, text):
+        for member, offset, value in did_member_values(block):
+            did = re.split(r"[?#]", value, maxsplit=1)[0]
+            if not did.startswith("did:"):
+                continue
+            if "%" in did:
+                problem = (
+                    "holds a %; Section 3.1 puts the unescaped form of an identifier in "
+                    "every member"
+                )
+            elif not DID_SYNTAX.fullmatch(percent_encoded(did)):
+                problem = "is not W3C DID Core syntax in the percent-encoded form of Section 3.1"
+            else:
+                continue
+            lineno = first + block.count("\n", 0, offset)
+            errors.append(f"{name}:{lineno}: {member} {value!r} {problem}")
+    return errors
+
+
+def did_documents(entries: list[dict]) -> list[tuple[pathlib.Path, str | None]]:
+    """The documents a reader copies a DID-typed member from, each with the
+    check that reports it when it cannot be read: None for ATP-SPEC.md and
+    README.md, which main() reads before any check, for docs/*.md, which the
+    links check also reads but names as not compared rather than failing, and
+    for a file in examples/ that no other check reads; the A2A agent card check
+    for examples/*.md, the ATX check for the ATX example and the examples map
+    for each file it maps whole. A directory, or a link to one, is not read."""
+    mapped = {entry["file"] for entry in entries if entry.get("heading") is None}
+    documents: list[tuple[pathlib.Path, str | None]] = [
+        (ROOT / "ATP-SPEC.md", None),
+        (ROOT / "README.md", None),
+    ]
+    documents += [(path, None) for path in listed_files(ROOT / "docs", "*.md")]
+    documents += [
+        (path, "A2A agent card check") for path in listed_files(ROOT / "examples", "*.md")
+    ]
+    for path in listed_files(ROOT / "examples", "*.json"):
+        name = path.relative_to(ROOT).as_posix()
+        if name == ATX_EXAMPLE:
+            documents.append((path, "ATX check"))
+        else:
+            documents.append((path, "examples map" if name in mapped else None))
+    return documents
+
+
+def repository_did_errors(entries: list[dict]) -> tuple[list[str], list[str]]:
+    """The DID check over did_documents(entries): its error lines, and a line
+    for each document it did not compare because another check reports that
+    the document cannot be read. A document no other check reads that cannot
+    be read is one error line."""
+    errors: list[str] = []
+    not_compared: list[str] = []
+    for path, reporter in did_documents(entries):
+        name = path.relative_to(ROOT).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            unread = f"not UTF-8: {exc}"
+        except OSError as exc:
+            # A link whose target is not there: the error, not a path on disk.
+            unread = f"cannot be read: {exc.strerror}"
+        else:
+            errors += did_syntax_errors(name, text)
+            continue
+        if reporter is None:
+            errors.append(f"{name}: {unread}")
+        else:
+            not_compared.append(f"{name}: not compared, {unread}; the {reporter} reports it")
+    return errors, not_compared
+
+
 def local_registry() -> Registry:
     """Every repo schema, keyed by its $id, so cross-schema $refs (e.g. the
     inclusion/consistency proofs embedding signed-tree-head-v1) resolve
@@ -2380,6 +2563,19 @@ def main() -> int:
         failures += 1
     else:
         print("card OK        ATP-SPEC.md, README.md, examples/*.md vs the A2A agent card path")
+
+    # A file in examples/ that another check reports when it cannot be read is
+    # that check's failure, once; this check names it as not compared.
+    did_errors, not_compared = repository_did_errors(entries)
+    for line in not_compared:
+        print(f"dids SKIP      {line}")
+    if did_errors:
+        print("dids FAIL      ATP-SPEC.md, README.md, docs/ and examples/ vs Section 3.1")
+        for err in did_errors:
+            print(f"    {err}")
+        failures += 1
+    else:
+        print("dids OK        ATP-SPEC.md, README.md, docs/ and examples/ vs Section 3.1")
 
     # An entry whose schema is not one checked above, or whose heading is in a
     # file that is not there, is one failure and is not validated.

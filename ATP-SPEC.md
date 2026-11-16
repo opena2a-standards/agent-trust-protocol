@@ -31,7 +31,7 @@ ATP is designed to complement, not replace, existing standards:
 - **SLSA (Supply Chain Levels for Software Artifacts)** — ATP trust scoring incorporates SLSA provenance levels. An agent built with SLSA Level 3 provenance receives higher ATP trust.
 - **Sigstore** — ATP trust proofs can be co-signed using Sigstore keyless signing (Section 4.3.1), which binds a proof to the co-signer's identity in a public Rekor log the authority does not operate. A co-signature does not count toward the Section 6 co-signing of trust levels 3-4.
 - **Certificate Transparency (RFC 6962)** — ATP's transparency log is structurally compatible with CT. Monitors that verify CT logs can be adapted to verify ATP logs with minimal changes.
-- **W3C DID Core** — ATP agent identifiers are valid DIDs resolvable to DID Documents.
+- **W3C DID Core** — ATP agent identifiers resolve to DID Documents. An identifier whose name holds a character the DID Core `did` syntax does not admit, such as `@` or `/`, has that syntax only in its percent-encoded form, and ATP members and DID Documents carry its unescaped form (Section 3.1).
 
 ---
 
@@ -117,7 +117,9 @@ Not yet covered by fixtures (self-attested against the spec text until fixtures 
 
 ### 3.1 DID Format
 
-Every agent in ATP is identified by a Decentralized Identifier (DID) conforming to W3C DID Core.
+Every agent in ATP is identified by a Decentralized Identifier (DID) of the did:opena2a method.
+Whether an identifier has the W3C DID Core `did` syntax as written depends on its name, as
+stated after the examples below.
 
 ```
 did:opena2a:<agent_type>:<agent_name>
@@ -135,13 +137,30 @@ Where:
   decode or normalize no identifier before verifying a signature over bytes that contain it,
   so the percent-encoded and unescaped forms of one DID compare equal
 
-Examples:
+Examples, in the unescaped form:
 ```
 did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem
 did:opena2a:agent:google/weather-agent
 did:opena2a:skill:deployment-helper
 did:opena2a:ai_tool:langchain
 ```
+
+Every member that holds an identifier carries this unescaped form: the members that name an
+agent (`did`, `agentDid`, and `credentialSubject.id`, which the Verifiable Credential form
+of Section 4.6 takes unchanged from `did`), the members that name an authority or a key,
+and a DID Document's `id` and each `verificationMethod` `id` (Section 3.2), where
+did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require the unescaped form. No member carries
+the percent-encoded form.
+
+The W3C DID Core `did` syntax admits in a method-specific identifier only ASCII letters,
+digits, `.`, `-`, `_`, `:` and percent-encodings (RFC 3986 Section 2.1). The last two
+examples have that syntax as written. The first two do not: the first holds `@` and `/`,
+and the second `/`. Such an identifier has the syntax only in its percent-encoded form,
+which writes each character of `agent_name` other than an ASCII letter, a digit, `.`, `-`
+or `_` as the percent-encoding of its UTF-8 bytes (`%40` for `@`, `%2F` for `/`), and
+which compares equal to the unescaped form under the comparison above. Its DID Document,
+like the Section 3.2 example, carries the unescaped form, so the document's `id` is outside
+the DID Core syntax.
 
 Trust authorities themselves have DIDs:
 ```
