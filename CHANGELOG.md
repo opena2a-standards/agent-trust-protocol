@@ -421,6 +421,31 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `scripts/validate_examples.py`: the identifier comparison check found an inline link only
+  when its text held no bracket but one pair with no bracket inside it and its target held no
+  parenthesis or space, so a section number after a link in one of four forms was read as a
+  section of `ATP-SPEC.md`: text with brackets nested two deep (`[did:opena2a [method [v1]]
+  specification](https://example.org/did)`), text with an escaped bracket (`[did:opena2a
+  method\] specification](https://example.org/did)`), a target followed by a title
+  (`[did:opena2a](https://example.org/did "DID method")`) and a target that holds a pair of
+  parentheses (`[did:opena2a](https://example.org/did_(method))`). Links are now found by the
+  rules CommonMark sets for the text, destination and title of an inline link: the text holds
+  brackets in pairs, nested to any depth, and brackets a backslash escapes; the destination
+  holds parentheses that a backslash escapes or that are balanced, nested up to 32 deep, or is
+  in angle brackets, which may hold spaces; a title in double quotes, single quotes or
+  parentheses may follow it; and spaces may come around them. A link's target is its
+  destination without the angle brackets and the backslash of each escape, so
+  `[ATP-SPEC.md](<../ATP-SPEC.md>) Section 3.1` now cites `ATP-SPEC.md`. As in CommonMark, a
+  "[" or "]" that a backslash escapes no longer opens or closes the text of a link, a
+  destination that starts with "<" is one only when a ">" closes it, and a link holds no link:
+  the inner one is the link and the brackets around it are text, so in `[see
+  [ATP-SPEC.md](../ATP-SPEC.md) Section 3.1](https://example.org/did)` the number now cites
+  `ATP-SPEC.md`. In the prose sentences of the repository's 11 Markdown files before this
+  entry, read as the check reads them, the same 138 links are found and none of the 581 section
+  citations is read differently. `scripts/test_checks.py` covers each form, and asserts for
+  five more sentence shapes (brackets nested deep, links after many brackets or image brackets
+  that open none, runs of "](" before balanced parentheses, and titles that do not close) that
+  a sentence whose repeated part is 16 times as long takes less than 64 times as long to check.
 - `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
   applies a revocation to the proof's `did` without citing Section 3.1, read "ATP-SPEC 1.0
   Section 3.1", "ATP-SPEC 2 Section 3.1" and "ATP-SPEC 1.0's Section 3.1" as citations of

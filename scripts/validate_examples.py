@@ -94,8 +94,12 @@ number its text is read in its place: "[RFC 9162](#14-references) Section 3.1"
 cites RFC 9162. Where none of these decides, a number in the text of a link
 cites the link's target, and a fragment alone there names a heading of
 ATP-SPEC.md ("[Section 3.1](#31-did-format)"); any other number cites
-ATP-SPEC.md. The links of a sentence are found once, and a link's text holds
-no "[" or "]" but a pair of them with neither between them ("[a [b] c](...)").
+ATP-SPEC.md. The links of a sentence are found once, as CommonMark reads an
+inline link: its text may hold brackets in pairs, nested to any depth ("[a [b
+[c]] d](...)"), and brackets a backslash escapes; its destination may hold
+balanced parentheses or be in angle brackets, and a title may follow it
+("(https://example.org/a_(b) "Title")"); and a link holds no link, so the
+brackets around a link inside the text of another are text.
 
 The Section 4.3 table of served timestamps gives, for each, the form the
 canonical string carries (UTC, whole seconds with fractional seconds dropped,
@@ -239,6 +243,7 @@ import re
 import sys
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 try:
     from jsonschema import Draft202012Validator
@@ -1559,10 +1564,148 @@ POSSESSIVE = re.compile(r"['’]s$")
 # "the" before it or not.
 OF = re.compile(r"\s+of\s+")
 THE = re.compile(r"(?:the\s+)?")
-# An inline link: its text and its target. The text holds no "[" or "]" but a
-# pair of them with neither between them ("[a [b] c](...)"), so a match never
-# reads past a "[" that does not open such a pair.
-LINK = re.compile(r"\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(([^()\s]*)\)")
+# Inline links and images, which inline_links finds by the rules CommonMark
+# sets for their text, destination and title. A backslash before an ASCII
+# punctuation character (PUNCTUATION) escapes it: "\]" neither opens nor closes
+# the text of a link, and "\(" is not a parenthesis of its destination. A
+# backslash before any other character is text.
+PUNCTUATION = r"[!-/:-@\[-`{-~]"
+ESCAPE = rf"\\{PUNCTUATION}"
+TEXT_BACKSLASH = rf"\\(?!{PUNCTUATION})"
+ESCAPED = re.compile(rf"\\({PUNCTUATION})")
+# What the scan for the text of links stops at: an escape, the "![" that opens
+# the text of an image, "[" and "]".
+BRACKET = re.compile(rf"{ESCAPE}|!?\[|\]")
+# Spaces and tabs with at most one line ending among them, which may come
+# between the "(" after a link's text, its destination, its title and ")".
+LINK_SPACE = re.compile(r"[ \t]*(?:\r\n?|\n)?[ \t]*")
+# A destination in angle brackets, which may hold spaces and parentheses but
+# no line ending and no "<" or ">" that a backslash does not escape.
+ANGLE_DESTINATION = re.compile(rf"<((?:{ESCAPE}|{TEXT_BACKSLASH}|[^<>\\\r\n])*)>")
+# What the scan of any other destination stops at: an escape, a parenthesis,
+# and a space or an ASCII control character, which ends the destination.
+DESTINATION_MARK = re.compile(rf"{ESCAPE}|[()\x00-\x20\x7f]")
+# How deep the parentheses of a destination nest at most: CommonMark lets a
+# reader limit the depth, and 32 is the limit markdown-it sets. A deeper
+# destination is not read. A scan that reads past a later "](" counts its "("
+# as a level, so at most DESTINATION_DEPTH + 1 scans of destinations read any
+# one character, however many "](" come before it.
+DESTINATION_DEPTH = 32
+# A link title: text in double quotes, in single quotes or in parentheses,
+# holding its closing mark, and in parentheses also "(", only escaped.
+LINK_TITLE = re.compile(
+    rf'"(?:{ESCAPE}|{TEXT_BACKSLASH}|[^"\\])*"'
+    rf"|'(?:{ESCAPE}|{TEXT_BACKSLASH}|[^'\\])*'"
+    rf"|\((?:{ESCAPE}|{TEXT_BACKSLASH}|[^()\\])*\)"
+)
+
+
+class Link(NamedTuple):
+    """An inline link or image of a sentence: the offset of its "[" (start)
+    and the one after its ")" (end), the offset after "[" (text_start) and
+    the one of the "]" (text_end) around its text, the text, and its target,
+    the destination without its angle brackets and with each escaped
+    character in place of its escape."""
+
+    start: int
+    end: int
+    text_start: int
+    text_end: int
+    text: str
+    target: str
+
+
+def destination_end(text: str, start: int) -> int | None:
+    """The offset at which the destination that starts at start ends, when it
+    does not start with "<": the first space or ASCII control character, or
+    the first ")" that closes no "(" of the destination. None when a "(" of
+    it is not closed there or its parentheses nest more than
+    DESTINATION_DEPTH deep."""
+    depth = 0
+    for mark in DESTINATION_MARK.finditer(text, start):
+        if mark.group() == "(":
+            depth += 1
+            if depth > DESTINATION_DEPTH:
+                return None
+        elif mark.group() == ")" and depth:
+            depth -= 1
+        elif len(mark.group()) == 1:
+            return mark.start() if depth == 0 else None
+    return len(text) if depth == 0 else None
+
+
+def link_tail(text: str, position: int) -> tuple[str, int] | None:
+    """The target of the inline link or image whose text closes with the "]"
+    before position, and the offset after its ")": "(" at position, then a
+    destination in angle brackets (ANGLE_DESTINATION), any other destination
+    (destination_end) or none, then a title (LINK_TITLE) when LINK_SPACE that
+    is not empty comes before it, or none, then ")", with LINK_SPACE or
+    nothing between these parts. None when no such tail starts at
+    position."""
+    if not text.startswith("(", position):
+        return None
+    start = LINK_SPACE.match(text, position + 1).end()
+    angle = ANGLE_DESTINATION.match(text, start)
+    if angle is not None:
+        destination, end = angle.group(1), angle.end()
+    elif text.startswith("<", start):
+        return None
+    else:
+        end = destination_end(text, start)
+        if end is None:
+            return None
+        destination = text[start:end]
+    position = LINK_SPACE.match(text, end).end()
+    title = LINK_TITLE.match(text, position) if position > end else None
+    if title is not None:
+        position = LINK_SPACE.match(text, title.end()).end()
+    if not text.startswith(")", position):
+        return None
+    return ESCAPED.sub(r"\1", destination), position + 1
+
+
+def inline_links(text: str) -> list[Link]:
+    """The inline links and images of text that are not in the text of
+    another, in order. A "]" that a backslash does not escape closes the
+    nearest "[" or "![" before it that no "]" closed, and makes a link, or an
+    image after "!", when a tail (link_tail) follows it; else both are text.
+    So the text of a link holds brackets in pairs, nested to any depth, and
+    brackets a backslash escapes. A link holds no link, as in CommonMark:
+    once one is found, a "[" before it opens none, while a "![" still opens
+    an image. An image is read as a link from its "[". Reference links, code
+    spans, autolinks and HTML tags are not read, so a bracket in one of them
+    is read as a bracket. Each mark (BRACKET) is read once, and a "]" reads
+    a tail once."""
+    links: list[Link] = []
+    # The offset of each "[" that no "]" closed yet, and whether it opens an
+    # image; an opener of a link below index closed opens no link.
+    openers: list[tuple[int, bool]] = []
+    closed = 0
+    position = 0
+    while (mark := BRACKET.search(text, position)) is not None:
+        position = mark.end()
+        if mark.group() != "]":
+            if mark.group()[0] != "\\":
+                openers.append((position - 1, mark.group() == "!["))
+            continue
+        if not openers:
+            continue
+        start, image = openers.pop()
+        inactive = not image and len(openers) < closed
+        closed = min(closed, len(openers))
+        tail = None if inactive else link_tail(text, position)
+        if tail is None:
+            continue
+        target, position = tail
+        while links and links[-1].start > start:
+            links.pop()
+        text_end = mark.start()
+        links.append(Link(start, position, start + 1, text_end, text[start + 1 : text_end], target))
+        if not image:
+            closed = len(openers)
+    return links
+
+
 # A link target that is a fragment alone names a heading of the document the
 # link is in, not a document: the link's text names the document, as in
 # "[RFC 9162](#14-references)", a link to a references section.
@@ -1573,31 +1716,31 @@ SPEC_TARGET = re.compile(r"(?:[^?#]*/)?ATP-SPEC\.md(?:[?#]\S*)?")
 
 
 class SentenceLinks:
-    """The inline links (LINK) of a sentence, found once: by the offset each
-    starts at (starting) and ends at (ending), and the one whose text holds a
-    citation (holding). heading holds the start of each link whose target is
-    a fragment alone (HEADING_TARGET), and other the start of each link whose
-    target is neither that nor ATP-SPEC.md (SPEC_TARGET), so each target is
-    read once, however many citations its link's text holds."""
+    """The inline links of a sentence (inline_links), found once: by the
+    offset each starts at (starting) and ends at (ending), and the one whose
+    text holds a citation (holding). heading holds the start of each link
+    whose target is a fragment alone (HEADING_TARGET), and other the start of
+    each link whose target is neither that nor ATP-SPEC.md (SPEC_TARGET), so
+    each target is read once, however many citations its link's text holds."""
 
     def __init__(self, sentence: str):
-        self.links = list(LINK.finditer(sentence))
-        self.text_starts = [link.start(1) for link in self.links]
-        self.starting = {link.start(): link for link in self.links}
-        self.ending = {link.end(): link for link in self.links}
+        self.links = inline_links(sentence)
+        self.text_starts = [link.text_start for link in self.links]
+        self.starting = {link.start: link for link in self.links}
+        self.ending = {link.end: link for link in self.links}
         self.heading = {
-            link.start() for link in self.links if HEADING_TARGET.fullmatch(link.group(2))
+            link.start for link in self.links if HEADING_TARGET.fullmatch(link.target)
         }
         self.other = {
-            link.start()
+            link.start
             for link in self.links
-            if link.start() not in self.heading and not SPEC_TARGET.fullmatch(link.group(2))
+            if link.start not in self.heading and not SPEC_TARGET.fullmatch(link.target)
         }
 
-    def holding(self, citation: re.Match) -> re.Match | None:
+    def holding(self, citation: re.Match) -> Link | None:
         """The link whose text holds citation, or None."""
         index = bisect_right(self.text_starts, citation.start()) - 1
-        if index >= 0 and citation.end() <= self.links[index].end(1):
+        if index >= 0 and citation.end() <= self.links[index].text_end:
             return self.links[index]
         return None
 
@@ -1634,9 +1777,9 @@ def cites_other_document(
         link = links.starting.get(THE.match(sentence, after.end()).end())
         if link is None:
             return not ATP_NAME_AFTER.match(sentence, after.end())
-        if link.start() in links.heading:
-            return not ATP_NAME_AFTER.match(sentence, link.start(1), link.end(1))
-        return link.start() in links.other
+        if link.start in links.heading:
+            return not ATP_NAME_AFTER.match(sentence, link.text_start, link.text_end)
+        return link.start in links.other
     end = begin + len(sentence[begin : citation.start()].rstrip())
     separated = end > begin and sentence[end - 1] in ",("
     if separated:
@@ -1645,9 +1788,9 @@ def cites_other_document(
         end -= 2
     link = links.ending.get(end)
     if link is not None:
-        if link.start() not in links.heading:
-            return link.start() in links.other
-        begin, end = link.start(1), link.start(1) + len(link.group(1).rstrip())
+        if link.start not in links.heading:
+            return link.start in links.other
+        begin, end = link.text_start, link.text_start + len(link.text.rstrip())
     if ATP_NAME_BEFORE.search(sentence, begin, end):
         return False
     if OTHER_DOCUMENT.search(sentence, begin, end) or (
@@ -1655,7 +1798,7 @@ def cites_other_document(
     ):
         return True
     link = links.holding(citation)
-    return link is not None and link.start() in links.other
+    return link is not None and link.start in links.other
 
 
 def cites_section(sentence: str, section: str) -> bool:

@@ -1990,6 +1990,120 @@ class IdentifierComparisonTest(unittest.TestCase):
             with self.subTest(citation):
                 self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
 
+    def test_issue_link_forms_before_the_number_are_links_to_another_document(self):
+        # Text with brackets nested two deep, text with an escaped bracket, a
+        # target followed by a title, and a target that holds a pair of
+        # parentheses: each is an inline link, which the check did not find.
+        for citation in (
+            "[did:opena2a [method [v1]] specification](https://example.org/did) Section 3.1",
+            "[did:opena2a method\\] specification](https://example.org/did) Section 3.1",
+            '[did:opena2a](https://example.org/did "DID method") Section 3.1',
+            "[did:opena2a](https://example.org/did_(method)) Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_link_text_holds_nested_and_escaped_brackets(self):
+        for text in (
+            "did:opena2a [a [b [c]]] specification",
+            "did:opena2a \\[method specification",
+            "did:opena2a \\[method\\] specification",
+            "did:opena2a [method \\]] specification",
+        ):
+            with self.subTest(text):
+                self.assert_uncited(self.issue_sentence(f"[{text}](https://example.org/did) Section 3.1"))
+                self.assert_uncited(self.issue_sentence(f"Section 3.1 of [{text}](https://example.org/did)"))
+                cited = self.issue_sentence(f"[{text}](../ATP-SPEC.md) Section 3.1")
+                self.assertEqual(self.errors(cited + "\n"), [])
+        self.assert_uncited(self.issue_sentence("[Section 3.1 [DID [format]]](https://example.org/did)"))
+        cited = self.issue_sentence("[Section 3.1 \\[DID format\\]](../ATP-SPEC.md#31-did-format)")
+        self.assertEqual(self.errors(cited + "\n"), [])
+
+    def test_link_target_with_a_title_angle_brackets_or_parentheses_is_read(self):
+        for target in (
+            'https://example.org/did "DID method"',
+            "https://example.org/did 'DID method'",
+            "https://example.org/did (DID method)",
+            "https://example.org/did_((method))",
+            "https://example.org/did_\\(method",
+            "<https://example.org/did method>",
+            " https://example.org/did ",
+        ):
+            for citation in (
+                f"[did:opena2a]({target}) Section 3.1",
+                f"Section 3.1 of [did:opena2a]({target})",
+                f"[Section 3.1]({target})",
+            ):
+                with self.subTest(citation):
+                    self.assert_uncited(self.issue_sentence(citation))
+        # The target is the destination without its title, its angle
+        # brackets and the backslash of an escape.
+        for target in (
+            '../ATP-SPEC.md "Agent Trust Protocol"',
+            "../ATP-SPEC.md (ATP)",
+            "<../ATP-SPEC.md>",
+            "../ATP\\-SPEC.md",
+        ):
+            for citation in (
+                f"[ATP-SPEC.md]({target}) Section 3.1",
+                f"Section 3.1 of [ATP-SPEC.md]({target})",
+                f"[Section 3.1]({target})",
+            ):
+                with self.subTest(citation):
+                    self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+        self.assert_uncited(self.issue_sentence('[RFC 9162](#14-references "References") Section 3.1'))
+
+    def test_link_inside_the_text_of_another_is_the_link(self):
+        # A link holds no link: the inner one is the link, and the brackets
+        # around it are text.
+        self.assert_uncited(
+            self.issue_sentence("[see [did:opena2a](https://example.org/did) Section 3.1](../ATP-SPEC.md)")
+        )
+        cited = self.issue_sentence("[see [ATP-SPEC.md](../ATP-SPEC.md) Section 3.1](https://example.org/did)")
+        self.assertEqual(self.errors(cited + "\n"), [])
+        # An image is not a link, so the text of a link may hold one.
+        self.assert_uncited(
+            self.issue_sentence("[![did:opena2a](did.svg) method](https://example.org/did) Section 3.1")
+        )
+        cited = self.issue_sentence("[![ATP](atp.svg) specification](../ATP-SPEC.md) Section 3.1")
+        self.assertEqual(self.errors(cited + "\n"), [])
+
+    def test_inline_links_reads_link_text_destinations_and_titles(self):
+        # Each text, and the text and target of each link inline_links finds
+        # in it.
+        nested = "(" * validate_examples.DESTINATION_DEPTH + ")" * validate_examples.DESTINATION_DEPTH
+        cases = {
+            "[a [b [c]] d](x)": [("a [b [c]] d", "x")],
+            "[a \\] b](x)": [("a \\] b", "x")],
+            "[a \\[ b](x)": [("a \\[ b", "x")],
+            "\\[a](x)": [],
+            "[a\\](x)": [],
+            '[a](x "t")': [("a", "x")],
+            "[a](x 't')": [("a", "x")],
+            "[a](x (t))": [("a", "x")],
+            '[a](x"t")': [("a", 'x"t"')],
+            "[a](x_(y))": [("a", "x_(y)")],
+            "[a](x_\\(y)": [("a", "x_(y")],
+            "[a](x_(y)": [],
+            "[a](<x (y)>)": [("a", "x (y)")],
+            "[a](<x)": [],
+            "[a]( x )": [("a", "x")],
+            "[a]()": [("a", "")],
+            f"[a]({nested})": [("a", nested)],
+            f"[a](({nested}))": [],
+            "[a [b](x) c](y)": [("b", "x")],
+            "[![a](x) b](y)": [("![a](x) b", "y")],
+            "![a [b](x)](y)": [("a [b](x)", "y")],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text):
+                links = validate_examples.inline_links(text)
+                self.assertEqual([(link.text, link.target) for link in links], expected)
+                for link in links:
+                    self.assertEqual(text[link.start], "[")
+                    self.assertEqual(text[link.end - 1], ")")
+                    self.assertEqual(text[link.text_start : link.text_end], link.text)
+
     def assert_time_grows_with_the_sentence(self, text_of):
         """identifier_comparison_errors takes time in proportion to the length
         of a sentence: on a sentence whose repeated part is 16 times as long
@@ -2029,6 +2143,21 @@ class IdentifierComparisonTest(unittest.TestCase):
             "citations in one link": lambda n: (
                 lead + "[" + "Section 1 " * (n // 20) + "](" + "x" * (n // 2) + ") so\n"
             ),
+        }
+        for name, text_of in shapes.items():
+            with self.subTest(name):
+                self.assert_time_grows_with_the_sentence(text_of)
+
+    def test_nested_brackets_destinations_and_titles_are_read_in_linear_time(self):
+        # Brackets nested deep, links after many brackets that open none, runs
+        # of "](" before balanced parentheses, and titles that do not close.
+        lead = "A verifier applies a revocation entry for the proof's `did` "
+        shapes = {
+            "brackets nested deep": lambda n: lead + "[" * (n // 2) + "]" * (n // 2) + "(x) so\n",
+            "links after unclosed brackets": lambda n: lead + "[" * (n // 2) + "[a](b) " * (n // 14) + "so\n",
+            "links after unclosed images": lambda n: lead + "![" * (n // 4) + "[a](b) " * (n // 14) + "so\n",
+            "unclosed destinations": lambda n: lead + "[a](" * (n // 4) + "()" * (n // 4) + " so\n",
+            "unclosed titles": lambda n: lead + '[a](b "' * (n // 7) + " so\n",
         }
         for name, text_of in shapes.items():
             with self.subTest(name):
