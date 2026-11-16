@@ -1223,6 +1223,25 @@ class DidSyntaxTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("ATP-SPEC.md:4: federationPeers "), errors[0])
 
+    def test_issuer_key_set_entries_carry_the_unescaped_form(self):
+        """Section 7.1.1: each entry of `keyIds` is a `keyId`, so it names a
+        key and carries the unescaped form, and has the DID Core syntax in the
+        percent-encoded form, like a `keyId` or a `federationPeers` entry."""
+        text = (
+            '```json\n{"issuerKeySet": {"threshold": 2, "keyIds": [\n'
+            '  "did:opena2a:authority:example.org#key-1",\n'
+            '  "did:opena2a:authority:example.org%2Fx#key-2",\n'
+            '  "did:Opena2a:authority:example.org#key-3"\n'
+            "]}}\n```\n"
+        )
+        errors = self.errors(text)
+        self.assertEqual(
+            [error.split(" ", 2)[:2] for error in errors],
+            [["ATP-SPEC.md:4:", "keyIds"], ["ATP-SPEC.md:5:", "keyIds"]],
+        )
+        self.assertIn("holds a %; Section 3.1 puts the unescaped form", errors[0])
+        self.assertIn("is not W3C DID Core syntax in the percent-encoded form", errors[1])
+
     def test_agent_members_carry_the_unescaped_form(self):
         unescaped = (
             '```json\n{"did": "did:opena2a:mcp_server:@scope/pkg",\n'

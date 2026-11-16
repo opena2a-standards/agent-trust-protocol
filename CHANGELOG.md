@@ -1027,13 +1027,14 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   identifier, like the Section 3.2 example, therefore has an `id` outside the DID Core
   syntax. The abstract and the identity use case in `docs/use-cases.md` say the same instead
   of calling every agent identifier a W3C DID Core DID. `scripts/validate_examples.py` fails
-  when a member that holds an identifier, a DID Document's `id` and the Verifiable
-  Credential form's `issuer` among them, holds a `did:` value with a `%` before any `?` or
-  `#`, or one that does not have the DID Core syntax in the percent-encoded form, in a code
-  block of `ATP-SPEC.md`, the README, `docs/*.md` or `examples/*.md`, or in an
-  `examples/*.json` file. A file in `examples/` that cannot be read stays one failure, of the
-  check that already reports it; a file in `docs/` that is not UTF-8, or a link there whose
-  target is missing, is one failure of the DID check.
+  when a JSON member that holds an identifier, a DID Document's `id`, the Verifiable
+  Credential form's `issuer` and each entry of a Section 7.1.1 `keyIds` among them, holds a
+  `did:` value with a `%` before any `?` or `#`, or one that does not have the DID Core
+  syntax in the percent-encoded form, in a code block of `ATP-SPEC.md`, the README,
+  `docs/*.md` or `examples/*.md`, or in an `examples/*.json` file. A file in `examples/` that
+  cannot be read stays one failure, of the check that already reports it; a file in `docs/`
+  that is not UTF-8, or a link there whose target is missing, is one failure of the DID
+  check.
 
 ## [1.0.0-rc1] - 2026-04-28
 

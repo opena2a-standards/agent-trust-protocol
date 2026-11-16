@@ -157,19 +157,20 @@ only on a line of the same character at least as long, as in CommonMark, so a
 fence inside a longer fence does not flip prose and code for the rest of the
 README.
 
-A member that holds an identifier (Section 3.1: a member that names an agent,
-an authority or a key, the `id` of a `credentialSubject` and the Section 4.6
-`issuer` among them, and a DID Document's `id` and `controller`) carries its
-unescaped form, so its `did:` value holds no `%` up to any `?` or `#`, and
-that part has the W3C DID Core `did` syntax in the percent-encoded form Section
-3.1 states, in every code block of ATP-SPEC.md, README.md, docs/*.md and
-examples/*.md and in every examples/*.json file. did:opena2a Sections 3.1.1,
-3.1.2 and 4.2 require the unescaped form in a DID Document's `id` and each
-`verificationMethod` `id`. A file in examples/ that cannot be read is the
-failure of the check that reports it (the A2A agent card check, the ATX check
-or the examples map), and this check names it as not compared; a file in docs/
-that is not UTF-8, or a link there whose target is not there, is one failure of
-this check, the one check that reads docs/.
+A JSON member that holds an identifier (Section 3.1: a member that names an
+agent, an authority or a key, the `id` of a `credentialSubject`, the Section
+4.6 `issuer` and each entry of a Section 7.1.1 `keyIds` among them, and a DID
+Document's `id` and `controller`) carries its unescaped form, so its `did:`
+value holds no `%` up to any `?` or `#`, and that part has the W3C DID Core
+`did` syntax in the percent-encoded form Section 3.1 states, in every code
+block of ATP-SPEC.md, README.md, docs/*.md and examples/*.md and in every
+examples/*.json file. did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require the
+unescaped form in a DID Document's `id` and each `verificationMethod` `id`. A
+file in examples/ that cannot be read is the failure of the check that reports
+it (the A2A agent card check, the ATX check or the examples map), and this
+check names it as not compared; a file in docs/ that is not UTF-8, or a link
+there whose target is not there, is one failure of this check, the one check
+that reads docs/.
 
 The README ATX table lists the fields of the Section 4.6 schema table with the
 same status, the example file carries every ATX v1.1 field, the trust-proof
@@ -1997,12 +1998,13 @@ DID_SYNTAX = re.compile(
 # Section 3.1: the members that hold an identifier, each carrying its unescaped
 # form. `issuer` is the Section 4.6 Verifiable Credential form of `issuerDid`,
 # and the `id` of a `credentialSubject` is `did`, which Section 4.6 takes
-# unchanged; a DID Document's `id` and each `verificationMethod` `id` carry the
-# unescaped form as did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require.
+# unchanged; each entry of a Section 7.1.1 `keyIds` is a `keyId`; a DID
+# Document's `id` and each `verificationMethod` `id` carry the unescaped form
+# as did:opena2a Sections 3.1.1, 3.1.2 and 4.2 require.
 DID_MEMBERS = (
     "did", "agentDid", "id", "controller", "issuer", "issuerDid", "trustAuthorityDid",
     "authorityDid", "proposerDid", "signerDid", "blockerDid", "federationPeers", "keyId",
-    "signingKeyId", "signedBy", "revokedByKeyId",
+    "keyIds", "signingKeyId", "signedBy", "revokedByKeyId",
 )
 # Section 3.1: the percent-encoded form writes each character of a did:opena2a
 # `agent_name` that this matches as the percent-encoding of its UTF-8 bytes.
