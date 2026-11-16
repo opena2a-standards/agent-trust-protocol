@@ -78,7 +78,8 @@ the name of another document ("Section 3.1 of ATP-CONFORMANCE.md"). Any other
 section number cites the target of a link that comes right before it or before
 a "'s", a comma or an opening parenthesis in front of it
 ("[ATP-SPEC.md](../ATP-SPEC.md) Section 3.1" cites ATP-SPEC.md); else
-ATP-SPEC.md when a name of it comes there; else another document when one of
+ATP-SPEC.md when a name of it, alone or followed by a number such as a version
+("ATP-SPEC 1.0 Section 3.1"), comes there; else another document when one of
 these names comes there: a DID method ("did:opena2a (Section 3.1)"), an RFC
 ("RFC 9162, Section 3.1"), a Markdown file other than ATP-SPEC.md, atx-spec,
 DID Core, a name ending in "specification" or "spec" ("the A2A specification
@@ -1513,6 +1514,9 @@ REVOCATION_WORD = re.compile(r"\brevo(?:cations?|kes?|ked|king)\b", re.IGNORECAS
 DID_FORMAT_SECTION = "3.1"
 # "specification" or "spec", with a capital or small s.
 SPEC_WORD = r"[Ss]pec(?:ification)?"
+# A number after the name of a document, digit groups joined by "." or "-": a
+# version ("ATP-SPEC 1.0") or the number of a standard ("FIPS 204").
+DOCUMENT_NUMBER = r"\s+\d+(?:[.-]\d+)*"
 # A name of ATP-SPEC.md: ATP or Agent Trust Protocol, alone or followed by
 # SPEC_WORD, ATP-SPEC.md or ATP-SPEC, or "this" followed by SPEC_WORD,
 # "document" or "revision", with a capital or small t ("This specification" at
@@ -1525,7 +1529,10 @@ ATP_NAME = (
     rf"(?:\b(?:ATP|Agent\s+Trust\s+Protocol)(?:\s+{SPEC_WORD})?|\bATP-SPEC(?:\.md)?"
     rf"|\b[Tt]his\s+(?:{SPEC_WORD}|document|revision))"
 )
-ATP_NAME_BEFORE = re.compile(rf"{ATP_NAME}$")
+# A name of ATP-SPEC.md at the end of the text before a citation, alone or
+# followed by a number (DOCUMENT_NUMBER). It is read before ACRONYM, which
+# would take "SPEC 1.0" in "ATP-SPEC 1.0 Section 3.1" for another document.
+ATP_NAME_BEFORE = re.compile(rf"{ATP_NAME}(?:{DOCUMENT_NUMBER})?$")
 ATP_NAME_AFTER = re.compile(rf"(?:the\s+)?`?{ATP_NAME}(?![\w-]|\.\w)")
 # The name of another document, at the end of the text before a citation: a
 # DID method ("did:opena2a"), an RFC ("RFC 9162"), a Markdown file other than
@@ -1546,7 +1553,7 @@ OTHER_DOCUMENT = re.compile(
 # document only right before a citation or before "'s": before a comma or a
 # parenthesis it can name what the cited section defines, as "Revocation API
 # (Section 8.1)" names the endpoint of Section 8.1 in the Section 10.1 table.
-ACRONYM = re.compile(r"\b(?!ATP\b)[A-Z][A-Z0-9]+(?:\s+\d+(?:[.-]\d+)*)?$")
+ACRONYM =re.compile(rf"\b(?!ATP\b)[A-Z][A-Z0-9]+(?:{DOCUMENT_NUMBER})?$")
 POSSESSIVE = re.compile(r"['’]s$")
 # "of" after a citation, which the name of the cited document follows, with
 # "the" before it or not.
@@ -1608,7 +1615,8 @@ def cites_other_document(
     ("did:opena2a's Section 3.1"), comma ("RFC 9162, Section 3.1") or opening
     parenthesis ("did:opena2a (Section 3.1)") right before it set aside. When
     that text ends in a link, the citation cites the link's target; in a name
-    of ATP-SPEC.md, ATP-SPEC.md; in a name of OTHER_DOCUMENT, another
+    of ATP-SPEC.md, alone or followed by a number (ATP_NAME_BEFORE: "ATP-SPEC
+    1.0 Section 3.1"), ATP-SPEC.md; in a name of OTHER_DOCUMENT, another
     document; and in an ACRONYM ("AIP Section 3.1"), another document, unless
     a comma or a parenthesis was set aside. A link whose target is a fragment
     alone (HEADING_TARGET), after "of" or at the end of the text before the
