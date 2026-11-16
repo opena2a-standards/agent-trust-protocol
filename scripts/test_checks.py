@@ -1862,6 +1862,136 @@ class IdentifierComparisonTest(unittest.TestCase):
             with self.subTest(citation):
                 self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
 
+    def test_issue_this_specification_at_the_start_of_a_sentence_is_cited(self):
+        for text in (
+            "This specification (Section 3.1) says how a verifier compares the proof's `did` with a "
+            "revocation entry.",
+            "This specification, Section 3.1, says how a revocation entry is matched to the proof's `did`.",
+            "This spec's Section 3.1 says how a revocation entry is matched to the proof's `did`.",
+            "this specification (Section 3.1) says how a verifier compares the proof's `did` with a "
+            "revocation entry.",
+        ):
+            with self.subTest(text):
+                self.assertEqual(self.errors(text + "\n"), [])
+
+    def test_capitalized_this_names_are_cited_before_the_number_or_after_of(self):
+        names = ("This specification", "This spec", "This document", "This revision")
+        forms = self.BEFORE + ("Section 3.1 of {}",)
+        for citation in [form.format(name) for name in names for form in forms]:
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
+    def test_issue_fragment_link_naming_another_document_is_not_cited(self):
+        # A link whose target is a fragment alone leads to a heading of the
+        # same file, such as its references section, so the cited section
+        # belongs to the document the link's text names.
+        for citation in (
+            "[RFC 9162](#14-references) Section 3.1",
+            "[did:opena2a](#references) Section 3.1",
+            "[RFC 9162](#14-references)'s Section 3.1",
+            "[RFC 9162](#14-references), Section 3.1",
+            "[AIP](#references) Section 3.1",
+            "Section 3.1 of [RFC 9162](#14-references)",
+            "Section 3.1 of the [did:opena2a method specification](#references)",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_fragment_link_naming_atp_spec_is_cited(self):
+        for citation in (
+            "[ATP](#1-introduction) Section 3.1",
+            "[this specification](#31-did-format) Section 3.1",
+            "Section 3.1 of [this specification](#31-did-format)",
+            "Section 3.1 of the [ATP specification](#1-introduction)",
+        ):
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
+    def test_issue_acronym_after_a_mark_is_not_cited(self):
+        for citation in (
+            "AIP/AAP Section 3.1",
+            "AIP-AAP Section 3.1",
+            "AIP.AAP Section 3.1",
+            "AIP:AAP Section 3.1",
+            "AIP/AAP's Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_issue_name_continued_after_atp_following_of_is_not_cited(self):
+        for citation in (
+            "Section 3.1 of ATP-CONFORMANCE.md",
+            "Section 3.1 of `ATP-CONFORMANCE.md`",
+            "Sections 3.1 and 3.3 of ATP-CONFORMANCE.md",
+            "Section 3.1 of ATP.md",
+            "Section 3.1 of ATP_CONFORMANCE.md",
+            "Section 3.1 of ATP2.md",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_atp_spec_without_its_extension_is_cited(self):
+        forms = self.BEFORE + ("Section 3.1 of {}",)
+        for citation in [form.format("ATP-SPEC") for form in forms]:
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+        sentence = "A verifier applies a revocation entry for the proof's `did` as set out in Section 3.1 of ATP.\n"
+        self.assertEqual(self.errors(sentence), [])
+
+    def test_link_text_holds_a_pair_of_brackets_and_stops_at_an_unpaired_one(self):
+        self.assert_uncited(self.issue_sentence("[did:opena2a [method] specification](https://example.org/did) Section 3.1"))
+        self.assert_uncited(self.issue_sentence("[Section 3.1 [DID format]](https://example.org/did)"))
+        for citation in (
+            "[ [ATP-SPEC.md](../ATP-SPEC.md) Section 3.1",
+            "[ Section 3.1 [did:opena2a](https://example.org/did)",
+        ):
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
+    def assert_time_grows_with_the_sentence(self, text_of):
+        """identifier_comparison_errors takes time in proportion to the length
+        of a sentence: on a sentence whose repeated part is 16 times as long
+        it takes about 16 times as long, where a check whose time grows with
+        the square of the length takes about 256 times as long. The bound is
+        64. The two runs are compared with each other, in CPU time of this
+        process, so neither the speed of the machine nor other work on it
+        decides the result. A pair over the bound is run again, up to three
+        times, and the shortest time of each size is kept. Each sentence cites
+        no Section 3.1."""
+        texts = (text_of(250), text_of(4000))
+        tick = time.get_clock_info("process_time").resolution
+        shortest = [float("inf"), float("inf")]
+        for _ in range(3):
+            for size, text in enumerate(texts):
+                started = time.process_time()
+                errors = self.errors(text)
+                shortest[size] = min(shortest[size], time.process_time() - started)
+                self.assertEqual(len(errors), 1, errors)
+            small, large = max(shortest[0], tick), shortest[1]
+            if large < 64 * small:
+                return
+        self.fail(f"16 times the sentence took {large / small:.0f} times as long")
+
+    def test_issue_unclosed_brackets_and_citations_are_read_in_linear_time(self):
+        # On 4000 "[" with no "]" and 285 citations (8 KB) the check took
+        # about 35 s, and its time grew with the number of citations times
+        # the square of the number of brackets; on a run of "§" with no number
+        # after it, with the square of the run's length.
+        lead = "A verifier applies a revocation entry for the proof's `did` "
+        shapes = {
+            "brackets and citations": lambda n: lead + "[" * (n // 2) + " Section 1 and" * (n // 28) + " so\n",
+            "brackets and one citation": lambda n: lead + "[" * n + " as Section 9 requires\n",
+            "section signs": lambda n: lead + "§" * n + " so\n",
+            "links before citations": lambda n: lead + "[a](#x) Section 1 " * (n // 18) + "so\n",
+            "unclosed link after of": lambda n: lead + " Section 1 of [" * (n // 15) + " so\n",
+            "citations in one link": lambda n: (
+                lead + "[" + "Section 1 " * (n // 20) + "](" + "x" * (n // 2) + ") so\n"
+            ),
+        }
+        for name, text_of in shapes.items():
+            with self.subTest(name):
+                self.assert_time_grows_with_the_sentence(text_of)
+
     def test_section_3_1_beside_a_section_of_another_document_is_cited(self):
         text = (
             "A verifier applies a revocation entry for the proof's `did` as Section 3.1 compares it,\n"
