@@ -145,29 +145,54 @@ def _shown(text: str) -> str:
     return text if _PLAIN.fullmatch(text) else json.dumps(text)
 
 
-_NOT_AN_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+# did:opena2a Section 3.1: a DID as its prefix and resource-type, its
+# resource-id, and its fragment with the "#" (empty when there is none). The
+# resource-id admits the unreserved characters, ":" and %XX triplets; the
+# other parts admit no triplet.
+_OPENA2A_DID = re.compile(
+    r"(did:opena2a:[a-z][a-z_]*:)((?:[A-Za-z0-9._/@:-]|%[0-9A-Fa-f]{2})+)((?:#[A-Za-z0-9._/@-]+)?)"
+)
+# The characters a resource-id admits unescaped: the unreserved rule and ":".
+_RESOURCE_ID_UNESCAPED = re.compile(r"[A-Za-z0-9._/@:-]+")
+_TRIPLET = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def _unescaped_form(did: str) -> str | None:
+    """The unescaped form did:opena2a Section 3.1.2 gives did: its resource-id
+    with each %XX replaced, once, by the octet it denotes, and the prefix, the
+    resource-type and the fragment unchanged. None when did is not a
+    did:opena2a DID under Section 3.1, or when a triplet of its resource-id
+    decodes to an octet the resource-id does not admit unescaped (a %, a #, a
+    space, a control character or an octet above %7F among them), which makes
+    the DID invalid."""
+    match = _OPENA2A_DID.fullmatch(did)
+    if match is None:
+        return None
+    prefix, resource_id, fragment = match.groups()
+    decoded = _TRIPLET.sub(lambda triplet: chr(int(triplet.group(1), 16)), resource_id)
+    if not _RESOURCE_ID_UNESCAPED.fullmatch(decoded):
+        return None
+    return prefix + decoded + fragment
 
 
 def _refuse_percent_encoded(did: str) -> None:
     """Raise ValueError for a did that holds a %: one that names its
-    unescaped form, with each %XX decoded once, when every % begins one and
-    the decoded bytes are UTF-8, and one that says the did is not a
-    percent-encoding of UTF-8 text otherwise. A did that UTF-8 cannot encode
-    is left to urllib.parse.quote, which raises UnicodeEncodeError for it."""
+    unescaped form when did:opena2a Section 3.1.2 gives it one
+    (_unescaped_form), and one that says the did is not a valid did:opena2a
+    DID, and names no form, otherwise. A did that UTF-8 cannot encode is left
+    to urllib.parse.quote, which raises UnicodeEncodeError for it."""
     if "%" not in did:
         return
     try:
-        raw = did.encode("utf-8")
+        did.encode("utf-8")
     except UnicodeEncodeError:
         return
-    unescaped = None
-    if not _NOT_AN_ESCAPE.search(did):
-        try:
-            unescaped = urllib.parse.unquote_to_bytes(raw).decode("utf-8")
-        except UnicodeDecodeError:
-            pass
+    unescaped = _unescaped_form(did)
     if unescaped is None:
-        raise ValueError(f"did {_shown(did)} holds a % that does not begin a percent-encoding of UTF-8 text")
+        raise ValueError(
+            f"did {_shown(did)} holds a % and is not a valid did:opena2a DID "
+            "(did:opena2a Sections 3.1 and 3.1.2), so it has no unescaped form to request"
+        )
     raise ValueError(
         f"did {_shown(did)} is percent-encoded; request its unescaped form {_shown(unescaped)} "
         "(did:opena2a Section 3.1.2)"
@@ -1031,8 +1056,12 @@ class AtpClient:
         did:opena2a Section 3.1.2 gives the percent-encoded and unescaped
         forms of a DID the same subject, and this client compares the did of
         the answer with the requested one as exact strings, so it accepts only
-        the unescaped form. The error names that form when each % begins a
-        percent-encoding of UTF-8 text."""
+        the unescaped form. The error names that form when Section 3.1.2 gives
+        the did one: the did is a did:opena2a DID under Section 3.1, and its
+        resource-id, decoded once, holds only characters a resource-id admits
+        unescaped. For any other did that holds a % and that UTF-8 can
+        encode, the error says the did is not a valid did:opena2a DID and
+        names no form."""
         _refuse_percent_encoded(did)
         body, _ = self._get("/api/v1/trust/proof?did=" + urllib.parse.quote(did, safe=""))
         proof = body.get("proof", body) if isinstance(body, dict) else None

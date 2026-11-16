@@ -421,6 +421,35 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `clients/python` and `clients/typescript`: for a `did` that holds a `%`, the error of
+  `get_trust_proof` (`getTrustProof`) named an unescaped form with every `%XX` of the whole
+  string decoded once, also where did:opena2a Section 3.1.2 makes the DID invalid: `%25` in a
+  resource-id named a form holding a `%`, which the same call then refused, `%2523` named one
+  holding `%23`, `%20`, `%C3%A9` and `%0A` named forms holding a space, a non-ASCII character
+  and a newline, and a `%XX` in the prefix or the fragment was decoded as well. The error now
+  names the unescaped form only when Section 3.1.2 gives the DID one: the DID is a did:opena2a
+  DID under did:opena2a Section 3.1, and its resource-id, decoded once, holds only characters
+  a resource-id admits unescaped (that section's `unreserved` characters and `:`). For any
+  other `did` that holds a `%` and that UTF-8 can encode, the error says it is not a valid
+  did:opena2a DID and names no form. Such a `did` is still refused before any request is sent.
+- `docs/use-cases.md` followed most section links with an `ATP-SPEC.md` line number, taken
+  at the commit that added its reader table; after later edits of `ATP-SPEC.md`, 28 of the 39
+  numbers named a line other than the one they cited (line 265, cited for the Section 4.2
+  heading, is a code fence). The numbers are gone and each section is cited by its link; the
+  abstract is now a link as well. `scripts/validate_examples.py` fails a relative link from a
+  `docs/*.md` file to `ATP-SPEC.md` that does not lead to the `ATP-SPEC.md` at the repository
+  root or whose fragment is the anchor of no heading of `ATP-SPEC.md`, so a citation fails
+  once its heading is renamed or renumbered, and it fails an `ATP-SPEC.md:N` line reference
+  in those files.
+- `scripts/validate_examples.py`: the identifier comparison check read a revocation only as
+  revocation, revoke or revoked, so a sentence that names the proof's `did` and revocations,
+  revokes or revoking without citing Section 3.1 passed; it now reads all six forms. It read
+  a citation of Section 3.1 only as "Section 3.1" or "§3.1", so "Sections 3.1 and 3.3" failed,
+  and it took "did:opena2a Section 3.1", a section of the method specification, for a citation
+  of ATP's Section 3.1. It now reads each number of a list after "Sections", and a section
+  number after the name of another document (a DID method such as did:opena2a, an RFC, a
+  Markdown file other than `ATP-SPEC.md`, atx-spec, AAP, DID Core, a link, or "its") cites
+  that document.
 - `clients/python` and `clients/typescript`: `get_trust_proof` (`getTrustProof`) compared
   the `did` of the answer with the requested DID as exact strings, so a request for the
   percent-encoded form of `did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem`

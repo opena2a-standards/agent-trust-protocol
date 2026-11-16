@@ -1443,6 +1443,86 @@ class IdentifierComparisonTest(unittest.TestCase):
     def test_proof_did_without_a_revocation_is_not_read(self):
         self.assertEqual(self.errors("Step 1 reads the proof's `did` from the response.\n"), [])
 
+    def assert_uncited(self, sentence):
+        errors = self.errors(sentence + "\n")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("without citing Section 3.1", errors[0])
+
+    def test_issue_sentence_naming_revocations_fails(self):
+        self.assert_uncited("A verifier applies the revocations listed for the proof's `did`.")
+
+    def test_issue_sentence_naming_revokes_fails(self):
+        self.assert_uncited("The authority revokes the proof's `did` by listing it.")
+
+    def test_issue_sentence_naming_revoking_fails(self):
+        self.assert_uncited("Revoking the proof's `did` takes effect at once.")
+
+    def test_each_form_of_revoke_and_revocation_is_read(self):
+        sentences = {
+            "revocation": "A verifier applies a revocation of the proof's `did`",
+            "revocations": "A verifier applies the revocations of the proof's `did`",
+            "revoke": "An authority may revoke the proof's `did`",
+            "revokes": "The authority revokes the proof's `did`",
+            "revoked": "The proof's `did` is revoked",
+            "revoking": "Revoking the proof's `did` takes effect at once",
+        }
+        for word, sentence in sentences.items():
+            with self.subTest(word):
+                self.assert_uncited(sentence + ".")
+                self.assertEqual(self.errors(sentence + ", as Section 3.1 compares identifiers.\n"), [])
+
+    def test_issue_sentence_citing_sections_3_1_and_3_3_passes(self):
+        text = (
+            "A verifier applies a revocation entry whose agentDid is the proof's `did`, compared as\n"
+            "Sections 3.1 and 3.3 require.\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def test_issue_sentence_citing_did_opena2a_section_3_1_fails(self):
+        self.assert_uncited(
+            "A verifier applies a revocation entry for the proof's `did`, compared as did:opena2a "
+            "Section 3.1 requires."
+        )
+
+    def test_section_3_1_in_a_list_or_after_a_section_sign_is_cited(self):
+        for citation in (
+            "Section 3.1",
+            "Sections 3.3 and 3.1",
+            "Sections 2, 3.1 and 3.3",
+            "§3.1",
+            "ATP Section 3.1",
+            "ATP-SPEC.md Section 3.1",
+        ):
+            with self.subTest(citation):
+                sentence = f"A verifier applies a revocation entry for the proof's `did` as {citation} compares it.\n"
+                self.assertEqual(self.errors(sentence), [])
+
+    def test_section_3_1_of_another_document_is_not_cited(self):
+        for citation in (
+            "did:opena2a Section 3.1",
+            "did:opena2a §3.1",
+            "did:opena2a Sections 3.1 and 3.3",
+            "the did:opena2a method specification Section 3.1",
+            "[did:opena2a method specification](https://example.org/did) Sections 3.1 and 3.1.1",
+            "RFC 9162 Section 3.1",
+            "atx-spec Section 3.1",
+            "atx-spec core.md Section 3.1",
+            "AAP Section 3.1",
+            "DID Core Section 3.1",
+            "its Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(
+                    f"A verifier applies a revocation entry for the proof's `did` as {citation} compares it."
+                )
+
+    def test_section_3_1_beside_a_section_of_another_document_is_cited(self):
+        text = (
+            "A verifier applies a revocation entry for the proof's `did` as Section 3.1 compares it,\n"
+            "after the decoding of did:opena2a Section 3.1.2.\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
     def test_code_block_is_not_checked(self):
         text = "Intro.\n\n```text\nverifiers normalize the proof's `did`; revoked\n```\n"
         self.assertEqual(self.errors(text), [])
@@ -1474,6 +1554,202 @@ class IdentifierComparisonTest(unittest.TestCase):
             self.assertEqual(validate_examples.main(), 1)
         self.assertIn("compare FAIL", out.getvalue())
         self.assertIn("compares no decoding", out.getvalue())
+
+
+# The citation of docs/use-cases.md that the issue quotes: a link to the
+# Section 4.2 heading and the line number the file gave for it.
+ISSUE_CITATION = (
+    "Spec text: the trust proof format and signing of "
+    "[Section 4.2](../ATP-SPEC.md#42-trust-proof-format) (`ATP-SPEC.md:265`).\n"
+)
+
+
+class SpecLinkTest(unittest.TestCase):
+    """docs/*.md cites sections of ATP-SPEC.md by links to their headings,
+    which fail once a heading is renamed or renumbered, and not by line
+    numbers, which an edit above the line moves."""
+
+    LINKS = "docs/*.md links vs ATP-SPEC.md headings"
+
+    def spec(self):
+        return (ROOT / "ATP-SPEC.md").read_text(encoding="utf-8")
+
+    def errors(self, text, name="docs/guide.md", spec=None):
+        anchors = validate_examples.heading_anchors(self.spec() if spec is None else spec)
+        return validate_examples.spec_link_errors(name, text, anchors)
+
+    def test_repository_documents_pass(self):
+        documents = validate_examples.spec_link_documents()
+        self.assertIn(ROOT / "docs" / "use-cases.md", documents)
+        for doc in documents:
+            name = doc.relative_to(ROOT).as_posix()
+            with self.subTest(name):
+                self.assertEqual(self.errors(doc.read_text(encoding="utf-8"), name), [])
+
+    def test_use_cases_cites_sections_by_link(self):
+        text = (ROOT / "docs" / "use-cases.md").read_text(encoding="utf-8")
+        self.assertIn("](../ATP-SPEC.md#42-trust-proof-format)", text)
+        self.assertNotRegex(text, r"ATP-SPEC\.md:\d")
+
+    def test_issue_line_reference_fails(self):
+        errors = self.errors(ISSUE_CITATION)
+        self.assertEqual(
+            errors,
+            [
+                "docs/guide.md:1: cites ATP-SPEC.md:265, a line number that an edit above the "
+                "line moves; cite the section by a link to its heading"
+            ],
+        )
+
+    def test_heading_anchors(self):
+        text = (
+            "# ATP\n"
+            "\n"
+            "## 2. Conformance Levels\n"
+            "\n"
+            "### Level 2: Auditable Trust (single authority + transparency)\n"
+            "\n"
+            "#### 4.6 Agent Trust eXtension (ATX)\n"
+            "\n"
+            "### See [RFC 9162](https://example.org/rfc9162) ###\n"
+            "\n"
+            "## Notes\n"
+            "\n"
+            "## Notes\n"
+            "\n"
+            "```bash\n"
+            "# 4.2 a comment, not a heading\n"
+            "```\n"
+            "#5 is not a heading\n"
+        )
+        self.assertEqual(
+            validate_examples.heading_anchors(text),
+            {
+                "atp",
+                "2-conformance-levels",
+                "level-2-auditable-trust-single-authority--transparency",
+                "46-agent-trust-extension-atx",
+                "see-rfc-9162",
+                "notes",
+                "notes-1",
+            },
+        )
+
+    def test_link_to_a_heading_passes(self):
+        cases = [
+            ("docs/guide.md", "[Section 4.2](../ATP-SPEC.md#42-trust-proof-format)"),
+            ("docs/guide.md", "[the abstract](../ATP-SPEC.md#abstract)"),
+            ("docs/guide.md", "[the specification](../ATP-SPEC.md)"),
+            ("README.md", "[Section 4.2](ATP-SPEC.md#42-trust-proof-format)"),
+            ("README.md", "[Section 4.2](./ATP-SPEC.md#42-trust-proof-format)"),
+        ]
+        for name, link in cases:
+            with self.subTest(name=name, link=link):
+                self.assertEqual(self.errors(f"See {link}.\n", name), [])
+
+    def test_link_to_no_heading_fails(self):
+        errors = self.errors("See [Section 4.2](../ATP-SPEC.md#42-trust-proof-formats).\n")
+        self.assertEqual(
+            errors,
+            [
+                "docs/guide.md:1: links ATP-SPEC.md#42-trust-proof-formats, which is the anchor "
+                "of no heading of ATP-SPEC.md"
+            ],
+        )
+
+    def test_renamed_heading_fails_the_link_that_cites_it(self):
+        spec = self.spec()
+        heading = "\n### 4.2 Trust Proof Format\n"
+        self.assertIn(heading, spec)
+        text = (ROOT / "docs" / "use-cases.md").read_text(encoding="utf-8")
+        for edited in ("\n### 4.2 Proof Format\n", "\n### 4.20 Trust Proof Format\n"):
+            with self.subTest(edited.strip()):
+                errors = self.errors(text, "docs/use-cases.md", spec.replace(heading, edited))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("links ATP-SPEC.md#42-trust-proof-format, which is", errors[0])
+
+    def test_link_that_does_not_lead_to_the_root_specification_fails(self):
+        cases = [
+            ("docs/guide.md", "ATP-SPEC.md#abstract"),
+            ("docs/guide.md", "./ATP-SPEC.md"),
+            ("docs/guide.md", "../../ATP-SPEC.md#abstract"),
+            ("README.md", "../ATP-SPEC.md#abstract"),
+        ]
+        for name, path in cases:
+            with self.subTest(name=name, path=path):
+                errors = self.errors(f"See [the abstract]({path}).\n", name)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith(f"{name}:1: links "), errors[0])
+                self.assertIn("which is not the ATP-SPEC.md at the repository root", errors[0])
+
+    def test_absolute_link_and_code_block_are_not_read(self):
+        text = (
+            "See [the abstract](https://example.org/ATP-SPEC.md#nothing).\n"
+            "\n"
+            "```text\n"
+            "[Section 4.2](../ATP-SPEC.md#nothing) (`ATP-SPEC.md:265`)\n"
+            "```\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def run_main(self, damage):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("README.md", "ATP-SPEC.md"):
+                shutil.copy(ROOT / name, root / name)
+            for directory in ("schemas", "registries", "examples", "docs"):
+                shutil.copytree(ROOT / directory, root / directory)
+            damage(root)
+            out = io.StringIO()
+            with mock.patch.object(validate_examples, "ROOT", root), contextlib.redirect_stdout(out):
+                code = validate_examples.main()
+        lines = out.getvalue().splitlines()
+        return code, lines, [line for line in lines if "FAIL" in line or "INVALID" in line]
+
+    def test_main_reports_the_check(self):
+        code, lines, failed = self.run_main(lambda root: None)
+        self.assertEqual((code, failed), (0, []), lines)
+        self.assertIn(f"links OK       {self.LINKS}", lines)
+
+    def test_main_fails_on_a_line_reference_in_docs(self):
+        def damage(root):
+            path = root / "docs" / "use-cases.md"
+            path.write_text(path.read_text(encoding="utf-8") + "\n" + ISSUE_CITATION, encoding="utf-8")
+
+        code, lines, failed = self.run_main(damage)
+        self.assertEqual((code, failed), (1, [f"links FAIL     {self.LINKS}"]), lines)
+        self.assertIn("docs/use-cases.md:", lines[lines.index(failed[0]) + 1])
+        self.assertIn("cites ATP-SPEC.md:265", lines[lines.index(failed[0]) + 1])
+
+    def test_docs_file_that_is_not_utf8_or_not_there_is_not_compared(self):
+        """A docs/*.md file that is not UTF-8, or a link in docs/ whose target
+        is not there, holds no link the check can read: one SKIP line names it
+        as not compared, and the check passes on the other documents. It is
+        not a failure of this check, so a check that reports a file that
+        cannot be read reports it once."""
+        for name, damage, reason in (
+            (
+                "docs/use-cases.md",
+                lambda root: (root / "docs" / "use-cases.md").write_bytes(
+                    b"\xe9" + (ROOT / "docs" / "use-cases.md").read_bytes()
+                ),
+                "not UTF-8: ",
+            ),
+            (
+                "docs/zz.md",
+                lambda root: (root / "docs" / "zz.md").symlink_to("missing.md"),
+                "cannot be read: No such file or directory",
+            ),
+        ):
+            with self.subTest(name):
+                _, lines, failed = self.run_main(damage)
+                links = [line for line in lines if line.startswith("links ")]
+                self.assertEqual(len(links), 2, lines)
+                self.assertTrue(
+                    links[0].startswith(f"links SKIP     {name}: not compared, {reason}"), links
+                )
+                self.assertEqual(links[1], f"links OK       {self.LINKS}", links)
+                self.assertEqual([line for line in failed if line.startswith("links ")], [], lines)
 
 
 KEY_SET_HEADING = "#### 7.1.1 Issuer key set"
