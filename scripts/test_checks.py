@@ -1938,6 +1938,48 @@ class IdentifierComparisonTest(unittest.TestCase):
         sentence = "A verifier applies a revocation entry for the proof's `did` as set out in Section 3.1 of ATP.\n"
         self.assertEqual(self.errors(sentence), [])
 
+    def test_issue_atp_spec_followed_by_a_version_is_cited(self):
+        # ATP-SPEC names ATP-SPEC.md, and a version after it does not make
+        # "SPEC 1.0", an acronym after "-", the name of another document.
+        for citation in (
+            "ATP-SPEC 1.0 Section 3.1",
+            "ATP-SPEC 2 Section 3.1",
+            "ATP-SPEC 1.0's Section 3.1",
+            "[ATP-SPEC 1.0](#1-introduction) Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
+    def test_names_of_atp_spec_followed_by_a_version_are_cited(self):
+        names = (
+            "ATP-SPEC",
+            "ATP-SPEC.md",
+            "ATP",
+            "Agent Trust Protocol",
+            "the ATP specification",
+            "this specification",
+            "This spec",
+        )
+        forms = self.BEFORE + ("Section 3.1 of {}",)
+        for name in names:
+            for version in ("1.0", "2", "1.0.1", "1-0"):
+                for form in forms:
+                    citation = form.format(f"{name} {version}")
+                    with self.subTest(citation):
+                        self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
+    def test_acronym_followed_by_a_version_is_not_cited(self):
+        # An acronym other than ATP, after a space or after "-", followed by a
+        # number still names another document.
+        for citation in (
+            "AIP 1.0 Section 3.1",
+            "AIP-SPEC 1.0 Section 3.1",
+            "AIP-SPEC 1.0's Section 3.1",
+            "[AIP-SPEC 1.0](#references) Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
     def test_link_text_holds_a_pair_of_brackets_and_stops_at_an_unpaired_one(self):
         self.assert_uncited(self.issue_sentence("[did:opena2a [method] specification](https://example.org/did) Section 3.1"))
         self.assert_uncited(self.issue_sentence("[Section 3.1 [DID format]](https://example.org/did)"))

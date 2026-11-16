@@ -422,6 +422,19 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 ### Fixed
 
 - `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
+  applies a revocation to the proof's `did` without citing Section 3.1, read "ATP-SPEC 1.0
+  Section 3.1", "ATP-SPEC 2 Section 3.1" and "ATP-SPEC 1.0's Section 3.1" as citations of
+  another document, so a sentence that cited Section 3.1 of `ATP-SPEC.md` that way failed.
+  `ATP-SPEC` names `ATP-SPEC.md`, but with a number after it the text before the citation
+  ended in the number, not the name, and "SPEC 1.0", an acronym after "-", was read as the
+  name of another document. A name of `ATP-SPEC.md` followed by a number, digit groups joined by "."
+  or "-" as after an acronym, now names `ATP-SPEC.md` there, also in the text of a link to a
+  heading ("[ATP-SPEC 1.0](#1-introduction) Section 3.1"); "AIP 1.0 Section 3.1" and
+  "AIP-SPEC 1.0 Section 3.1" still cite another document. Of the 581 section citations in
+  prose sentences of the repository's 11 tracked Markdown files before this entry, none is
+  read differently. `scripts/test_checks.py` covers the issue's forms, seven names of
+  `ATP-SPEC.md` followed by a version, and an acronym followed by a version.
+- `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
   applies a revocation to the proof's `did` without citing Section 3.1, read four kinds of
   citation wrongly and could take tens of seconds on one sentence. "This specification",
   "This spec", "This document" and "This revision", with the capital T a sentence starts
