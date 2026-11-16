@@ -441,7 +441,7 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   the inner one is the link and the brackets around it are text, so in `[see
   [ATP-SPEC.md](../ATP-SPEC.md) Section 3.1](https://example.org/did)` the number now cites
   `ATP-SPEC.md`. In the prose sentences of the repository's 11 Markdown files before this
-  entry, read as the check reads them, the same 138 links are found and none of the 581 section
+  entry, read as the check reads them, the same 139 links are found and none of the 589 section
   citations is read differently. `scripts/test_checks.py` covers each form, and asserts for
   five more sentence shapes (brackets nested deep, links after many brackets or image brackets
   that open none, runs of "](" before balanced parentheses, and titles that do not close) that
