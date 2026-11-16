@@ -447,6 +447,19 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   that open none, runs of "](" before balanced parentheses, and titles that do not close) that
   a sentence whose repeated part is 16 times as long takes less than 64 times as long to check.
 - `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
+  applies a revocation to the proof's `did` without citing Section 3.1, read the name of
+  another document only when the name ended the text before the citation. With a version
+  after the name ("DID Core 1.0 Section 3.1", "did:opena2a 1.0 Section 3.1", "the A2A
+  specification 0.3 Section 3.1", "atx-spec 1.0 Section 3.1", "atx-spec core.md 2 Section
+  3.1") the citation was read as one of `ATP-SPEC.md`, so such a sentence passed. A name of
+  another document followed by a number, digit groups joined by "." or "-" as after an acronym
+  or a name of `ATP-SPEC.md`, now names that document there, also before a "'s", a comma or
+  an opening parenthesis and in the text of a link to a heading ("[DID Core 1.0](#references)
+  Section 3.1"); "ATP-SPEC.md 1.0 Section 3.1" still cites `ATP-SPEC.md`. Of the 591 section
+  citations in prose sentences of the repository's 11 tracked Markdown files before this
+  entry, none is read differently. `scripts/test_checks.py` covers the issue's forms, seven
+  names of other documents and "its" followed by five versions.
+- `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
   applies a revocation to the proof's `did` without citing Section 3.1, read "ATP-SPEC 1.0
   Section 3.1", "ATP-SPEC 2 Section 3.1" and "ATP-SPEC 1.0's Section 3.1" as citations of
   another document, so a sentence that cited Section 3.1 of `ATP-SPEC.md` that way failed.

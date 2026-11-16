@@ -1980,6 +1980,56 @@ class IdentifierComparisonTest(unittest.TestCase):
             with self.subTest(citation):
                 self.assert_uncited(self.issue_sentence(citation))
 
+    def test_issue_other_document_followed_by_a_version_is_not_cited(self):
+        # A version after the name of another document does not make the
+        # citation one of ATP-SPEC.md.
+        for citation in (
+            "DID Core 1.0 Section 3.1",
+            "did:opena2a 1.0 Section 3.1",
+            "the A2A specification 0.3 Section 3.1",
+            "atx-spec 1.0 Section 3.1",
+            "atx-spec core.md 2 Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_other_document_names_followed_by_a_version_are_not_cited(self):
+        names = (
+            "did:opena2a",
+            "atx-spec core.md",
+            "atx-spec",
+            "DID Core",
+            "the A2A specification",
+            "the A2A spec",
+            "the did:opena2a method specification",
+        )
+        versions = ("1.0", "0.3", "2", "1.0.1", "1-0")
+        citations = [
+            form.format(f"{name} {version}")
+            for name in names
+            for version in versions
+            for form in self.BEFORE
+        ]
+        for version in versions:
+            citations += [
+                f"its {version} Section 3.1",
+                f"its {version}, Section 3.1",
+                f"its {version} (Section 3.1)",
+                f"[DID Core {version}](#references) Section 3.1",
+                f"[the A2A specification {version}](#references) Section 3.1",
+            ]
+        for citation in citations:
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_markdown_file_atp_spec_followed_by_a_version_is_not_another_document(self):
+        # ATP_NAME_BEFORE reads ATP-SPEC.md first; OTHER_DOCUMENT, which reads
+        # a number after the name of a Markdown file, does not take ATP-SPEC.md
+        # followed by a version for another document either.
+        self.assertIsNone(validate_examples.OTHER_DOCUMENT.search("as ATP-SPEC.md 1.0"))
+        self.assertIsNotNone(validate_examples.OTHER_DOCUMENT.search("as core.md 1.0"))
+        self.assertIsNotNone(validate_examples.OTHER_DOCUMENT.search("as xATP-SPEC.md 1.0"))
+
     def test_link_text_holds_a_pair_of_brackets_and_stops_at_an_unpaired_one(self):
         self.assert_uncited(self.issue_sentence("[did:opena2a [method] specification](https://example.org/did) Section 3.1"))
         self.assert_uncited(self.issue_sentence("[Section 3.1 [DID format]](https://example.org/did)"))

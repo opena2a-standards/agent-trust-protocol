@@ -80,13 +80,14 @@ a "'s", a comma or an opening parenthesis in front of it
 ("[ATP-SPEC.md](../ATP-SPEC.md) Section 3.1" cites ATP-SPEC.md); else
 ATP-SPEC.md when a name of it, alone or followed by a number such as a version
 ("ATP-SPEC 1.0 Section 3.1"), comes there; else another document when one of
-these names comes there: a DID method ("did:opena2a (Section 3.1)"), an RFC
-("RFC 9162, Section 3.1"), a Markdown file other than ATP-SPEC.md, atx-spec,
-DID Core, a name ending in "specification" or "spec" ("the A2A specification
-Section 3.1"), or "its"; else another document when an acronym other than ATP
-that starts a word, after a space or a mark such as "/" or "-", comes right
-before it or before a "'s" in front of it ("AIP Section 3.1", "AIP/AAP Section
-3.1"). An acronym before a comma or a parenthesis is not read as a document,
+these names, alone or followed by a number ("DID Core 1.0 Section 3.1"), comes
+there: a DID method ("did:opena2a (Section 3.1)"), an RFC ("RFC 9162, Section
+3.1"), a Markdown file other than ATP-SPEC.md, atx-spec, DID Core, a name
+ending in "specification" or "spec" ("the A2A specification Section 3.1"), or
+"its"; else another document when an acronym other than ATP that starts a
+word, after a space or a mark such as "/" or "-", comes right before it or
+before a "'s" in front of it ("AIP Section 3.1", "AIP/AAP Section 3.1"). An
+acronym before a comma or a parenthesis is not read as a document,
 since in the Section 10.1 table "Revocation API (Section 8.1)" names what
 Section 8.1 defines. A link whose target is a fragment alone leads to a heading
 of the same file, such as its references section, so after "of" or before a
@@ -1544,12 +1545,15 @@ ATP_NAME_AFTER = re.compile(rf"(?:the\s+)?`?{ATP_NAME}(?![\w-]|\.\w)")
 # ATP-SPEC.md ("atx-spec core.md"), atx-spec, DID Core, a name ending in
 # SPEC_WORD ("the A2A specification", "the did:opena2a method specification"),
 # or "its", with which ATP-SPEC.md cites a section of a document it named
-# before. A name of ATP-SPEC.md (ATP_NAME) is read first, so "this
-# specification" and "This spec" are not one. An acronym such as AAP is an
-# ACRONYM, below.
+# before; each alone or followed by a number (DOCUMENT_NUMBER), as ACRONYM and
+# ATP_NAME_BEFORE read one: a version after a name does not change the
+# document it names ("DID Core 1.0", "the A2A specification 0.3"). A name of
+# ATP-SPEC.md (ATP_NAME) is read first, so "this specification" and "This
+# spec" are not one. An acronym such as AAP is an ACRONYM, below.
 OTHER_DOCUMENT = re.compile(
-    rf"(?:\bdid:[a-z0-9]+|\bRFC\s*\d+|(?<![\w.-])(?!ATP-SPEC\.md$)[\w.-]+\.md|\batx-spec"
-    rf"|\bDID\s+Core|\b{SPEC_WORD}|\b[Ii]ts)$"
+    rf"(?:\bdid:[a-z0-9]+|\bRFC\s*\d+"
+    rf"|(?<![\w.-])(?!ATP-SPEC\.md(?:{DOCUMENT_NUMBER})?$)[\w.-]+\.md|\batx-spec"
+    rf"|\bDID\s+Core|\b{SPEC_WORD}|\b[Ii]ts)(?:{DOCUMENT_NUMBER})?$"
 )
 # An acronym other than ATP, a capital letter and one or more capital letters
 # or digits, alone or followed by a number ("AIP", "A2A", "FIPS 204"), that
@@ -1759,9 +1763,10 @@ def cites_other_document(
     parenthesis ("did:opena2a (Section 3.1)") right before it set aside. When
     that text ends in a link, the citation cites the link's target; in a name
     of ATP-SPEC.md, alone or followed by a number (ATP_NAME_BEFORE: "ATP-SPEC
-    1.0 Section 3.1"), ATP-SPEC.md; in a name of OTHER_DOCUMENT, another
-    document; and in an ACRONYM ("AIP Section 3.1"), another document, unless
-    a comma or a parenthesis was set aside. A link whose target is a fragment
+    1.0 Section 3.1"), ATP-SPEC.md; in a name of OTHER_DOCUMENT, alone or
+    followed by a number ("DID Core 1.0 Section 3.1"), another document; and
+    in an ACRONYM ("AIP Section 3.1"), another document, unless a comma or a
+    parenthesis was set aside. A link whose target is a fragment
     alone (HEADING_TARGET), after "of" or at the end of the text before the
     citation, is read as its text instead: "[RFC 9162](#14-references)
     Section 3.1" cites RFC 9162. A citation in the text of a link ("[Section
