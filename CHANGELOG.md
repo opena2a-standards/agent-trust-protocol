@@ -421,6 +421,29 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `scripts/validate_examples.py`: the identifier comparison check read a section number as a
+  section of another document only when a name of its list (a DID method, an RFC, a Markdown
+  file other than `ATP-SPEC.md`, atx-spec, AAP, DID Core, a link or "its") came right before
+  the number. A sentence that applies a revocation to the proof's `did` and cites only "RFC
+  9162, Section 3.1", "Section 3.1 of RFC 9162", "Section 3.1 of did:opena2a", "did:opena2a
+  (Section 3.1)", "DID Core, Section 3.1", "the A2A specification Section 3.1" or "AIP
+  Section 3.1" passed, and one citing "[ATP-SPEC.md](../ATP-SPEC.md) Section 3.1" failed,
+  since any link before the number counted as another document. The check now reads ATP and
+  Agent Trust Protocol, alone or followed by "specification" or "spec", `ATP-SPEC.md`, and
+  "this specification", "this spec", "this document" and "this revision" as names of
+  `ATP-SPEC.md`. A number followed by "of" cites `ATP-SPEC.md` when one of these names,
+  which a backtick may open, or a link to `ATP-SPEC.md` follows "of", with "the" between
+  them or not, and another document otherwise. Any other number cites the target of a link
+  before it; else `ATP-SPEC.md` when a name of it comes before it; else another document
+  when one of these names does: a DID method, an RFC, a Markdown file other than
+  `ATP-SPEC.md`, atx-spec, DID Core, a name ending in "specification" or "spec", "its", or an
+  acronym other than ATP, alone or with a number ("AIP", "AAP", "FIPS 204"). A link or a
+  name is read right before the number or before a "'s", and, except an acronym, also
+  before a comma or an opening parenthesis, since in the Section 10.1 table "Revocation API
+  (Section 8.1)" names what Section 8.1 defines. A number in the text of a link that none of
+  these decides cites the link's target. `scripts/test_checks.py` covers each form. One
+  entry below is corrected: it said a section number after the name of another document
+  cites that document, which held only for a name of its list right before the number.
 - `clients/python` and `clients/typescript`: for a `did` that holds a `%`, the error of
   `get_trust_proof` (`getTrustProof`) named an unescaped form with every `%XX` of the whole
   string decoded once, also where did:opena2a Section 3.1.2 makes the DID invalid: `%25` in a
@@ -447,9 +470,9 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   a citation of Section 3.1 only as "Section 3.1" or "§3.1", so "Sections 3.1 and 3.3" failed,
   and it took "did:opena2a Section 3.1", a section of the method specification, for a citation
   of ATP's Section 3.1. It now reads each number of a list after "Sections", and a section
-  number after the name of another document (a DID method such as did:opena2a, an RFC, a
-  Markdown file other than `ATP-SPEC.md`, atx-spec, AAP, DID Core, a link, or "its") cites
-  that document.
+  number right after a DID method such as did:opena2a, an RFC, a Markdown file other than
+  `ATP-SPEC.md`, atx-spec, AAP, DID Core, a link to another document, or "its" cites that
+  document.
 - `clients/python` and `clients/typescript`: `get_trust_proof` (`getTrustProof`) compared
   the `did` of the answer with the requested DID as exact strings, so a request for the
   percent-encoded form of `did:opena2a:mcp_server:@modelcontextprotocol/server-filesystem`
