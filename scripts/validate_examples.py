@@ -68,24 +68,33 @@ decoding at least as many times as it names normalization, and one that names
 the proof's `did` and a revocation (revocation, revocations, revoke, revokes,
 revoked or revoking) cites Section 3.1, alone or in a list such as "Sections 3.1
 and 3.3". The names of ATP-SPEC.md are ATP and Agent Trust Protocol, each alone
-or followed by "specification" or "spec", ATP-SPEC.md, and "this" followed by
-"specification", "spec", "document" or "revision". A section number followed by
-"of" cites ATP-SPEC.md when a name of it, which a backtick may open, or a link
-to it follows "of", with "the" between them or not, and another document
-otherwise ("Section 3.1 of RFC 9162"). Any other section number cites the
-target of a link that comes right before it or before a "'s", a comma or an
-opening parenthesis in front of it ("[ATP-SPEC.md](../ATP-SPEC.md) Section 3.1"
-cites ATP-SPEC.md); else ATP-SPEC.md when a name of it comes there; else
-another document when one of these names comes there: a DID method
-("did:opena2a (Section 3.1)"), an RFC ("RFC 9162, Section 3.1"), a Markdown
-file other than ATP-SPEC.md, atx-spec, DID Core, a name ending in
-"specification" or "spec" ("the A2A specification Section 3.1"), or "its"; else
-another document when an acronym other than ATP comes right before it or before
-a "'s" in front of it ("AIP Section 3.1"). An acronym before a comma or a
-parenthesis is not read as a document, since in the Section 10.1 table
-"Revocation API (Section 8.1)" names what Section 8.1 defines. Where none of
-these decides, a number in the text of a link cites the link's target, and any
-other number cites ATP-SPEC.md.
+or followed by "specification" or "spec", ATP-SPEC.md, ATP-SPEC, and "this" or
+"This" followed by "specification", "spec", "document" or "revision". A section
+number followed by "of" cites ATP-SPEC.md when a name of it, which a backtick
+may open, or a link to it follows "of", with "the" between them or not, and
+another document otherwise ("Section 3.1 of RFC 9162"); a name followed by a
+letter, a digit, "_" or "-", or by "." and a letter, digit or "_", is part of
+the name of another document ("Section 3.1 of ATP-CONFORMANCE.md"). Any other
+section number cites the target of a link that comes right before it or before
+a "'s", a comma or an opening parenthesis in front of it
+("[ATP-SPEC.md](../ATP-SPEC.md) Section 3.1" cites ATP-SPEC.md); else
+ATP-SPEC.md when a name of it comes there; else another document when one of
+these names comes there: a DID method ("did:opena2a (Section 3.1)"), an RFC
+("RFC 9162, Section 3.1"), a Markdown file other than ATP-SPEC.md, atx-spec,
+DID Core, a name ending in "specification" or "spec" ("the A2A specification
+Section 3.1"), or "its"; else another document when an acronym other than ATP
+that starts a word, after a space or a mark such as "/" or "-", comes right
+before it or before a "'s" in front of it ("AIP Section 3.1", "AIP/AAP Section
+3.1"). An acronym before a comma or a parenthesis is not read as a document,
+since in the Section 10.1 table "Revocation API (Section 8.1)" names what
+Section 8.1 defines. A link whose target is a fragment alone leads to a heading
+of the same file, such as its references section, so after "of" or before a
+number its text is read in its place: "[RFC 9162](#14-references) Section 3.1"
+cites RFC 9162. Where none of these decides, a number in the text of a link
+cites the link's target, and a fragment alone there names a heading of
+ATP-SPEC.md ("[Section 3.1](#31-did-format)"); any other number cites
+ATP-SPEC.md. The links of a sentence are found once, and a link's text holds
+no "[" or "]" but a pair of them with neither between them ("[a [b] c](...)").
 
 The Section 4.3 table of served timestamps gives, for each, the form the
 canonical string carries (UTC, whole seconds with fractional seconds dropped,
@@ -1265,11 +1274,13 @@ def media_type_errors(text: str) -> list[str]:
 # 4.3.1), and neither names one. A section number is the number after
 # "Section" or "Sections" (with a capital or small s) or "§", and each number
 # of a list that follows it; a number followed by "-" or by another digit group
-# is not one, so a version such as 1.0.0-rc1 after the list is still read.
+# is not one, so a version such as 1.0.0-rc1 after the list is still read. A
+# citation starts at the first "§" of a run, so a run with no number after it
+# is read once, not once from each of its "§" (linear time).
 LINK_FRAGMENT = re.compile(r"(\]\([^)\s#]*|https?://[^\s#)>]*)#[^\s)>]*")
 SECTION_NUMBER = r"\d+(?:\.\d+)*(?!\.?\d|-)"
 SECTION_NUMBERS = re.compile(
-    rf"(?:\b[Ss]ections?\s+|§+\s*){SECTION_NUMBER}"
+    rf"(?:\b[Ss]ections?\s+|(?<!§)§+\s*){SECTION_NUMBER}"
     rf"(?:(?:\s*,\s*(?:and\s+|or\s+)?|\s+(?:and|or|to)\s+){SECTION_NUMBER})*"
 )
 
@@ -1503,48 +1514,90 @@ DID_FORMAT_SECTION = "3.1"
 # "specification" or "spec", with a capital or small s.
 SPEC_WORD = r"[Ss]pec(?:ification)?"
 # A name of ATP-SPEC.md: ATP or Agent Trust Protocol, alone or followed by
-# SPEC_WORD, ATP-SPEC.md, or "this" followed by SPEC_WORD, "document" or
-# "revision". After "of" it may follow "the" ("of the ATP specification"), and
-# a backtick may open it ("of `ATP-SPEC.md`").
+# SPEC_WORD, ATP-SPEC.md or ATP-SPEC, or "this" followed by SPEC_WORD,
+# "document" or "revision", with a capital or small t ("This specification" at
+# the start of a sentence). After "of" it may follow "the" ("of the ATP
+# specification"), a backtick may open it ("of `ATP-SPEC.md`"), and neither a
+# letter, digit, underscore or "-" nor a "." before a letter, digit or
+# underscore follows it, since these continue the name of another document
+# ("of ATP-CONFORMANCE.md").
 ATP_NAME = (
-    rf"(?:\b(?:ATP|Agent\s+Trust\s+Protocol)(?:\s+{SPEC_WORD})?|\bATP-SPEC\.md"
-    rf"|\bthis\s+(?:{SPEC_WORD}|document|revision))"
+    rf"(?:\b(?:ATP|Agent\s+Trust\s+Protocol)(?:\s+{SPEC_WORD})?|\bATP-SPEC(?:\.md)?"
+    rf"|\b[Tt]his\s+(?:{SPEC_WORD}|document|revision))"
 )
 ATP_NAME_BEFORE = re.compile(rf"{ATP_NAME}$")
-ATP_NAME_AFTER = re.compile(rf"(?:the\s+)?`?{ATP_NAME}\b")
+ATP_NAME_AFTER = re.compile(rf"(?:the\s+)?`?{ATP_NAME}(?![\w-]|\.\w)")
 # The name of another document, at the end of the text before a citation: a
 # DID method ("did:opena2a"), an RFC ("RFC 9162"), a Markdown file other than
 # ATP-SPEC.md ("atx-spec core.md"), atx-spec, DID Core, a name ending in
 # SPEC_WORD ("the A2A specification", "the did:opena2a method specification"),
 # or "its", with which ATP-SPEC.md cites a section of a document it named
 # before. A name of ATP-SPEC.md (ATP_NAME) is read first, so "this
-# specification" is not one. An acronym such as AAP is an ACRONYM, below.
+# specification" and "This spec" are not one. An acronym such as AAP is an
+# ACRONYM, below.
 OTHER_DOCUMENT = re.compile(
     rf"(?:\bdid:[a-z0-9]+|\bRFC\s*\d+|(?<![\w.-])(?!ATP-SPEC\.md$)[\w.-]+\.md|\batx-spec"
     rf"|\bDID\s+Core|\b{SPEC_WORD}|\b[Ii]ts)$"
 )
 # An acronym other than ATP, a capital letter and one or more capital letters
-# or digits, alone or followed by a number ("AIP", "A2A", "FIPS 204"). It
-# names another document only right before a citation or before "'s": before a
-# comma or a parenthesis it can name what the cited section defines, as
-# "Revocation API (Section 8.1)" names the endpoint of Section 8.1 in the
-# Section 10.1 table.
-ACRONYM = re.compile(r"(?<![\w.:/-])(?!ATP\b)[A-Z][A-Z0-9]+(?:\s+\d+(?:[.-]\d+)*)?$")
+# or digits, alone or followed by a number ("AIP", "A2A", "FIPS 204"), that
+# starts a word: it follows a space or a mark such as "/", "-", "." or ":"
+# ("AIP/AAP", "AIP-AAP"), not a letter, digit or underscore. It names another
+# document only right before a citation or before "'s": before a comma or a
+# parenthesis it can name what the cited section defines, as "Revocation API
+# (Section 8.1)" names the endpoint of Section 8.1 in the Section 10.1 table.
+ACRONYM = re.compile(r"\b(?!ATP\b)[A-Z][A-Z0-9]+(?:\s+\d+(?:[.-]\d+)*)?$")
 POSSESSIVE = re.compile(r"['’]s$")
-# "of" after a citation, which the name of the cited document follows.
+# "of" after a citation, which the name of the cited document follows, with
+# "the" before it or not.
 OF = re.compile(r"\s+of\s+")
-# An inline link: its text and its target. A link at the end of the text before
-# a citation, or after "of" (with "the" before it or not), gives its target.
-LINK = re.compile(r"\[([^\]]*)\]\(([^()\s]*)\)")
-LINK_BEFORE = re.compile(r"\]\(([^()\s]*)\)$")
-LINK_AFTER = re.compile(r"(?:the\s+)?\[[^\]]*\]\(([^()\s]*)\)")
+THE = re.compile(r"(?:the\s+)?")
+# An inline link: its text and its target. The text holds no "[" or "]" but a
+# pair of them with neither between them ("[a [b] c](...)"), so a match never
+# reads past a "[" that does not open such a pair.
+LINK = re.compile(r"\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(([^()\s]*)\)")
+# A link target that is a fragment alone names a heading of the document the
+# link is in, not a document: the link's text names the document, as in
+# "[RFC 9162](#14-references)", a link to a references section.
+HEADING_TARGET = re.compile(r"#\S*")
 # A link target that is ATP-SPEC.md: a path whose last segment is ATP-SPEC.md,
-# with a query or a fragment or neither, or a fragment alone, which names a
-# heading of the document the link is in.
-SPEC_TARGET = re.compile(r"(?:[^?#]*/)?ATP-SPEC\.md(?:[?#]\S*)?|#\S*")
+# with a query or a fragment or neither.
+SPEC_TARGET = re.compile(r"(?:[^?#]*/)?ATP-SPEC\.md(?:[?#]\S*)?")
 
 
-def cites_other_document(sentence: str, citation: re.Match) -> bool:
+class SentenceLinks:
+    """The inline links (LINK) of a sentence, found once: by the offset each
+    starts at (starting) and ends at (ending), and the one whose text holds a
+    citation (holding). heading holds the start of each link whose target is
+    a fragment alone (HEADING_TARGET), and other the start of each link whose
+    target is neither that nor ATP-SPEC.md (SPEC_TARGET), so each target is
+    read once, however many citations its link's text holds."""
+
+    def __init__(self, sentence: str):
+        self.links = list(LINK.finditer(sentence))
+        self.text_starts = [link.start(1) for link in self.links]
+        self.starting = {link.start(): link for link in self.links}
+        self.ending = {link.end(): link for link in self.links}
+        self.heading = {
+            link.start() for link in self.links if HEADING_TARGET.fullmatch(link.group(2))
+        }
+        self.other = {
+            link.start()
+            for link in self.links
+            if link.start() not in self.heading and not SPEC_TARGET.fullmatch(link.group(2))
+        }
+
+    def holding(self, citation: re.Match) -> re.Match | None:
+        """The link whose text holds citation, or None."""
+        index = bisect_right(self.text_starts, citation.start()) - 1
+        if index >= 0 and citation.end() <= self.links[index].end(1):
+            return self.links[index]
+        return None
+
+
+def cites_other_document(
+    sentence: str, citation: re.Match, links: SentenceLinks, begin: int
+) -> bool:
     """True when a section citation, a SECTION_NUMBERS match in sentence,
     cites a section of a document other than ATP-SPEC.md.
 
@@ -1557,43 +1610,58 @@ def cites_other_document(sentence: str, citation: re.Match) -> bool:
     that text ends in a link, the citation cites the link's target; in a name
     of ATP-SPEC.md, ATP-SPEC.md; in a name of OTHER_DOCUMENT, another
     document; and in an ACRONYM ("AIP Section 3.1"), another document, unless
-    a comma or a parenthesis was set aside. A citation in the text of a link
-    ("[Section 3.1](...)") that none of these decides cites the link's target.
-    Any other citation cites ATP-SPEC.md."""
+    a comma or a parenthesis was set aside. A link whose target is a fragment
+    alone (HEADING_TARGET), after "of" or at the end of the text before the
+    citation, is read as its text instead: "[RFC 9162](#14-references)
+    Section 3.1" cites RFC 9162. A citation in the text of a link ("[Section
+    3.1](...)") that none of these decides cites the link's target, and a
+    fragment alone names a heading of ATP-SPEC.md. Any other citation cites
+    ATP-SPEC.md.
+
+    links holds the links of sentence (SentenceLinks), found once for all of
+    its citations, and begin is the offset the text before the citation is
+    read from: the end of the citation before it (cites_section)."""
     after = OF.match(sentence, citation.end())
     if after:
-        link = LINK_AFTER.match(sentence, after.end())
-        if link:
-            return not SPEC_TARGET.fullmatch(link.group(1))
-        return not ATP_NAME_AFTER.match(sentence, after.end())
-    before = sentence[: citation.start()].rstrip()
-    separated = before.endswith((",", "("))
+        link = links.starting.get(THE.match(sentence, after.end()).end())
+        if link is None:
+            return not ATP_NAME_AFTER.match(sentence, after.end())
+        if link.start() in links.heading:
+            return not ATP_NAME_AFTER.match(sentence, link.start(1), link.end(1))
+        return link.start() in links.other
+    end = begin + len(sentence[begin : citation.start()].rstrip())
+    separated = end > begin and sentence[end - 1] in ",("
     if separated:
-        before = before[:-1].rstrip()
-    elif POSSESSIVE.search(before):
-        before = before[:-2]
-    link = LINK_BEFORE.search(before)
-    if link:
-        return not SPEC_TARGET.fullmatch(link.group(1))
-    if ATP_NAME_BEFORE.search(before):
+        end = begin + len(sentence[begin : end - 1].rstrip())
+    elif POSSESSIVE.search(sentence, begin, end):
+        end -= 2
+    link = links.ending.get(end)
+    if link is not None:
+        if link.start() not in links.heading:
+            return link.start() in links.other
+        begin, end = link.start(1), link.start(1) + len(link.group(1).rstrip())
+    if ATP_NAME_BEFORE.search(sentence, begin, end):
         return False
-    if OTHER_DOCUMENT.search(before) or (not separated and ACRONYM.search(before)):
+    if OTHER_DOCUMENT.search(sentence, begin, end) or (
+        not separated and ACRONYM.search(sentence, begin, end)
+    ):
         return True
-    for link in LINK.finditer(sentence):
-        if link.start(1) <= citation.start() and citation.end() <= link.end(1):
-            return not SPEC_TARGET.fullmatch(link.group(2))
-    return False
+    link = links.holding(citation)
+    return link is not None and link.start() in links.other
 
 
 def cites_section(sentence: str, section: str) -> bool:
     """True when sentence cites Section `section` of ATP-SPEC.md: the number
     is one of a citation SECTION_NUMBERS reads ("Section 3.1", "§3.1",
     "Sections 3.1 and 3.3") that cites ATP-SPEC.md, not another document
-    (cites_other_document)."""
+    (cites_other_document). The links of the sentence are found once, and
+    the text before each citation is read from the end of the one before it."""
+    links = SentenceLinks(sentence)
+    begin = 0
     for citation in SECTION_NUMBERS.finditer(sentence):
-        if cites_other_document(sentence, citation):
-            continue
-        if section in re.findall(SECTION_NUMBER, citation.group(0)):
+        other = cites_other_document(sentence, citation, links, begin)
+        begin = citation.end()
+        if not other and section in re.findall(SECTION_NUMBER, citation.group(0)):
             return True
     return False
 

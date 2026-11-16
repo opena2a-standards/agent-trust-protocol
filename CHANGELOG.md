@@ -421,6 +421,37 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
+  applies a revocation to the proof's `did` without citing Section 3.1, read four kinds of
+  citation wrongly and could take tens of seconds on one sentence. "This specification",
+  "This spec", "This document" and "This revision", with the capital T a sentence starts
+  with, were not names of `ATP-SPEC.md`, and "specification" or "spec" was then read as the
+  end of another document's name, so "This specification (Section 3.1) says how a verifier
+  compares the proof's `did` with a revocation entry." failed; they and `ATP-SPEC` now name
+  `ATP-SPEC.md`. A link whose target is a fragment alone, such as `[RFC 9162](#14-references)`,
+  leads to a heading of the same file, but a number after it, or before it with "of" between
+  them, was read as a section of `ATP-SPEC.md`; the link's text is now read in its place, so
+  "[RFC 9162](#14-references) Section 3.1" cites RFC 9162, and "[Section 3.1](#31-did-format)"
+  still cites `ATP-SPEC.md`. An acronym after ".", ":", "/" or "-" was not read, so "AIP/AAP
+  Section 3.1" and "AIP-AAP Section 3.1" cited `ATP-SPEC.md`; an acronym that starts a word
+  is now read after any of them. After "of", ATP followed by "-" was read as a name of
+  `ATP-SPEC.md`, so "Section 3.1 of ATP-CONFORMANCE.md" cited it; a name followed by "-", or
+  by "." and a letter or digit, is now part of the name of another document, as one followed
+  by a letter, a digit or "_" already was. For each citation the check read the text before
+  it from the start of the sentence, and for each one that nothing earlier decided it looked
+  for links in the whole sentence, a search that ran from each "[" that no "]" closed to the
+  end of the sentence; its time grew with the number of citations times the square of the
+  number of such brackets, and with the square of the length of a run of "§" with no number
+  after it. The links of a sentence are now found once, a link's text holds no "[" or "]"
+  but a pair of them with neither between them, the text before a citation is read from the
+  end of the one before it, and a run of "§" is read from its first "§". On eleven sentence
+  shapes of 8 KB to 96 KB (unclosed brackets, links, citations, long words and runs of "§"),
+  the time about doubled when the sentence did. A citation after a "[" that no "]" closes is
+  no longer read as in the text of a later link, and a link whose text holds a pair of
+  brackets is read as a link. Of the 579 section citations the check finds in the
+  repository's 11 Markdown files before this entry, none is read differently.
+  `scripts/test_checks.py` covers each form and asserts, for six sentence shapes, that a
+  sentence whose repeated part is 16 times as long takes less than 64 times as long to check.
 - `scripts/validate_examples.py`: the identifier comparison check read a section number as a
   section of another document only when a name of its list (a DID method, an RFC, a Markdown
   file other than `ATP-SPEC.md`, atx-spec, AAP, DID Core, a link or "its") came right before
