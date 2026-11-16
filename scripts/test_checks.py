@@ -1765,6 +1765,103 @@ class IdentifierComparisonTest(unittest.TestCase):
                     f"A verifier applies a revocation entry for the proof's `did` as {citation} compares it."
                 )
 
+    def issue_sentence(self, citation):
+        return f"A verifier applies a revocation entry for the proof's `did`, compared as {citation} requires."
+
+    def test_issue_citations_naming_another_document_fail(self):
+        for citation in (
+            "RFC 9162, Section 3.1",
+            "Section 3.1 of RFC 9162",
+            "Section 3.1 of did:opena2a",
+            "did:opena2a (Section 3.1)",
+            "DID Core, Section 3.1",
+            "the A2A specification Section 3.1",
+            "AIP Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_issue_link_to_atp_spec_before_the_number_is_cited(self):
+        sentence = self.issue_sentence("[ATP-SPEC.md](../ATP-SPEC.md) Section 3.1")
+        self.assertEqual(self.errors(sentence + "\n"), [])
+
+    # A name right before the number, and before a "'s", a comma or an opening
+    # parenthesis in front of it.
+    BEFORE = ("{} Section 3.1", "{}'s Section 3.1", "{}, Section 3.1", "{} (Section 3.1)")
+
+    def test_other_document_names_before_the_number_are_not_cited(self):
+        names = (
+            "did:opena2a",
+            "RFC 9162",
+            "atx-spec core.md",
+            "atx-spec",
+            "DID Core",
+            "the A2A specification",
+            "the A2A spec",
+            "[did:opena2a method specification](https://example.org/did)",
+        )
+        citations = [form.format(name) for name in names for form in self.BEFORE]
+        citations += ["its Section 3.1", "its, Section 3.1", "its (Section 3.1)"]
+        for citation in citations:
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_atp_spec_names_before_the_number_or_after_of_are_cited(self):
+        names = (
+            "ATP",
+            "ATP-SPEC.md",
+            "Agent Trust Protocol",
+            "the ATP specification",
+            "the ATP spec",
+            "the Agent Trust Protocol specification",
+            "the Agent Trust Protocol spec",
+            "this specification",
+            "this spec",
+            "this document",
+            "this revision",
+            "[ATP-SPEC.md](../ATP-SPEC.md)",
+            "[ATP-SPEC.md](https://example.org/atp/ATP-SPEC.md#31-did-format)",
+        )
+        forms = self.BEFORE + ("Section 3.1 of {}", "Sections 3.1 and 3.3 of {}")
+        citations = [form.format(name) for name in names for form in forms]
+        citations += [
+            "Section 3.1 of the [ATP specification](../ATP-SPEC.md)",
+            "Section 3.1 of `ATP-SPEC.md`",
+            "Section 3.1 of the `ATP-SPEC.md` text",
+        ]
+        for citation in citations:
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
+    def test_other_document_after_of_is_not_cited(self):
+        for citation in (
+            "Sections 3.1 and 3.3 of did:opena2a",
+            "Section 3.1 of AIP",
+            "Section 3.1 of the [did:opena2a method specification](https://example.org/did)",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_acronym_right_before_the_number_or_its_s_is_not_cited(self):
+        for citation in ("AIP's Section 3.1", "A2A Section 3.1", "FIPS 204 Section 3.1"):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_acronym_before_a_comma_or_parenthesis_names_a_term_not_a_document(self):
+        row = (
+            "| Revocation failure | Revocation API (Section 8.1) + federation propagation "
+            "(Section 6.4.2) | Level 2+ |"
+        )
+        self.assertTrue(validate_examples.cites_section(row, "8.1"))
+        self.assertTrue(validate_examples.cites_section("the Revocation API, Section 8.1", "8.1"))
+        self.assertFalse(validate_examples.cites_section("the Revocation API Section 8.1", "8.1"))
+
+    def test_number_in_link_text_cites_the_link_target(self):
+        self.assert_uncited(self.issue_sentence("[Section 3.1](https://example.org/did-method#31-did-format)"))
+        for citation in ("[Section 3.1](#31-did-format)", "[Section 3.1](../ATP-SPEC.md#31-did-format)"):
+            with self.subTest(citation):
+                self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+
     def test_section_3_1_beside_a_section_of_another_document_is_cited(self):
         text = (
             "A verifier applies a revocation entry for the proof's `did` as Section 3.1 compares it,\n"
