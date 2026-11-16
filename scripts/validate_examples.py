@@ -86,15 +86,17 @@ there: a DID method ("did:opena2a (Section 3.1)"), an RFC ("RFC 9162, Section
 ending in "specification" or "spec" ("the A2A specification Section 3.1"), or
 "its"; else another document when an acronym other than ATP that starts a
 word, after a space or a mark such as "/" or "-", comes right before it or
-before a "'s" in front of it ("AIP Section 3.1", "AIP/AAP Section 3.1"). An
-acronym before a comma or a parenthesis is not read as a document,
-since in the Section 10.1 table "Revocation API (Section 8.1)" names what
-Section 8.1 defines. A link whose target is a fragment alone leads to a heading
-of the same file, such as its references section, so after "of" or before a
-number its text is read in its place: "[RFC 9162](#14-references) Section 3.1"
-cites RFC 9162. Where none of these decides, a number in the text of a link
-cites the link's target, and a fragment alone there names a heading of
-ATP-SPEC.md ("[Section 3.1](#31-did-format)"); any other number cites
+before a "'s" in front of it ("AIP Section 3.1", "AIP/AAP Section 3.1"). A
+version after a name may be written with "v" or "V" before its digits or after
+the word "version" or "Version" ("ATP-SPEC v1.0 Section 3.1", "DID Core version
+1.0 Section 3.1"). An acronym before a comma or a parenthesis is not read as a
+document, since in the Section 10.1 table "Revocation API (Section 8.1)" names
+what Section 8.1 defines. A link whose target is a fragment alone leads to a
+heading of the same file, such as its references section, so after "of" or
+before a number its text is read in its place: "[RFC 9162](#14-references)
+Section 3.1" cites RFC 9162. Where none of these decides, a number in the text
+of a link cites the link's target, and a fragment alone there names a heading
+of ATP-SPEC.md ("[Section 3.1](#31-did-format)"); any other number cites
 ATP-SPEC.md. The links of a sentence are found once, as CommonMark reads an
 inline link: its text may hold brackets in pairs, nested to any depth ("[a [b
 [c]] d](...)"), and brackets a backslash escapes; its destination may hold
@@ -1521,8 +1523,11 @@ DID_FORMAT_SECTION = "3.1"
 # "specification" or "spec", with a capital or small s.
 SPEC_WORD = r"[Ss]pec(?:ification)?"
 # A number after the name of a document, digit groups joined by "." or "-": a
-# version ("ATP-SPEC 1.0") or the number of a standard ("FIPS 204").
-DOCUMENT_NUMBER = r"\s+\d+(?:[.-]\d+)*"
+# version ("ATP-SPEC 1.0") or the number of a standard ("FIPS 204"). A version
+# may also be written with "v" or "V" right before its digits ("DID Core v1.0")
+# or after the word "version" or "Version" and white space ("DID Core version
+# 1.0"); the "v" or the word is read as part of the number.
+DOCUMENT_NUMBER = r"\s+(?:[Vv]ersion\s+|[Vv])?\d+(?:[.-]\d+)*"
 # A name of ATP-SPEC.md: ATP or Agent Trust Protocol, alone or followed by
 # SPEC_WORD, ATP-SPEC.md or ATP-SPEC, or "this" followed by SPEC_WORD,
 # "document" or "revision", with a capital or small t ("This specification" at
@@ -1537,7 +1542,8 @@ ATP_NAME = (
 )
 # A name of ATP-SPEC.md at the end of the text before a citation, alone or
 # followed by a number (DOCUMENT_NUMBER). It is read before ACRONYM, which
-# would take "SPEC 1.0" in "ATP-SPEC 1.0 Section 3.1" for another document.
+# would take "SPEC 1.0" in "ATP-SPEC 1.0 Section 3.1", or "V2" in "ATP V2
+# Section 3.1", for another document.
 ATP_NAME_BEFORE = re.compile(rf"{ATP_NAME}(?:{DOCUMENT_NUMBER})?$")
 ATP_NAME_AFTER = re.compile(rf"(?:the\s+)?`?{ATP_NAME}(?![\w-]|\.\w)")
 # The name of another document, at the end of the text before a citation: a
@@ -1763,10 +1769,11 @@ def cites_other_document(
     parenthesis ("did:opena2a (Section 3.1)") right before it set aside. When
     that text ends in a link, the citation cites the link's target; in a name
     of ATP-SPEC.md, alone or followed by a number (ATP_NAME_BEFORE: "ATP-SPEC
-    1.0 Section 3.1"), ATP-SPEC.md; in a name of OTHER_DOCUMENT, alone or
-    followed by a number ("DID Core 1.0 Section 3.1"), another document; and
-    in an ACRONYM ("AIP Section 3.1"), another document, unless a comma or a
-    parenthesis was set aside. A link whose target is a fragment
+    1.0 Section 3.1", "ATP-SPEC v1.0 Section 3.1"), ATP-SPEC.md; in a name of
+    OTHER_DOCUMENT, alone or followed by a number ("DID Core 1.0 Section 3.1",
+    "DID Core version 1.0 Section 3.1"), another document; and in an ACRONYM
+    ("AIP Section 3.1", "AIP v1.0 Section 3.1"), another document, unless a
+    comma or a parenthesis was set aside. A link whose target is a fragment
     alone (HEADING_TARGET), after "of" or at the end of the text before the
     citation, is read as its text instead: "[RFC 9162](#14-references)
     Section 3.1" cites RFC 9162. A citation in the text of a link ("[Section

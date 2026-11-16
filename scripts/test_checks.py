@@ -2030,6 +2030,78 @@ class IdentifierComparisonTest(unittest.TestCase):
         self.assertIsNotNone(validate_examples.OTHER_DOCUMENT.search("as core.md 1.0"))
         self.assertIsNotNone(validate_examples.OTHER_DOCUMENT.search("as xATP-SPEC.md 1.0"))
 
+    def test_issue_names_followed_by_a_version_with_v_or_version_are_read(self):
+        # A version written with "v" or after the word "version" is a number
+        # after the name, as "1.0" is, so the name still decides the document.
+        for citation in (
+            "DID Core v1.0 Section 3.1",
+            "did:opena2a v1.0 Section 3.1",
+            "the A2A specification v0.3 Section 3.1",
+            "atx-spec v1.0 Section 3.1",
+            "AIP v1.0 Section 3.1",
+            "DID Core version 1.0 Section 3.1",
+        ):
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+        cited = self.issue_sentence("ATP-SPEC v1.0 Section 3.1")
+        self.assertEqual(self.errors(cited + "\n"), [])
+
+    # Versions written with "v" or "V" before the digits, or after the word
+    # "version" or "Version".
+    PREFIXED_VERSIONS = ("v1.0", "V2", "v1.0.1", "v1-0", "version 1.0", "Version 0.3")
+
+    def test_other_document_names_followed_by_a_prefixed_version_are_not_cited(self):
+        names = (
+            "did:opena2a",
+            "atx-spec core.md",
+            "atx-spec",
+            "DID Core",
+            "the A2A specification",
+            "the A2A spec",
+            "the did:opena2a method specification",
+        )
+        citations = [
+            form.format(f"{name} {version}")
+            for name in names
+            for version in self.PREFIXED_VERSIONS
+            for form in self.BEFORE
+        ]
+        for version in self.PREFIXED_VERSIONS:
+            citations += [
+                f"its {version} Section 3.1",
+                f"its {version}, Section 3.1",
+                f"its {version} (Section 3.1)",
+                f"[DID Core {version}](#references) Section 3.1",
+                f"AIP {version} Section 3.1",
+                f"AIP {version}'s Section 3.1",
+                f"AIP-SPEC {version} Section 3.1",
+            ]
+        for citation in citations:
+            with self.subTest(citation):
+                self.assert_uncited(self.issue_sentence(citation))
+
+    def test_names_of_atp_spec_followed_by_a_prefixed_version_are_cited(self):
+        # "ATP-SPEC v1.0" names ATP-SPEC.md as "ATP-SPEC 1.0" does, and "ATP
+        # V2" is not read as the acronym V2 naming another document.
+        names = (
+            "ATP-SPEC",
+            "ATP-SPEC.md",
+            "ATP",
+            "Agent Trust Protocol",
+            "the ATP specification",
+            "this specification",
+            "This spec",
+        )
+        forms = self.BEFORE + ("Section 3.1 of {}",)
+        for name in names:
+            for version in self.PREFIXED_VERSIONS:
+                for form in forms:
+                    citation = form.format(f"{name} {version}")
+                    with self.subTest(citation):
+                        self.assertEqual(self.errors(self.issue_sentence(citation) + "\n"), [])
+        self.assertIsNone(validate_examples.OTHER_DOCUMENT.search("as ATP-SPEC.md v1.0"))
+        self.assertIsNotNone(validate_examples.OTHER_DOCUMENT.search("as core.md v1.0"))
+
     def test_link_text_holds_a_pair_of_brackets_and_stops_at_an_unpaired_one(self):
         self.assert_uncited(self.issue_sentence("[did:opena2a [method] specification](https://example.org/did) Section 3.1"))
         self.assert_uncited(self.issue_sentence("[Section 3.1 [DID format]](https://example.org/did)"))
@@ -2208,6 +2280,19 @@ class IdentifierComparisonTest(unittest.TestCase):
             "links after unclosed images": lambda n: lead + "![" * (n // 4) + "[a](b) " * (n // 14) + "so\n",
             "unclosed destinations": lambda n: lead + "[a](" * (n // 4) + "()" * (n // 4) + " so\n",
             "unclosed titles": lambda n: lead + '[a](b "' * (n // 7) + " so\n",
+        }
+        for name, text_of in shapes.items():
+            with self.subTest(name):
+                self.assert_time_grows_with_the_sentence(text_of)
+
+    def test_versions_with_v_or_version_are_read_in_linear_time(self):
+        # Runs of "version" with no number after it, and runs of spaces
+        # before a "v" or after "version" with no digit after them.
+        lead = "A verifier applies a revocation entry for the proof's `did` "
+        shapes = {
+            "version words": lambda n: lead + "AIP" + " version" * (n // 8) + " Section 9 requires\n",
+            "spaces before v": lambda n: lead + "AIP" + " " * n + "v Section 9 requires\n",
+            "spaces after version": lambda n: lead + "AIP version" + " " * n + "x Section 9 requires\n",
         }
         for name, text_of in shapes.items():
             with self.subTest(name):

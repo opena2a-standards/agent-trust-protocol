@@ -421,6 +421,23 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
 
 ### Fixed
 
+- `scripts/validate_examples.py`: the identifier comparison check, which fails a sentence that
+  applies a revocation to the proof's `did` without citing Section 3.1, read a number after the
+  name of a document only as digit groups after white space. With "DID Core v1.0", "did:opena2a
+  v1.0", "the A2A specification v0.3", "atx-spec v1.0", "AIP v1.0" or "DID Core version 1.0"
+  before "Section 3.1" the citation was read as one of `ATP-SPEC.md`, so such a sentence
+  passed, and "ATP V2 Section 3.1" was read as a citation of a document named "V2", so a
+  sentence that cited Section 3.1 of `ATP-SPEC.md` that way failed. A "v" or "V" right before
+  the digits, or the word "version" or "Version" and white space before them, is now read as
+  part of the number after a name: each of the sentences above with the name of another
+  document now fails, and "ATP-SPEC v1.0 Section 3.1" and "ATP V2 Section 3.1" cite
+  `ATP-SPEC.md`, as "ATP-SPEC 1.0 Section 3.1" does. Of the 599 section citations in prose
+  sentences of the repository's 11 tracked Markdown files before this entry, none is read
+  differently. `scripts/test_checks.py` covers the issue's forms and six versions written this
+  way after seven names of other documents, "its", AIP and seven names of `ATP-SPEC.md`, and
+  asserts for three sentence shapes (runs of "version", and runs of spaces before "v" or after
+  "version") that a sentence whose repeated part is 16 times as long takes less than 64 times
+  as long to check.
 - `scripts/validate_examples.py`: the identifier comparison check found an inline link only
   when its text held no bracket but one pair with no bracket inside it and its target held no
   parenthesis or space, so a section number after a link in one of four forms was read as a
