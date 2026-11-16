@@ -455,7 +455,7 @@ Versions follow the OpenA2A spec-family ladder `MAJOR.MINOR.PATCH-{draft|rcN|fin
   another document followed by a number, digit groups joined by "." or "-" as after an acronym
   or a name of `ATP-SPEC.md`, now names that document there, also before a "'s", a comma or
   an opening parenthesis and in the text of a link to a heading ("[DID Core 1.0](#references)
-  Section 3.1"); "ATP-SPEC.md 1.0 Section 3.1" still cites `ATP-SPEC.md`. Of the 589 section
+  Section 3.1"); "ATP-SPEC.md 1.0 Section 3.1" still cites `ATP-SPEC.md`. Of the 591 section
   citations in prose sentences of the repository's 11 tracked Markdown files before this
   entry, none is read differently. `scripts/test_checks.py` covers the issue's forms, seven
   names of other documents and "its" followed by five versions.
