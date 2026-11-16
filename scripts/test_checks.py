@@ -5415,9 +5415,10 @@ class InputFileTest(unittest.TestCase):
     there, and a revocation schema with no object schema for an entry's
     reason. A directory in examples/ whose name ends in .md, or in schemas/
     whose name ends in .schema.json, is not read; a link in schemas/ whose
-    target is not there is one failure line. The DID check also reads the
-    files in examples/, and does not compare one that another check reports;
-    it alone reads docs/, so a Markdown file there that is not UTF-8, or a
+    target is not there is one failure line. The DID check also reads the files
+    in examples/, and does not compare one that another check reports; the
+    links check also reads docs/, and names a file there it cannot read as not
+    compared without failing, so a Markdown file there that is not UTF-8, or a
     link there whose target is not there, is one failure of the DID check."""
 
     NOT_RUN = "the checks that read these files did not run"

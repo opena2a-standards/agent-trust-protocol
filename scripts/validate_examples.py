@@ -169,8 +169,9 @@ unescaped form in a DID Document's `id` and each `verificationMethod` `id`. A
 file in examples/ that cannot be read is the failure of the check that reports
 it (the A2A agent card check, the ATX check or the examples map), and this
 check names it as not compared; a file in docs/ that is not UTF-8, or a link
-there whose target is not there, is one failure of this check, the one check
-that reads docs/.
+there whose target is not there, is one failure of this check: the links check,
+which also reads docs/*.md, names such a file as not compared and does not fail
+on it.
 
 The README ATX table lists the fields of the Section 4.6 schema table with the
 same status, the example file carries every ATX v1.1 field, the trust-proof
@@ -2107,11 +2108,11 @@ def did_syntax_errors(name: str, text: str) -> list[str]:
 def did_documents(entries: list[dict]) -> list[tuple[pathlib.Path, str | None]]:
     """The documents a reader copies a DID-typed member from, each with the
     check that reports it when it cannot be read: None for ATP-SPEC.md and
-    README.md, which main() reads before any check, for docs/*.md, which no
-    other check reads, and for a file in examples/ that no other check reads;
-    the A2A agent card check for examples/*.md, the ATX check for the ATX
-    example and the examples map for each file it maps whole. A directory, or
-    a link to one, is not read."""
+    README.md, which main() reads before any check, for docs/*.md, which the
+    links check also reads but names as not compared rather than failing, and
+    for a file in examples/ that no other check reads; the A2A agent card check
+    for examples/*.md, the ATX check for the ATX example and the examples map
+    for each file it maps whole. A directory, or a link to one, is not read."""
     mapped = {entry["file"] for entry in entries if entry.get("heading") is None}
     documents: list[tuple[pathlib.Path, str | None]] = [
         (ROOT / "ATP-SPEC.md", None),
